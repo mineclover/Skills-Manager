@@ -1,13 +1,15 @@
 import { createContext, useContext, useCallback, ReactNode } from "react";
 import { en, TranslationKeys } from "./locales/en";
 import { zh } from "./locales/zh";
+import { ko } from "./locales/ko";
 
-export type Language = "en" | "zh";
+export type Language = "en" | "zh" | "ko";
 
 // Use a more flexible type for translations to allow different string values
 const translations: Record<Language, Record<string, Record<string, string>>> = {
   en: en as unknown as Record<string, Record<string, string>>,
-  zh: zh as unknown as Record<string, Record<string, string>>
+  zh: zh as unknown as Record<string, Record<string, string>>,
+  ko: ko as unknown as Record<string, Record<string, string>>
 };
 
 // Get nested value from object using dot notation path
@@ -85,5 +87,5 @@ export function translate(language: Language, path: string): string {
   return getNestedValue(translations[language], path);
 }
 
-export { en, zh };
+export { en, zh, ko };
 export type { TranslationKeys };

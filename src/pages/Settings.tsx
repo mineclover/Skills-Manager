@@ -663,10 +663,11 @@ export function Settings() {
             >
               <SegmentedControl
                 value={language}
-                onChange={(v) => updatePreference("language", v as "en" | "zh")}
+                onChange={(v) => updatePreference("language", v as "en" | "zh" | "ko")}
                 options={[
                   { value: "en", label: "English" },
                   { value: "zh", label: "中文" },
+                  { value: "ko", label: "한국어" },
                 ]}
               />
             </SettingsRow>

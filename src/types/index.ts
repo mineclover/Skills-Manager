@@ -84,7 +84,7 @@ export interface UserPreferences {
   // Appearance
   theme: "light" | "dark" | "system";
   font_family: "default" | "serif";
-  language: "zh" | "en";
+  language: "zh" | "en" | "ko";
 
   // Sync behavior
   auto_sync: boolean;

@@ -190,10 +190,10 @@ export function Welcome({ onComplete }: WelcomeProps) {
           />
         </div>
 
-        {/* Language selector */}
         <div style={{ display: 'flex', gap: '2px', backgroundColor: 'var(--secondary)', borderRadius: '8px', padding: '3px' }}>
           <LangButton active={language === "en"} onClick={() => setLanguage("en")} label="EN" />
           <LangButton active={language === "zh"} onClick={() => setLanguage("zh")} label="中" />
+          <LangButton active={language === "ko"} onClick={() => setLanguage("ko")} label="KO" />
         </div>
       </div>
 

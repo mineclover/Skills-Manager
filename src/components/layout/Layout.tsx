@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Outlet } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { TopBar } from "@/components/TopBar";
+import { Sidebar } from "./Sidebar";
 import { SyncReport, LinkReport } from "@/types";
 import { useTranslation } from "@/i18n";
 
@@ -60,15 +61,17 @@ export function Layout({ onOpenPalette }: LayoutProps) {
   }
 
   return (
-    <div className="flex flex-col h-screen relative overflow-hidden">
-      <TopBar onOpenPalette={onOpenPalette} />
-      <main
-        className="flex-1 min-h-0 overflow-hidden bg-background relative"
-        style={{
-          backgroundImage:
-            "radial-gradient(circle at 50% 0%, var(--glow-ember) 0%, transparent 35%)",
-        }}
-      >
+    <div className="flex h-screen relative overflow-hidden bg-background">
+      <Sidebar />
+      <div className="flex-1 flex flex-col min-w-0 h-screen overflow-hidden">
+        <TopBar onOpenPalette={onOpenPalette} />
+        <main
+          className="flex-1 min-h-0 overflow-hidden bg-background relative"
+          style={{
+            backgroundImage:
+              "radial-gradient(circle at 50% 0%, var(--glow-ember) 0%, transparent 35%)",
+          }}
+        >
         {showBanner && (
           <div
             style={{
@@ -138,7 +141,8 @@ export function Layout({ onOpenPalette }: LayoutProps) {
           </div>
         )}
         <Outlet />
-      </main>
+        </main>
+      </div>
     </div>
   );
 }
