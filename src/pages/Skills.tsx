@@ -37,11 +37,13 @@ import {
   getTagFilterSelectionSummary,
   getSkillMetadataKey,
   getSkillTagsForSkill,
+  getSkillCommentForSkill,
   getUntaggedSkillsCount,
   hasSelectableTagFilters,
   normalizeSkillTags,
   updateMetadataTags,
   updateSkillTagsForSkill,
+  updateMetadataComment,
   hasSkillMetadataEntry,
   removeSkillMetadataEntry,
   migrateSkillMetadataToInstanceIds,
@@ -801,6 +803,34 @@ export function Skills() {
       addToast(err instanceof Error ? err.message : String(err), "error");
     } finally {
       setSavingTagsSkillId(null);
+    }
+  }, [addToast, config]);
+
+  const persistMetadataComment = useCallback(async (metadataKey: string, nextComment: string) => {
+    if (!config) {
+      return;
+    }
+
+    const currentComment = config.skill_metadata?.[metadataKey]?.comment ?? "";
+    const trimmedNext = nextComment.trim();
+    if (currentComment === trimmedNext) {
+      return;
+    }
+
+    const previousConfig = config;
+    const nextSkillMetadata = updateMetadataComment(metadataKey, trimmedNext, config.skill_metadata);
+    const nextConfig: AppConfig = {
+      ...config,
+      skill_metadata: nextSkillMetadata,
+    };
+
+    setConfig(nextConfig);
+
+    try {
+      await invoke("save_config", { config: nextConfig });
+    } catch (err) {
+      setConfig(previousConfig);
+      addToast(err instanceof Error ? err.message : String(err), "error");
     }
   }, [addToast, config]);
 
@@ -3321,6 +3351,8 @@ export function Skills() {
           tagSuggestions={toolEditorTagSuggestions}
           onSelectTagSuggestion={(tag) => void persistSkillTags(toolEditorSkill, [...toolEditorTags, tag])}
           savingTags={savingTagsSkillId === getSkillMetadataKey(toolEditorSkill)}
+          initialComment={getSkillCommentForSkill(toolEditorSkill, config?.skill_metadata) || ""}
+          onCommentChange={(comment) => persistMetadataComment(getSkillMetadataKey(toolEditorSkill), comment)}
           t={t}
         />
       )}
@@ -3386,6 +3418,12 @@ export function Skills() {
             void persistMetadataTags(groupEditorMetadataKey, [...groupEditorTags, tag]);
           }}
           savingTags={savingTagsSkillId === groupEditorMetadataKey}
+          initialComment={groupEditorItem ? (config?.skill_metadata?.[getGroupMetadataKey(groupEditorItem.id)]?.comment || "") : ""}
+          onCommentChange={(comment) => {
+            if (groupEditorMetadataKey) {
+              void persistMetadataComment(groupEditorMetadataKey, comment);
+            }
+          }}
           t={t}
         />
       )}
@@ -3482,6 +3520,8 @@ function SkillManageDialog({
   tagSuggestions,
   onSelectTagSuggestion,
   savingTags,
+  initialComment = "",
+  onCommentChange,
   t,
 }: {
   skillName: string;
@@ -3521,8 +3561,20 @@ function SkillManageDialog({
   tagSuggestions: string[];
   onSelectTagSuggestion: (tag: string) => void;
   savingTags: boolean;
+  initialComment?: string;
+  onCommentChange: (comment: string) => void;
   t: (key: TranslationPath) => string;
 }) {
+  const [localComment, setLocalComment] = useState(initialComment);
+  useEffect(() => {
+    setLocalComment(initialComment);
+  }, [initialComment]);
+
+  const handleClose = () => {
+    onCommentChange(localComment);
+    onClose();
+  };
+
   const canAddTag = normalizeSkillTags([tagDraft]).length > 0;
   const enabledCount = items.filter((i) => i.enabled).length;
 
@@ -3538,7 +3590,7 @@ function SkillManageDialog({
         zIndex: MODAL_LAYER_Z_INDEX,
         padding: "24px",
       }}
-      onClick={onClose}
+      onClick={handleClose}
     >
       <div
         className="animate-modal"
@@ -3590,7 +3642,7 @@ function SkillManageDialog({
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleClose}
             aria-label={doneLabel}
             style={{
               width: "26px",
@@ -4051,6 +4103,34 @@ function SkillManageDialog({
                   ))}
                 </div>
               )}
+
+              <hr style={{ border: "none", borderTop: "1px solid var(--border)", margin: "8px 0" }} />
+
+              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                <label style={{ fontSize: "12px", fontWeight: 600, color: "var(--foreground)" }}>
+                  {t("skills.notes")}
+                </label>
+                <textarea
+                  value={localComment}
+                  onChange={(e) => setLocalComment(e.target.value)}
+                  onBlur={() => onCommentChange(localComment)}
+                  placeholder={t("skills.commentPlaceholder")}
+                  rows={4}
+                  style={{
+                    width: "100%",
+                    padding: "8px 10px",
+                    fontSize: "12px",
+                    color: "var(--foreground)",
+                    backgroundColor: "var(--background)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--radius-sm)",
+                    outline: "none",
+                    resize: "vertical",
+                    fontFamily: "inherit",
+                    lineHeight: 1.5,
+                  }}
+                />
+              </div>
             </div>
           )}
         </div>
@@ -4077,7 +4157,7 @@ function SkillManageDialog({
             {activeTab === "tools" ? `${enabledCount}/${items.length}` : `${tags.length}`}
           </div>
           <button
-            onClick={onClose}
+            onClick={handleClose}
             style={{
               fontSize: "12px",
               fontWeight: 500,

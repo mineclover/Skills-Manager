@@ -137,6 +137,8 @@ export const en = {
     enableFor: "Enable for",
     noDescription: "No description",
     noSkills: "No skills installed yet.",
+    notes: "Notes",
+    commentPlaceholder: "Add comments or notes for this skill...",
     noMatch: "No skills match your search.",
     delete: "Delete",
     deleteConfirm: "Are you sure you want to delete \"{name}\"? This action cannot be undone.",
@@ -771,6 +773,10 @@ export const en = {
     activePreset: "Active Preset",
     inactive: "Inactive",
     skillsSelected: "{count} skill(s) selected",
+    captureCurrent: "Capture Current State",
+    captureConfirm: "Are you sure you want to capture the current active skill configuration for all tools and overwrite this preset?",
+    captureSuccess: "Captured current active states to preset.",
+    copyCurrentActive: "Copy current active skills configuration",
   },
 } as const;
 

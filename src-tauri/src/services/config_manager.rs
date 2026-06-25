@@ -93,7 +93,8 @@ impl ConfigManager {
             }
 
             let tags = Self::normalize_skill_tags(&item.tags);
-            if tags.is_empty() {
+            let has_comment = item.comment.as_ref().map(|c| !c.trim().is_empty()).unwrap_or(false);
+            if tags.is_empty() && !has_comment {
                 changed = true;
                 continue;
             }
@@ -108,8 +109,9 @@ impl ConfigManager {
                 format!("global:{}", trimmed_id)
             };
 
+            let comment = item.comment.as_ref().map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
             if normalized
-                .insert(normalized_id, SkillMetadata { tags })
+                .insert(normalized_id, SkillMetadata { tags, comment })
                 .is_some()
             {
                 changed = true;
@@ -743,6 +745,7 @@ mod tests {
                 "shared-skill".to_string(),
                 SkillMetadata {
                     tags: vec!["legacy-tag".to_string()],
+                    comment: None,
                 },
             );
 
@@ -753,6 +756,7 @@ mod tests {
                 loaded.skill_metadata.get("global:shared-skill"),
                 Some(&SkillMetadata {
                     tags: vec!["legacy-tag".to_string()],
+                    comment: None,
                 })
             );
             assert_eq!(loaded.skill_metadata.get("shared-skill"), None);

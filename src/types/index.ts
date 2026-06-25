@@ -55,6 +55,7 @@ export interface InstalledSkillPackage {
 
 export interface SkillMetadata {
   tags: string[];
+  comment?: string | null;
 }
 
 export type SkillMetadataMap = Record<string, SkillMetadata>;

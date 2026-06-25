@@ -45,6 +45,8 @@ pub struct LlmProvider {
 pub struct SkillMetadata {
     #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub comment: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -385,6 +387,7 @@ mod tests {
             "react-playground".to_string(),
             SkillMetadata {
                 tags: vec!["react".to_string(), "frontend".to_string()],
+                comment: None,
             },
         );
         config.skill_metadata = metadata;

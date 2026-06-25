@@ -137,6 +137,8 @@ export const ko = {
     enableFor: "다음 도구에 활성화",
     noDescription: "설명 없음",
     noSkills: "아직 설치된 스킬이 없습니다.",
+    notes: "노트",
+    commentPlaceholder: "이 스킬에 대한 의견이나 노트를 추가하세요...",
     noMatch: "검색 조건과 일치하는 스킬이 없습니다.",
     delete: "삭제",
     deleteConfirm: "\"{name}\" 스킬을 정말로 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.",
@@ -767,5 +769,9 @@ export const ko = {
     activePreset: "활성화된 프리셋",
     inactive: "비활성화",
     skillsSelected: "{count}개 스킬 선택됨",
+    captureCurrent: "현재 상태 가져오기",
+    captureConfirm: "현재 각 도구에 활성화된 스킬 구성을 이 프리셋으로 가져와 덮어쓰시겠습니까?",
+    captureSuccess: "현재 활성화 상태를 프리셋에 성공적으로 가져왔습니다.",
+    copyCurrentActive: "현재 각 도구에 활성화된 스킬 구성 복사",
   },
 } as const;

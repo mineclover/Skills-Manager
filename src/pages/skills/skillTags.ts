@@ -74,6 +74,24 @@ export function getSkillTagsForSkill(skill: Skill, skillMetadata?: SkillMetadata
   return getSkillTags(legacyMetadataKey, skillMetadata);
 }
 
+export function getSkillCommentForSkill(
+  skill: Pick<Skill, "id" | "scope" | "instance_id">,
+  skillMetadata?: SkillMetadataMap,
+): string | null {
+  const metadataKey = getSkillMetadataKey(skill);
+  const comment = skillMetadata?.[metadataKey]?.comment;
+  if (comment) {
+    return comment;
+  }
+
+  const legacyMetadataKey = getLegacyGlobalSkillMetadataKey(skill);
+  if (!legacyMetadataKey) {
+    return null;
+  }
+
+  return skillMetadata?.[legacyMetadataKey]?.comment ?? null;
+}
+
 function hasLegacyGlobalMetadataEntry(
   skill: Pick<Skill, "id" | "scope">,
   skillMetadata?: SkillMetadataMap,
@@ -164,14 +182,55 @@ export function updateMetadataTags(
 ): SkillMetadataMap {
   const normalizedTags = normalizeSkillTags(nextTags);
   const nextMetadata = { ...(skillMetadata ?? {}) };
+  const currentEntry = nextMetadata[metadataKey];
+  const comment = currentEntry?.comment;
 
-  if (normalizedTags.length === 0) {
+  if (normalizedTags.length === 0 && !comment) {
     delete nextMetadata[metadataKey];
   } else {
-    nextMetadata[metadataKey] = { tags: normalizedTags };
+    nextMetadata[metadataKey] = {
+      ...currentEntry,
+      tags: normalizedTags,
+    };
   }
 
   return nextMetadata;
+}
+
+export function updateMetadataComment(
+  metadataKey: string,
+  comment: string | null | undefined,
+  skillMetadata?: SkillMetadataMap,
+): SkillMetadataMap {
+  const nextMetadata = { ...(skillMetadata ?? {}) };
+  const currentEntry = nextMetadata[metadataKey];
+  const trimmedComment = comment?.trim();
+
+  if (!trimmedComment) {
+    if (!currentEntry || !currentEntry.tags || currentEntry.tags.length === 0) {
+      delete nextMetadata[metadataKey];
+    } else {
+      nextMetadata[metadataKey] = {
+        tags: currentEntry.tags,
+      };
+    }
+  } else {
+    nextMetadata[metadataKey] = {
+      tags: currentEntry?.tags ?? [],
+      comment: trimmedComment,
+    };
+  }
+
+  return nextMetadata;
+}
+
+export function updateSkillCommentForSkill(
+  skill: Pick<Skill, "id" | "scope" | "instance_id">,
+  comment: string | null | undefined,
+  skillMetadata?: SkillMetadataMap,
+): SkillMetadataMap {
+  const migratedMetadata = migrateSkillMetadataEntryToInstanceId(skill, skillMetadata);
+  return updateMetadataComment(getSkillMetadataKey(skill), comment, migratedMetadata);
 }
 
 export function removeMetadataEntry(

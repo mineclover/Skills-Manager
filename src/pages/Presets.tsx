@@ -8,8 +8,8 @@ import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { AppConfig, Tool, Skill, SkillActivationPreset } from "@/types";
-import { Sliders, Plus, Trash2, Play, Check, AlertTriangle, Layers } from "lucide-react";
+import { AppConfig, Tool, Skill, SkillActivationPreset, PresetActivation } from "@/types";
+import { Sliders, Plus, Trash2, Play, Check, AlertTriangle, Layers, Download } from "lucide-react";
 
 export function Presets() {
   const { t } = useTranslation();
@@ -22,6 +22,7 @@ export function Presets() {
   const [isNewPresetDialogOpen, setIsNewPresetDialogOpen] = useState(false);
   const [newPresetName, setNewPresetName] = useState("");
   const [newPresetDesc, setNewPresetDesc] = useState("");
+  const [copyCurrentState, setCopyCurrentState] = useState(true);
   const [applyingPresetId, setApplyingPresetId] = useState<string | null>(null);
 
   // Load all data on mount
@@ -65,11 +66,26 @@ export function Presets() {
     }
 
     const newId = `preset-${Date.now()}`;
+    const activations: PresetActivation[] = [];
+    if (copyCurrentState) {
+      tools.forEach((tool) => {
+        const activeSkillIds = skills
+          .filter((skill) => skill.enabled[tool.id] === true)
+          .map((skill) => skill.instance_id);
+        
+        // We push even if activeSkillIds is empty, to explicitly deactivate
+        activations.push({
+          tool_id: tool.id,
+          skill_ids: activeSkillIds,
+        });
+      });
+    }
+
     const newPreset: SkillActivationPreset = {
       id: newId,
       name: newPresetName.trim(),
       description: newPresetDesc.trim() || null,
-      activations: [], // starts empty (all explicitly deactivated)
+      activations,
     };
 
     const updatedConfig = {
@@ -130,6 +146,50 @@ export function Presets() {
         t("presets.deleteSuccess").replace("{name}", target.name),
         "success"
       );
+    } catch (err) {
+      addToast(err instanceof Error ? err.message : t("settings.saveFailed"), "error");
+    }
+  }
+
+  // Capture current state to selected preset
+  async function handleCaptureCurrentToPreset(presetId: string) {
+    if (!config) return;
+    const target = presetsList.find((p) => p.id === presetId);
+    if (!target) return;
+
+    if (!confirm(t("presets.captureConfirm").replace("{name}", target.name))) {
+      return;
+    }
+
+    const activations: PresetActivation[] = tools.map((tool) => {
+      const activeSkillIds = skills
+        .filter((skill) => skill.enabled[tool.id] === true)
+        .map((skill) => skill.instance_id);
+      return {
+        tool_id: tool.id,
+        skill_ids: activeSkillIds,
+      };
+    });
+
+    const updatedPresets = presetsList.map((preset) => {
+      if (preset.id === presetId) {
+        return {
+          ...preset,
+          activations,
+        };
+      }
+      return preset;
+    });
+
+    const updatedConfig = {
+      ...config,
+      presets: updatedPresets,
+    };
+
+    try {
+      await invoke("save_config", { config: updatedConfig });
+      setConfig(updatedConfig);
+      addToast(t("presets.captureSuccess"), "success");
     } catch (err) {
       addToast(err instanceof Error ? err.message : t("settings.saveFailed"), "error");
     }
@@ -314,6 +374,15 @@ export function Presets() {
               placeholder={t("presets.presetDescPlaceholder")}
               className="text-xs h-8"
             />
+            <div className="flex items-center justify-between py-1 px-1">
+              <span className="text-[10px] text-muted-foreground font-medium">
+                {t("presets.copyCurrentActive")}
+              </span>
+              <Switch
+                checked={copyCurrentState}
+                onCheckedChange={setCopyCurrentState}
+              />
+            </div>
             <div className="flex justify-end gap-2">
               <Button
                 size="sm"
@@ -406,6 +475,16 @@ export function Presets() {
               </div>
 
               <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handleCaptureCurrentToPreset(selectedPreset.id)}
+                  className="h-8 text-xs"
+                >
+                  <Download size={14} />
+                  <span>{t("presets.captureCurrent")}</span>
+                </Button>
+
                 <Button
                   size="sm"
                   variant="outline"
