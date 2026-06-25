@@ -9,7 +9,7 @@ use tauri::State;
 use crate::models::{
     AppConfig, InstallResult, InstallStatus, MarketplaceSkill, MarketplaceSkillsResponse,
     MarketplaceSource, MarketplaceSyncResult, MarketplaceUpdateCheckResult, Skill, SkillFileNode,
-    SkillSource,
+    SkillSource, home_dir,
 };
 use crate::services::marketplace::{
     derive_github_repo_and_skill_path, DIRECT_GITHUB_SOURCE_ID, DIRECT_GITHUB_SOURCE_NAME,
@@ -497,7 +497,7 @@ async fn load_marketplace_sources_for_runtime(
 
 fn marketplace_update_check_state_path() -> Option<PathBuf> {
     Some(
-        dirs::home_dir()?
+        home_dir()?
             .join(".skills-manager")
             .join("cache")
             .join("marketplace-update-check.json"),

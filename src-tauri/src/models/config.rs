@@ -47,6 +47,20 @@ pub struct SkillMetadata {
     pub tags: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct PresetActivation {
+    pub tool_id: String,
+    pub skill_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct SkillActivationPreset {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub activations: Vec<PresetActivation>,
+}
+
 fn default_theme() -> String {
     "system".to_string()
 }
@@ -194,6 +208,10 @@ pub struct AppConfig {
     pub auth_session: Option<AuthSession>,
     #[serde(default)]
     pub initialized: bool,
+    #[serde(default)]
+    pub presets: Vec<SkillActivationPreset>,
+    #[serde(default)]
+    pub active_preset_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -230,6 +248,8 @@ impl Default for AppConfig {
             llm_provider: None,
             auth_session: None,
             initialized: false,
+            presets: Vec::new(),
+            active_preset_id: None,
         }
     }
 }
@@ -246,9 +266,19 @@ impl ToolConfig {
     }
 }
 
+pub fn home_dir() -> Option<PathBuf> {
+    #[cfg(test)]
+    {
+        if let Ok(temp_home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
+            return Some(PathBuf::from(temp_home));
+        }
+    }
+    dirs::home_dir()
+}
+
 impl AppConfig {
     pub fn default_skills_dir() -> PathBuf {
-        dirs::home_dir()
+        home_dir()
             .unwrap_or_default()
             .join(".skills-manager")
             .join("skills")

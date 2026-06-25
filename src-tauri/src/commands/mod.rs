@@ -40,8 +40,9 @@ pub use skill_packages::{
     install_skill_package_from_path, list_skill_packages, remove_skill_package,
 };
 pub use skills::{
-    batch_set_skill_tools, create_skill, delete_skill, disable_skill, enable_skill,
-    import_skills_to_hub, list_skills, refresh_skills, scan_existing_skills,
+    apply_preset, batch_set_skill_tools, clear_active_preset, create_skill, delete_skill,
+    disable_skill, enable_skill, import_skills_to_hub, list_skills, refresh_skills,
+    scan_existing_skills,
 };
 pub use sync::{check_sync_status, fix_sync_issues};
 pub use tools::{

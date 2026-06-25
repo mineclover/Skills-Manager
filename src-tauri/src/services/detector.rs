@@ -3,7 +3,7 @@ use std::env;
 use std::process::Command; // Enable parallel processing
 
 use crate::models::{
-    CustomToolConfig, Tool, ToolConfig, ToolDefinition, ToolSource, SUPPORTED_TOOLS,
+    CustomToolConfig, Tool, ToolConfig, ToolDefinition, ToolSource, SUPPORTED_TOOLS, home_dir,
 };
 use crate::services::linker::normalize_path;
 use crate::services::ConfigManager;
@@ -48,7 +48,7 @@ impl DetectorService {
         definition: &ToolDefinition,
         saved_config: &Option<crate::models::AppConfig>,
     ) -> Tool {
-        let home_dir = dirs::home_dir().unwrap_or_default();
+        let home_dir = home_dir().unwrap_or_default();
 
         // Prioritize saved custom paths, fallback to defaults
         let (config_path, skills_path) = if let Some(saved) = saved_config

@@ -1,4 +1,4 @@
-use crate::models::{DetectedEditor, EDITOR_DEFINITIONS};
+use crate::models::{DetectedEditor, EDITOR_DEFINITIONS, home_dir};
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -219,7 +219,7 @@ fn find_app_path(app_name: &str) -> Option<String> {
     }
 
     // Check ~/Applications folder - exact match
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = home_dir() {
         let user_app_path = home.join("Applications").join(format!("{}.app", app_name));
         if user_app_path.exists() {
             return Some(user_app_path.to_string_lossy().to_string());
@@ -229,7 +229,7 @@ fn find_app_path(app_name: &str) -> Option<String> {
     // Search for apps with prefix match (handles variants like "Trae CN", "PyCharm CE", "PyCharm Professional")
     let search_dirs = vec![
         "/Applications".to_string(),
-        dirs::home_dir()
+        home_dir()
             .map(|h| h.join("Applications").to_string_lossy().to_string())
             .unwrap_or_default(),
     ];

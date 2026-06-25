@@ -1,7 +1,7 @@
 import { NavLink } from "react-router-dom";
 import { useTranslation } from "@/i18n";
 import { AuthButton } from "@/components/auth/AuthButton";
-import { Sparkles, Wrench, ShoppingBag, Settings, MessageSquare } from "lucide-react";
+import { Sparkles, Wrench, Sliders, ShoppingBag, Settings, MessageSquare } from "lucide-react";
 
 export function Sidebar() {
   const { t } = useTranslation();
@@ -16,6 +16,11 @@ export function Sidebar() {
       to: "/tools",
       label: t("nav.tools"),
       icon: <Wrench size={16} />,
+    },
+    {
+      to: "/presets",
+      label: t("nav.presets"),
+      icon: <Sliders size={16} />,
     },
     {
       to: "/marketplace",

@@ -5,9 +5,9 @@ mod services;
 mod test_support;
 
 use commands::{
-    batch_set_skill_tools, check_marketplace_updates_if_stale,
+    apply_preset, batch_set_skill_tools, check_marketplace_updates_if_stale,
     check_sync_status, check_update, clear_llm_provider, clear_translation_cache,
-    create_custom_tool, create_directory, create_file, create_skill,
+    clear_active_preset, create_custom_tool, create_directory, create_file, create_skill,
     delete_custom_tool, delete_path, delete_skill,
     detect_available_editors, detect_tools, disable_skill, enable_skill, exchange_github_auth,
     exchange_google_auth, fetch_marketplace_skill_descriptions, fetch_marketplace_skills,
@@ -75,6 +75,8 @@ pub fn run() {
             enable_skill,
             disable_skill,
             batch_set_skill_tools,
+            apply_preset,
+            clear_active_preset,
             delete_skill,
             create_skill,
             install_skill_package_from_path,

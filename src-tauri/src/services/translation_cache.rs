@@ -3,6 +3,8 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
 
+use crate::models::home_dir;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedTranslation {
     pub name: String,
@@ -46,7 +48,7 @@ pub struct TranslationCache {
 
 impl TranslationCache {
     pub fn new() -> Self {
-        let root = dirs::home_dir()
+        let root = home_dir()
             .unwrap_or_default()
             .join(".skills-manager")
             .join("cache")

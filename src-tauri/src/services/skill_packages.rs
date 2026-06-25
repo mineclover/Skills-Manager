@@ -6,11 +6,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::models::skill_package::{SkillPackageManifest, SkillPackageMember};
 use crate::models::InstalledSkillPackage;
 
+use crate::models::home_dir;
+
 pub struct SkillPackageService;
 
 impl SkillPackageService {
     pub fn packages_dir() -> PathBuf {
-        dirs::home_dir()
+        home_dir()
             .unwrap_or_default()
             .join(".skills-manager")
             .join("packages")

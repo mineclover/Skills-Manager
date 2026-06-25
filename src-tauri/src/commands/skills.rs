@@ -598,6 +598,8 @@ mod tests {
             llm_provider: None,
             auth_session: None,
             initialized: true,
+            presets: Vec::new(),
+            active_preset_id: None,
         }
     }
 
@@ -635,6 +637,8 @@ mod tests {
                 llm_provider: None,
                 auth_session: None,
                 initialized: true,
+                presets: Vec::new(),
+                active_preset_id: None,
             };
 
             apply_skill_tool_enabled(&config, "global:baoyu-translate", "claude", true, None)
@@ -690,6 +694,8 @@ mod tests {
                 llm_provider: None,
                 auth_session: None,
                 initialized: true,
+                presets: Vec::new(),
+                active_preset_id: None,
             };
 
             delete_skill_from_disk(&config, "global:baoyu-translate").expect("delete nested skill");
@@ -1108,4 +1114,77 @@ pub fn refresh_skills(cache: State<AppCache>) -> Result<Vec<Skill>, String> {
     let skills = ScannerService::scan_scoped_skills(&config)?;
     cache.set_skills(skills.clone());
     Ok(skills)
+}
+
+#[tauri::command]
+pub fn apply_preset(
+    preset_id: String,
+    cache: State<AppCache>,
+) -> Result<(), String> {
+    let manager = ConfigManager::new();
+    let mut config = manager.load()?;
+
+    // 1. Find the preset
+    let preset = config
+        .presets
+        .iter()
+        .find(|p| p.id == preset_id)
+        .ok_or_else(|| format!("Preset not found: {}", preset_id))?
+        .clone();
+
+    // 2. Scan all skills
+    let skills = ScannerService::scan_scoped_skills(&config)?;
+
+    // 3. Collect active mappings of tool_id -> HashSet of active skill IDs or instance_ids
+    let mut active_mappings: HashMap<String, HashSet<String>> = HashMap::new();
+    for activation in &preset.activations {
+        let skill_set: HashSet<String> = activation.skill_ids.iter().cloned().collect();
+        active_mappings.insert(activation.tool_id.clone(), skill_set);
+    }
+
+    // 4. For each tool, disable/enable links
+    for (tool_id, tool_config) in config.collect_tool_configs() {
+        if !tool_config.enabled || !tool_config.detected {
+            continue;
+        }
+
+        let active_set = active_mappings.get(&tool_id);
+
+        for skill in &skills {
+            let should_be_enabled = match active_set {
+                Some(set) => set.contains(&skill.instance_id) || set.contains(&skill.id),
+                None => false,
+            };
+
+            if let Err(e) = apply_skill_tool_enabled(
+                &config,
+                &skill.instance_id,
+                &tool_id,
+                should_be_enabled,
+                Some(skill.path.as_path()),
+            ) {
+                return Err(format!(
+                    "Failed to set skill {} for tool {}: {}",
+                    skill.instance_id, tool_id, e
+                ));
+            }
+        }
+    }
+
+    // 5. Update active preset ID
+    config.active_preset_id = Some(preset_id);
+    manager.save(&config)?;
+
+    cache.invalidate_skills();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn clear_active_preset(cache: State<AppCache>) -> Result<(), String> {
+    let manager = ConfigManager::new();
+    let mut config = manager.load()?;
+    config.active_preset_id = None;
+    manager.save(&config)?;
+    cache.invalidate_skills();
+    Ok(())
 }

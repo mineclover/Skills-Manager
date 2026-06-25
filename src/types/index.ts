@@ -228,6 +228,8 @@ export interface AppConfig {
   projects?: ProjectBinding[];
   active_project_id?: string | null;
   llm_provider?: LlmProvider | null;
+  presets?: SkillActivationPreset[];
+  active_preset_id?: string | null;
 }
 
 export interface LlmProvider {
@@ -446,4 +448,16 @@ export interface PollVote {
 export interface PollClientState {
   voterId: string | null;
   votedOptions: Record<string, string>;
+}
+
+export interface PresetActivation {
+  tool_id: string;
+  skill_ids: string[];
+}
+
+export interface SkillActivationPreset {
+  id: string;
+  name: string;
+  description?: string | null;
+  activations: PresetActivation[];
 }

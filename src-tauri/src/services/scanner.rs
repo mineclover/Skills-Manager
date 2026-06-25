@@ -521,7 +521,7 @@ impl ScannerService {
 
 #[cfg(test)]
 mod tests {
-    use super::ScannerService;
+    use super::{LinkerService, ScannerService};
     use crate::models::{AppConfig, SkillSource};
     use crate::test_support::with_temp_home;
     use serde_json::json;
@@ -895,7 +895,7 @@ description: "Description from SKILL.md"
 
             let tool_skills_dir = home.join(".claude").join("skills");
             fs::create_dir_all(&tool_skills_dir).expect("create tool skills dir");
-            std::os::unix::fs::symlink(&project_skill_dir, tool_skills_dir.join("shared-skill"))
+            LinkerService::enable_skill(&project_skill_dir, &tool_skills_dir, "shared-skill")
                 .expect("link project skill");
 
             let config: AppConfig = serde_json::from_value(json!({

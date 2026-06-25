@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::models::{
-    AppConfig, ProjectBinding, SkillMetadata, SourceType, ToolConfig, SUPPORTED_TOOLS,
+    AppConfig, ProjectBinding, SkillMetadata, SourceType, ToolConfig, SUPPORTED_TOOLS, home_dir,
 };
 #[cfg(windows)]
 use crate::services::linker::LinkerService;
@@ -258,18 +258,18 @@ impl ConfigManager {
     }
 
     fn get_config_path() -> PathBuf {
-        dirs::home_dir()
+        home_dir()
             .unwrap_or_default()
             .join(".skills-manager")
             .join("config.json")
     }
 
     fn get_old_config_dir() -> PathBuf {
-        dirs::home_dir().unwrap_or_default().join(".skills-hub")
+        home_dir().unwrap_or_default().join(".skills-hub")
     }
 
     fn get_new_config_dir() -> PathBuf {
-        dirs::home_dir().unwrap_or_default().join(".skills-manager")
+        home_dir().unwrap_or_default().join(".skills-manager")
     }
 
     /// 从旧目录 .skills-hub 迁移到新目录 .skills-manager
@@ -327,7 +327,7 @@ impl ConfigManager {
 
     /// 修复各工具目录中指向旧路径的软链接
     fn fix_symlinks_after_migration(old_dir: &PathBuf, new_dir: &PathBuf) {
-        let home_dir = dirs::home_dir().unwrap_or_default();
+        let home_dir = home_dir().unwrap_or_default();
 
         // 已知的工具 skills 目录
         let tool_skills_dirs = [
@@ -510,7 +510,7 @@ impl ConfigManager {
 
         // Migrate legacy default directories for newly supported tools.
         // Only rewrite when paths still match the old defaults we generated earlier.
-        let home_dir = dirs::home_dir().unwrap_or_default();
+        let home_dir = home_dir().unwrap_or_default();
         for (tool_id, old_dir, new_dir) in [
             ("droid", ".droid", ".factory"),
             ("vercel-skills", ".vercel", ".agents"),
@@ -574,7 +574,7 @@ impl ConfigManager {
     }
 
     pub fn init_default(&self) -> Result<AppConfig, String> {
-        let home_dir = dirs::home_dir().unwrap_or_default();
+        let home_dir = home_dir().unwrap_or_default();
         let mut config = AppConfig::default();
 
         for tool_def in SUPPORTED_TOOLS {

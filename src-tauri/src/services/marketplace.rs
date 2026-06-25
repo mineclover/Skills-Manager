@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use crate::models::{
     GitHubContent, InstallResult, InstallStatus, MarketplaceSkill, MarketplaceSkillsResponse,
-    MarketplaceSource, SkillFileNode, SourceType,
+    MarketplaceSource, SkillFileNode, SourceType, home_dir,
 };
 
 const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
@@ -285,7 +285,7 @@ impl MarketplaceCache {
 
 fn persisted_marketplace_cache_path() -> Option<PathBuf> {
     Some(
-        dirs::home_dir()?
+        home_dir()?
             .join(".skills-manager")
             .join("cache")
             .join("marketplace-skills.json"),
@@ -1315,7 +1315,7 @@ fn set_cached_skill_description(cache_key: &str, description: Option<String>) {
 
 fn persisted_skill_description_cache_path() -> Option<PathBuf> {
     Some(
-        dirs::home_dir()?
+        home_dir()?
             .join(".skills-manager")
             .join("cache")
             .join("marketplace-skill-descriptions.json"),
@@ -2895,6 +2895,7 @@ mod tests {
         build_marketplace_external_url, build_skill_tree_from_tree_entries, collect_file_nodes,
         extract_root_skill_dirs_from_tree_entries, extract_skill_description_from_markdown,
         get_cached_github_tree, github_tree_cache, github_tree_cache_key,
+        preferred_marketplace_install_dir,
         map_marketplace_api_skill_record, normalize_github_token, set_cached_github_tree,
         should_include_github_root_dir, CachedGitHubTree, GitHubContent, GitHubTreeEntry,
         InstallStatus, MarketplaceApiSkillRecord, MarketplaceApiSkillSource, MarketplaceCache,
@@ -3285,7 +3286,7 @@ mod tests {
         with_temp_home(|home| {
             let skills_dir = home.join(".skills-manager").join("skills");
             let skill = sample_marketplace_skill("source-a", "alpha");
-            let install_dir = skills_dir.join(&skill.id);
+            let install_dir = preferred_marketplace_install_dir(&skills_dir, &skill);
             fs::create_dir_all(&install_dir).expect("create install dir");
 
             let meta = serde_json::json!({
