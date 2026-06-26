@@ -399,6 +399,7 @@ mod tests {
             restored.skill_metadata.get("react-playground"),
             Some(&SkillMetadata {
                 tags: vec!["react".to_string(), "frontend".to_string()],
+                comment: None,
             })
         );
     }
