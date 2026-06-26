@@ -2,7 +2,8 @@ export type SkillsHeaderActionId =
   | "batch-manage"
   | "batch-configure"
   | "project-bindings"
-  | "create-skill";
+  | "create-skill"
+  | "scan-import";
 
 export interface SkillsHeaderActionLayout {
   primaryActionIds: SkillsHeaderActionId[];
@@ -22,7 +23,7 @@ export function buildSkillsHeaderActionLayout(
   }
   return {
     primaryActionIds: [],
-    moreActionIds: ["batch-manage", "project-bindings"],
+    moreActionIds: ["batch-manage", "project-bindings", "scan-import"],
     secondaryActionIds: ["create-skill"],
   };
 }

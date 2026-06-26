@@ -625,6 +625,11 @@ export function Skills() {
   const [deletingGroupId, setDeletingGroupId] = useState<string | null>(null);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showProjectBindingsDialog, setShowProjectBindingsDialog] = useState(false);
+  const [showImportDialog, setShowImportDialog] = useState(false);
+  const [scannedSkills, setScannedSkills] = useState<{ id: string; name: string; description?: string | null; path: string; }[]>([]);
+  const [selectedImportPaths, setSelectedImportPaths] = useState<Set<string>>(new Set());
+  const [scanningExternal, setScanningExternal] = useState(false);
+  const [importingExternal, setImportingExternal] = useState(false);
   const [pendingProjectBinding, setPendingProjectBinding] = useState<ProjectBinding | null>(null);
   const [creating, setCreating] = useState(false);
   const [projectBindingsSaving, setProjectBindingsSaving] = useState(false);
@@ -1587,6 +1592,50 @@ export function Skills() {
     }
     setShowProjectBindingsDialog(true);
   }, [isBatchManageMode]);
+
+  const handleOpenImportSkillsDialog = useCallback(async () => {
+    if (isBatchManageMode) {
+      return;
+    }
+    setScanningExternal(true);
+    setShowImportDialog(true);
+    setSelectedImportPaths(new Set());
+    try {
+      const result = await invoke<{ id: string; name: string; description?: string | null; path: string; }[]>("scan_existing_skills");
+      const filtered = result.filter((s) => !s.name.startsWith('.'));
+      setScannedSkills(filtered);
+    } catch (err) {
+      console.error(err);
+      addToast(t("welcome.scanSkillsFailed") + ": " + String(err), "error");
+      setShowImportDialog(false);
+    } finally {
+      setScanningExternal(false);
+    }
+  }, [addToast, isBatchManageMode, t]);
+
+  const handleImportSkills = useCallback(async () => {
+    if (selectedImportPaths.size === 0) {
+      setShowImportDialog(false);
+      return;
+    }
+    setImportingExternal(true);
+    try {
+      await invoke("import_skills_to_hub", {
+        skillPaths: Array.from(selectedImportPaths),
+      });
+      addToast(
+        t("welcome.importedCount").replace("{count}", String(selectedImportPaths.size)),
+        "success"
+      );
+      setShowImportDialog(false);
+      void handleRefresh();
+    } catch (err) {
+      console.error(err);
+      addToast(t("welcome.importFailed") + ": " + String(err), "error");
+    } finally {
+      setImportingExternal(false);
+    }
+  }, [selectedImportPaths, addToast, t, handleRefresh]);
 
   const saveProjectBindingsConfig = useCallback(async (nextConfig: AppConfig) => {
     const previousConfig = config;
@@ -2652,6 +2701,12 @@ export function Skills() {
                         label: t("settings.projectBindings"),
                         onClick: handleOpenProjectBindingsDialog,
                       };
+                    case "scan-import":
+                      return {
+                        id: actionId,
+                        label: t("welcome.importSkills"),
+                        onClick: handleOpenImportSkillsDialog,
+                      };
                     default:
                       return null;
                   }
@@ -3482,6 +3537,209 @@ export function Skills() {
           onClose={handleCloseProjectBindingsDialog}
           t={t}
         />
+      )}
+
+      {showImportDialog && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            width: "100vw",
+            height: "100vh",
+            backgroundColor: "rgba(0, 0, 0, 0.65)",
+            backdropFilter: "blur(4px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: MODAL_LAYER_Z_INDEX,
+            padding: "24px",
+          }}
+          onClick={() => {
+            if (!importingExternal) setShowImportDialog(false);
+          }}
+        >
+          <div
+            className="animate-modal"
+            style={{
+              width: "100%",
+              maxWidth: "520px",
+              backgroundColor: "var(--card)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius-lg)",
+              boxShadow: "var(--shadow-lg)",
+              display: "flex",
+              flexDirection: "column",
+              maxHeight: "85vh",
+              overflow: "hidden",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div style={{
+              padding: "18px 20px",
+              borderBottom: "1px solid var(--border)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}>
+              <div>
+                <h3 style={{ fontSize: "14px", fontWeight: 600, color: "var(--foreground)" }}>
+                  {t("welcome.importSkills")}
+                </h3>
+                <p style={{ fontSize: "11px", color: "var(--muted-foreground)", marginTop: "2px" }}>
+                  {t("welcome.importSkillsDesc")}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowImportDialog(false)}
+                disabled={importingExternal}
+                style={{
+                  color: "var(--muted-foreground)",
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  fontSize: "16px",
+                  padding: "4px",
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Content */}
+            <div style={{ padding: "20px", overflowY: "auto", flex: 1 }} className="welcome-listbox">
+              {scanningExternal ? (
+                <div style={{ textAlign: "center", padding: "36px 0" }}>
+                  <div style={{
+                    width: "24px",
+                    height: "24px",
+                    border: "2px solid var(--border)",
+                    borderTopColor: "var(--primary)",
+                    borderRadius: "50%",
+                    display: "inline-block",
+                    animation: "spin 1s linear infinite"
+                  }} />
+                  <p style={{ fontSize: "12px", color: "var(--muted-foreground)", marginTop: "12px" }}>
+                    {t("welcome.scanning")}
+                  </p>
+                </div>
+              ) : scannedSkills.length === 0 ? (
+                <div style={{ textAlign: "center", padding: "36px 0" }}>
+                  <p style={{ fontSize: "13px", fontWeight: 500, color: "var(--foreground)" }}>
+                    {t("welcome.noSkillsFound")}
+                  </p>
+                  <p style={{ fontSize: "11px", color: "var(--muted-foreground)", marginTop: "4px" }}>
+                    {t("skills.noSkills")}
+                  </p>
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                  {scannedSkills.map((skill) => {
+                    const isSelected = selectedImportPaths.has(skill.path);
+                    return (
+                      <div
+                        key={skill.path}
+                        onClick={() => {
+                          const next = new Set(selectedImportPaths);
+                          if (next.has(skill.path)) {
+                            next.delete(skill.path);
+                          } else {
+                            next.add(skill.path);
+                          }
+                          setSelectedImportPaths(next);
+                        }}
+                        style={{
+                          display: "flex",
+                          alignItems: "flex-start",
+                          gap: "10px",
+                          padding: "10px 12px",
+                          borderRadius: "var(--radius-sm)",
+                          border: "1px solid var(--border)",
+                          backgroundColor: isSelected ? "var(--secondary)" : "transparent",
+                          cursor: "pointer",
+                          transition: "background-color 0.15s ease",
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          readOnly
+                          style={{ marginTop: "3px", cursor: "pointer" }}
+                        />
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <span style={{ fontSize: "12px", fontWeight: 500, color: "var(--foreground)", display: "block" }}>
+                            {skill.name}
+                          </span>
+                          {skill.description && (
+                            <span style={{ fontSize: "11px", color: "var(--muted-foreground)", display: "block", marginTop: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {skill.description}
+                            </span>
+                          )}
+                          <span style={{ fontSize: "10px", color: "var(--muted-foreground)", opacity: 0.7, display: "block", marginTop: "4px", fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {skill.path}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div style={{
+              padding: "14px 20px",
+              borderTop: "1px solid var(--border)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "10px",
+            }}>
+              <span style={{ fontSize: "11px", color: "var(--muted-foreground)" }}>
+                {t("welcome.selectedCount")
+                  .replace("{selected}", String(selectedImportPaths.size))
+                  .replace("{total}", String(scannedSkills.length))}
+              </span>
+              <div style={{ display: "flex", gap: "8px" }}>
+                <button
+                  type="button"
+                  onClick={() => setShowImportDialog(false)}
+                  disabled={importingExternal}
+                  style={{
+                    padding: "6px 12px",
+                    fontSize: "12px",
+                    borderRadius: "6px",
+                    border: "1px solid var(--border)",
+                    backgroundColor: "transparent",
+                    color: "var(--foreground)",
+                    cursor: "pointer",
+                  }}
+                >
+                  {t("common.cancel")}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleImportSkills}
+                  disabled={importingExternal || selectedImportPaths.size === 0 || scanningExternal}
+                  style={{
+                    padding: "6px 14px",
+                    fontSize: "12px",
+                    borderRadius: "6px",
+                    backgroundColor: "var(--primary)",
+                    color: "var(--primary-foreground)",
+                    border: "none",
+                    cursor: (importingExternal || selectedImportPaths.size === 0) ? "not-allowed" : "pointer",
+                    opacity: (importingExternal || selectedImportPaths.size === 0) ? 0.6 : 1,
+                  }}
+                >
+                  {importingExternal ? t("welcome.importing") : t("welcome.importSkills")}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

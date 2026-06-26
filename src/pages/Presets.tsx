@@ -335,10 +335,18 @@ export function Presets() {
   }
 
   return (
-    <div className="flex h-full min-h-0 overflow-hidden bg-background">
+    <div style={{
+      flex: 1,
+      display: 'flex',
+      flexDirection: 'column',
+      height: '100%',
+      overflow: 'hidden',
+      backgroundColor: 'var(--background)',
+    }}>
       <PageHeader title={t("presets.title")} />
 
-      {/* Preset List Panel (Left) */}
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+        {/* Preset List Panel (Left) */}
       <div
         className="w-60 flex-shrink-0 border-r border-border bg-card/30 flex flex-col h-full min-h-0"
         style={{
@@ -630,5 +638,6 @@ export function Presets() {
         )}
       </div>
     </div>
+  </div>
   );
 }
