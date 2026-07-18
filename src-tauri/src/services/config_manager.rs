@@ -3,8 +3,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::models::config::infer_project_root_from_skills_dir;
 use crate::models::{
-    AppConfig, ProjectBinding, SkillMetadata, SourceType, ToolConfig, SUPPORTED_TOOLS, home_dir,
+    builtin_skill_activation_presets, home_dir, AppConfig, ProjectBinding, SkillMetadata,
+    SourceType, ToolConfig, SUPPORTED_TOOLS,
 };
 #[cfg(windows)]
 use crate::services::linker::LinkerService;
@@ -93,7 +95,11 @@ impl ConfigManager {
             }
 
             let tags = Self::normalize_skill_tags(&item.tags);
-            let has_comment = item.comment.as_ref().map(|c| !c.trim().is_empty()).unwrap_or(false);
+            let has_comment = item
+                .comment
+                .as_ref()
+                .map(|c| !c.trim().is_empty())
+                .unwrap_or(false);
             if tags.is_empty() && !has_comment {
                 changed = true;
                 continue;
@@ -109,7 +115,11 @@ impl ConfigManager {
                 format!("global:{}", trimmed_id)
             };
 
-            let comment = item.comment.as_ref().map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
+            let comment = item
+                .comment
+                .as_ref()
+                .map(|c| c.trim().to_string())
+                .filter(|c| !c.is_empty());
             if normalized
                 .insert(normalized_id, SkillMetadata { tags, comment })
                 .is_some()
@@ -149,6 +159,31 @@ impl ConfigManager {
         }
 
         last_segment
+    }
+
+    fn legacy_project_roots_need_migration(content: &str) -> bool {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(content) else {
+            return false;
+        };
+
+        value
+            .get("projects")
+            .and_then(|projects| projects.as_array())
+            .is_some_and(|projects| {
+                projects.iter().any(|project| {
+                    let has_root_path = project
+                        .get("root_path")
+                        .and_then(|root| root.as_str())
+                        .is_some();
+                    !has_root_path
+                        && project
+                            .get("skills_dir")
+                            .and_then(|skills_dir| skills_dir.as_str())
+                            .map(PathBuf::from)
+                            .and_then(|skills_dir| infer_project_root_from_skills_dir(&skills_dir))
+                            .is_some()
+                })
+            })
     }
 
     fn migrate_project_bindings(config: &mut AppConfig) -> bool {
@@ -208,7 +243,18 @@ impl ConfigManager {
                 stored_name
             };
 
-            if project.get("root_path").is_some() {
+            let root_path = project
+                .get("root_path")
+                .and_then(|value| value.as_str())
+                .map(PathBuf::from)
+                .map(|path| normalize_path(&path));
+
+            if project
+                .get("root_path")
+                .and_then(|value| value.as_str())
+                .map(PathBuf::from)
+                != root_path
+            {
                 changed = true;
             }
             if project
@@ -225,6 +271,7 @@ impl ConfigManager {
                 id,
                 name: normalized_name,
                 skills_dir: normalized_skills_dir,
+                root_path,
             });
         }
 
@@ -412,7 +459,17 @@ impl ConfigManager {
 
         // Version Check & Migration
         let current_version = AppConfig::default().version;
-        let mut updated = false;
+        let mut updated = Self::legacy_project_roots_need_migration(&content);
+
+        // Seed the built-in Matt Pocock presets for existing installations as
+        // well as new ones. Only missing IDs are added, so user edits to a
+        // built-in preset and custom presets remain intact.
+        for builtin in builtin_skill_activation_presets() {
+            if !config.presets.iter().any(|preset| preset.id == builtin.id) {
+                config.presets.push(builtin);
+                updated = true;
+            }
+        }
 
         if config.version != current_version {
             config.version = current_version;
@@ -612,7 +669,7 @@ impl Default for ConfigManager {
 #[cfg(test)]
 mod tests {
     use super::ConfigManager;
-    use crate::models::SkillMetadata;
+    use crate::models::{AppConfig, SkillMetadata};
     use crate::test_support::with_temp_home;
     use serde_json::json;
     use std::fs;
@@ -709,6 +766,53 @@ mod tests {
                 !sources[0].enabled,
                 "enabled=false should persist after loading config"
             );
+        });
+    }
+
+    #[test]
+    fn load_adds_builtin_matt_presets_without_overwriting_custom_presets() {
+        with_temp_home(|home_dir| {
+            let config_dir = home_dir.join(".skills-manager");
+            fs::create_dir_all(&config_dir).expect("create config dir");
+            let config_path = config_dir.join("config.json");
+            let custom_preset = json!({
+                "id": "custom-review",
+                "name": "My Review",
+                "description": "Keep my existing preset",
+                "activations": []
+            });
+            let config_json = json!({
+                "version": "2.1.2",
+                "skills_dir": config_dir.join("skills").to_string_lossy(),
+                "tools": {},
+                "custom_tools": {},
+                "presets": [custom_preset],
+                "initialized": true
+            });
+            fs::write(
+                &config_path,
+                serde_json::to_string_pretty(&config_json).expect("serialize config"),
+            )
+            .expect("write config");
+
+            let loaded = ConfigManager::new().load().expect("load config");
+            assert!(loaded
+                .presets
+                .iter()
+                .any(|preset| preset.id == "custom-review"));
+            assert!(loaded
+                .presets
+                .iter()
+                .any(|preset| preset.id == "builtin-matt-planning"));
+            assert!(loaded
+                .presets
+                .iter()
+                .any(|preset| preset.id == "builtin-matt-full"));
+
+            let saved: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&config_path).expect("read config"))
+                    .expect("parse saved config");
+            assert_eq!(saved["presets"].as_array().map(Vec::len), Some(7));
         });
     }
 
@@ -853,13 +957,21 @@ mod tests {
             );
             assert_eq!(
                 saved_value["projects"][0].get("root_path"),
-                None,
-                "saved project bindings should no longer persist legacy root_path"
+                Some(&json!(home_dir
+                    .join("code")
+                    .join("alpha")
+                    .to_string_lossy()
+                    .to_string())),
+                "repository root should persist for workspace discovery"
             );
             assert_eq!(
                 saved_value["projects"][1].get("root_path"),
-                None,
-                "saved project bindings should no longer persist legacy root_path"
+                Some(&json!(home_dir
+                    .join("code")
+                    .join("beta")
+                    .to_string_lossy()
+                    .to_string())),
+                "repository root should persist for workspace discovery"
             );
         });
     }
@@ -944,6 +1056,48 @@ mod tests {
             assert_eq!(
                 loaded.projects[0].skills_dir,
                 home_dir.join("alt").join("selected-skills")
+            );
+        });
+    }
+
+    #[test]
+    fn load_upgrades_legacy_standard_skills_dir_to_repository_root() {
+        with_temp_home(|home_dir| {
+            let config_dir = home_dir.join(".skills-manager");
+            fs::create_dir_all(&config_dir).expect("create config dir");
+            let config_path = config_dir.join("config.json");
+            let repository = home_dir.join("workspaces").join("project-alpha");
+            let skills_dir = repository.join(".claude").join("skills");
+
+            let legacy_config_json = json!({
+                "version": AppConfig::default().version,
+                "skills_dir": config_dir.join("skills").to_string_lossy(),
+                "tools": {},
+                "custom_tools": {},
+                "projects": [{
+                    "id": "project-alpha",
+                    "name": "Project Alpha",
+                    "skills_dir": skills_dir.to_string_lossy()
+                }],
+                "active_project_id": "project-alpha",
+                "initialized": true
+            });
+            fs::write(
+                &config_path,
+                serde_json::to_string_pretty(&legacy_config_json).expect("serialize config"),
+            )
+            .expect("write legacy config");
+
+            let manager = ConfigManager::new();
+            let loaded = manager.load().expect("load legacy project binding");
+
+            assert_eq!(loaded.projects[0].root_path, Some(repository.clone()));
+            let persisted: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&config_path).expect("read config"))
+                    .expect("parse config");
+            assert_eq!(
+                persisted["projects"][0]["root_path"],
+                json!(repository.to_string_lossy().to_string())
             );
         });
     }

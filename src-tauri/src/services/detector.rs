@@ -3,7 +3,7 @@ use std::env;
 use std::process::Command; // Enable parallel processing
 
 use crate::models::{
-    CustomToolConfig, Tool, ToolConfig, ToolDefinition, ToolSource, SUPPORTED_TOOLS, home_dir,
+    home_dir, CustomToolConfig, Tool, ToolConfig, ToolDefinition, ToolSource, SUPPORTED_TOOLS,
 };
 use crate::services::linker::normalize_path;
 use crate::services::ConfigManager;

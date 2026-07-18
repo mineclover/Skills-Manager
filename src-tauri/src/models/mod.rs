@@ -2,6 +2,7 @@ pub mod auth;
 pub mod config;
 pub mod editor;
 pub mod marketplace;
+pub mod provider;
 pub mod skill;
 pub mod skill_package;
 pub mod tool;
@@ -9,7 +10,9 @@ pub mod update;
 
 pub use auth::{AuthProfile, AuthSession};
 pub use config::{
-    AppConfig, CustomToolConfig, LlmProvider, ProjectBinding, SkillMetadata, ToolConfig, home_dir,
+    builtin_skill_activation_presets, home_dir, is_builtin_skill_activation_preset_id, AppConfig,
+    CustomToolConfig, LlmProvider, PresetActivation, ProjectBinding, SkillActivationPreset,
+    SkillMetadata, ToolConfig,
 };
 pub use editor::{DetectedEditor, EDITOR_DEFINITIONS};
 pub use marketplace::{
@@ -17,6 +20,13 @@ pub use marketplace::{
     MarketplaceSource, MarketplaceSyncResult, MarketplaceUpdateCheckResult, SkillFileNode,
     SourceType,
 };
-pub use skill::{MarketplaceMeta, Skill, SkillScope, SkillSource, VaultMeta};
+pub use provider::{
+    OrcaInventory, OrcaTopic, SkillBinding, SkillBindingImpact, SkillBindingState,
+    SkillOperationAction, SkillOperationFailure, SkillOperationPreview, SkillOperationReport,
+    SkillProvider, SkillProviderCapabilities, SkillProviderInventory, SkillProviderKind,
+};
+pub use skill::{
+    MarketplaceMeta, Skill, SkillScope, SkillSource, VaultMeta, DISABLED_TOOL_SKILL_SUFFIX,
+};
 pub use skill_package::{InstalledSkillPackage, SkillPackageMeta};
 pub use tool::{Tool, ToolDefinition, ToolSource, SUPPORTED_TOOLS};

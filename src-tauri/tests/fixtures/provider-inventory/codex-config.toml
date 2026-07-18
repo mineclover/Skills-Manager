@@ -1,0 +1,5 @@
+[plugins."imagegen@fixture"]
+enabled = true
+
+[plugins."disabled-plugin@fixture"]
+enabled = false

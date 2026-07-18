@@ -1,5 +1,8 @@
-use crate::models::{DetectedEditor, EDITOR_DEFINITIONS, home_dir};
+#[cfg(target_os = "macos")]
+use crate::models::home_dir;
+use crate::models::{DetectedEditor, EDITOR_DEFINITIONS};
 use std::env;
+#[cfg(target_os = "macos")]
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -305,7 +308,7 @@ fn extract_app_icon(app_path: &str) -> Option<String> {
                 exit 1
             }}
             "#,
-            app_path.replace("'", "''")
+            path_str.replace("'", "''")
         );
 
         let output = Command::new("powershell")

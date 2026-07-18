@@ -1,7 +1,7 @@
 // TypeScript type definitions matching Rust backend models
 // Note: Field names use snake_case to match Rust serde serialization
 
-export type SkillScope = "global" | "project";
+export type SkillScope = "global" | "project" | "tool";
 
 export interface SkillMarketplaceMeta {
   marketplace_source_id?: string | null;
@@ -18,6 +18,7 @@ export interface Skill {
   scope: SkillScope;
   project_id?: string | null;
   project_name?: string | null;
+  tool_id?: string | null;
   name: string;
   description: string | null;
   version: string;
@@ -32,6 +33,7 @@ export interface ProjectBinding {
   id: string;
   name: string;
   skills_dir: string;
+  root_path?: string | null;
 }
 
 export interface SkillPackageMeta {
@@ -75,6 +77,112 @@ export interface Tool {
   config: ToolConfig;
   source: "builtin" | "custom";
   icon_path?: string | null;
+}
+
+export type SkillProviderKind = "filesystem" | "config_file" | "cli" | "marketplace";
+
+export interface SkillProviderCapabilities {
+  list: boolean;
+  install: boolean;
+  enable: boolean;
+  disable: boolean;
+  update: boolean;
+  inspect: boolean;
+}
+
+export interface SkillProvider {
+  provider_id: string;
+  kind: SkillProviderKind;
+  display_name: string;
+  root_path?: string | null;
+  detected: boolean;
+  cli_available: boolean;
+  reachable?: boolean | null;
+  capabilities: SkillProviderCapabilities;
+  skill_count: number;
+  enabled_count: number;
+  disabled_count: number;
+  warning?: string | null;
+}
+
+export interface OrcaTopic {
+  name: string;
+  description?: string | null;
+}
+
+export interface OrcaInventory {
+  cli_available: boolean;
+  available: boolean;
+  app_running?: boolean | null;
+  runtime_reachable?: boolean | null;
+  runtime_state?: string | null;
+  topics_available: boolean;
+  topics: OrcaTopic[];
+  checked_at: number;
+  warning?: string | null;
+}
+
+export interface SkillProviderInventory {
+  checked_at: number;
+  providers: SkillProvider[];
+  orca: OrcaInventory;
+}
+
+export type SkillBindingState = "enabled" | "disabled" | "missing" | "conflict" | "unavailable";
+
+export interface SkillBinding {
+  artifact_id: string;
+  skill_instance_id: string;
+  provider_id: string;
+  scope: SkillScope;
+  state: SkillBindingState;
+  source_path?: string | null;
+  target_path?: string | null;
+  last_checked_at: number;
+  reason?: string | null;
+}
+
+export type SkillOperationAction = "enable" | "disable" | "preset_apply";
+
+export interface SkillBindingImpact {
+  provider_id: string;
+  display_name: string;
+  root_path?: string | null;
+  shared: boolean;
+  reason?: string | null;
+}
+
+export interface SkillOperationPreview {
+  skill_instance_id: string;
+  artifact_id: string;
+  provider_id: string;
+  scope: SkillScope;
+  action: SkillOperationAction;
+  impacts: SkillBindingImpact[];
+  requires_confirmation: boolean;
+  warning?: string | null;
+}
+
+export interface SkillOperationFailure {
+  skill_instance_id?: string | null;
+  provider_id?: string | null;
+  message: string;
+}
+
+export interface SkillOperationReport {
+  operation_id: string;
+  action: SkillOperationAction;
+  scope?: SkillScope | null;
+  project_id?: string | null;
+  provider_id?: string | null;
+  requested_count: number;
+  attempted_count: number;
+  applied_count: number;
+  skipped_count: number;
+  failed_count: number;
+  failures: SkillOperationFailure[];
+  impacts: SkillBindingImpact[];
+  completed_at: number;
 }
 
 export type VaultBackupConsent = "unknown" | "granted" | "denied";
@@ -301,6 +409,7 @@ export interface BatchSetSkillToolsResponse {
   skipped_count: number;
   failed_count: number;
   failures: BatchSetSkillToolsFailure[];
+  report: SkillOperationReport;
 }
 
 // Detected editor from backend

@@ -1,4 +1,5 @@
 use crate::models::SkillScope;
+use crate::models::DISABLED_TOOL_SKILL_SUFFIX;
 use crate::services::config_manager::ConfigManager;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -471,10 +472,13 @@ impl LinkerService {
             return Err(format!("Skill path does not exist: {}", skill_path));
         }
 
-        let skill_name = source
+        let source_name = source
             .file_name()
             .and_then(|n| n.to_str())
             .ok_or("Invalid skill path")?;
+        let skill_name = source_name
+            .strip_suffix(DISABLED_TOOL_SKILL_SUFFIX)
+            .unwrap_or(source_name);
 
         let config = ConfigManager::new().load()?;
         let hub_skills_dir = PathBuf::from(&config.skills_dir);

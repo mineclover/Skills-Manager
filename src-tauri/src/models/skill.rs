@@ -4,6 +4,8 @@ use std::path::PathBuf;
 
 use crate::models::SkillPackageMeta;
 
+pub const DISABLED_TOOL_SKILL_SUFFIX: &str = ".disabled-by-sm";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Skill {
     pub id: String,
@@ -11,6 +13,8 @@ pub struct Skill {
     pub scope: SkillScope,
     pub project_id: Option<String>,
     pub project_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_id: Option<String>,
     pub name: String,
     pub description: Option<String>,
     pub version: String,
@@ -28,6 +32,7 @@ pub struct Skill {
 pub enum SkillScope {
     Global,
     Project,
+    Tool,
 }
 
 impl Default for SkillScope {
@@ -43,6 +48,10 @@ impl Skill {
 
     pub fn project_instance_id(project_id: &str, id: &str) -> String {
         format!("project:{}:{}", project_id, id)
+    }
+
+    pub fn tool_instance_id(tool_id: &str, id: &str) -> String {
+        format!("tool:{}:{}", tool_id, id)
     }
 }
 
@@ -64,7 +73,17 @@ impl Skill {
             (SkillScope::Project, None) => {
                 panic!("project_id is required for project-scoped skills")
             }
+            (SkillScope::Tool, _) => {
+                panic!("with_scope is for Global and Project. Use with_tool_scope for Tool scope.")
+            }
         };
+        self
+    }
+
+    pub fn with_tool_scope(mut self, tool_id: String) -> Self {
+        self.scope = SkillScope::Tool;
+        self.tool_id = Some(tool_id.clone());
+        self.instance_id = Self::tool_instance_id(&tool_id, &self.id);
         self
     }
 }
@@ -77,6 +96,7 @@ impl Skill {
             scope: SkillScope::Global,
             project_id: None,
             project_name: None,
+            tool_id: None,
             id,
             name,
             description: None,

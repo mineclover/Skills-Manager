@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::models::{
-    AppConfig, InstallResult, InstallStatus, MarketplaceSkill, MarketplaceSkillsResponse,
+    home_dir, AppConfig, InstallResult, InstallStatus, MarketplaceSkill, MarketplaceSkillsResponse,
     MarketplaceSource, MarketplaceSyncResult, MarketplaceUpdateCheckResult, Skill, SkillFileNode,
-    SkillSource, home_dir,
+    SkillSource,
 };
 use crate::services::marketplace::{
     derive_github_repo_and_skill_path, DIRECT_GITHUB_SOURCE_ID, DIRECT_GITHUB_SOURCE_NAME,
@@ -1005,6 +1005,7 @@ mod tests {
             scope: crate::models::SkillScope::Global,
             project_id: None,
             project_name: None,
+            tool_id: None,
             name: name.to_string(),
             description: description.map(str::to_string),
             version: "1.0.0".to_string(),
@@ -1293,6 +1294,7 @@ mod tests {
                 scope: crate::models::SkillScope::Global,
                 project_id: None,
                 project_name: None,
+                tool_id: None,
                 name: "Local".to_string(),
                 description: Some("ignore".to_string()),
                 version: "1.0.0".to_string(),

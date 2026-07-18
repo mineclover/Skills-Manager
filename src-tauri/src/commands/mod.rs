@@ -5,6 +5,8 @@ pub mod feedback;
 pub mod files;
 pub mod llm;
 pub mod marketplace;
+pub mod projects;
+pub mod providers;
 pub mod skill_packages;
 pub mod skills;
 pub mod sync;
@@ -36,13 +38,19 @@ pub use marketplace::{
     install_marketplace_skill, install_marketplace_skill_by_ref, sync_marketplace_installed_skills,
     toggle_marketplace_source,
 };
+pub use projects::{
+    preview_project_binding, register_project_binding, remove_project_binding,
+    set_active_project_binding,
+};
+pub use providers::{list_skill_bindings, list_skill_providers, preview_skill_operation};
 pub use skill_packages::{
     install_skill_package_from_path, list_skill_packages, remove_skill_package,
 };
 pub use skills::{
-    apply_preset, batch_set_skill_tools, clear_active_preset, create_skill, delete_skill,
+    apply_preset, apply_preset_for_scope, apply_preset_for_target, batch_set_skill_tools,
+    capture_preset, clear_active_preset, create_preset, create_skill, delete_preset, delete_skill,
     disable_skill, enable_skill, import_skills_to_hub, list_skills, refresh_skills,
-    scan_existing_skills,
+    scan_existing_skills, scan_skills_for_scope, set_preset_all, set_preset_skill,
 };
 pub use sync::{check_sync_status, fix_sync_issues};
 pub use tools::{

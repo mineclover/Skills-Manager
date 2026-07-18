@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::models::{
-    GitHubContent, InstallResult, InstallStatus, MarketplaceSkill, MarketplaceSkillsResponse,
-    MarketplaceSource, SkillFileNode, SourceType, home_dir,
+    home_dir, GitHubContent, InstallResult, InstallStatus, MarketplaceSkill,
+    MarketplaceSkillsResponse, MarketplaceSource, SkillFileNode, SourceType,
 };
 
 const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
@@ -2895,13 +2895,12 @@ mod tests {
         build_marketplace_external_url, build_skill_tree_from_tree_entries, collect_file_nodes,
         extract_root_skill_dirs_from_tree_entries, extract_skill_description_from_markdown,
         get_cached_github_tree, github_tree_cache, github_tree_cache_key,
-        preferred_marketplace_install_dir,
-        map_marketplace_api_skill_record, normalize_github_token, set_cached_github_tree,
-        should_include_github_root_dir, CachedGitHubTree, GitHubContent, GitHubTreeEntry,
-        InstallStatus, MarketplaceApiSkillRecord, MarketplaceApiSkillSource, MarketplaceCache,
-        MarketplaceSkill, MarketplaceSkillsResponse, PersistedMarketplaceCacheEntry,
-        PersistedMarketplaceState, PersistedSkillDescriptionEntry, GITHUB_TREE_CACHE_TTL,
-        PERSISTED_CACHE_TTL, PERSISTED_SKILL_DESCRIPTION_CACHE_TTL,
+        map_marketplace_api_skill_record, normalize_github_token,
+        preferred_marketplace_install_dir, set_cached_github_tree, should_include_github_root_dir,
+        CachedGitHubTree, GitHubContent, GitHubTreeEntry, InstallStatus, MarketplaceApiSkillRecord,
+        MarketplaceApiSkillSource, MarketplaceCache, MarketplaceSkill, MarketplaceSkillsResponse,
+        PersistedMarketplaceCacheEntry, PersistedMarketplaceState, PersistedSkillDescriptionEntry,
+        GITHUB_TREE_CACHE_TTL, PERSISTED_CACHE_TTL, PERSISTED_SKILL_DESCRIPTION_CACHE_TTL,
     };
     use std::collections::HashSet;
     use std::fs;

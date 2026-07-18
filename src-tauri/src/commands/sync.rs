@@ -78,6 +78,7 @@ pub fn check_sync_status() -> Result<SyncReport, String> {
         .map(|(tool_id, tool_config)| {
             skills
                 .iter()
+                .filter(|skill| skill.scope != crate::models::SkillScope::Tool)
                 .filter(|skill| {
                     should_report_sync_issue(
                         skill.is_enabled_for(&tool_id),
@@ -98,7 +99,10 @@ pub fn fix_sync_issues() -> Result<LinkReport, String> {
     let mut combined_report = LinkReport::default();
 
     for (tool_id, tool_config) in collect_active_tool_configs(&config) {
-        for skill in &skills {
+        for skill in skills
+            .iter()
+            .filter(|skill| skill.scope != crate::models::SkillScope::Tool)
+        {
             let should_be_enabled = skill.is_enabled_for(&tool_id);
             let current_status = resolve_sync_status(skill, &tool_id, &tool_config);
 

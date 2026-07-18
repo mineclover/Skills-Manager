@@ -1,8 +1,9 @@
+use super::tool::SUPPORTED_TOOLS;
 use crate::models::auth::AuthSession;
 use crate::models::marketplace::{MarketplaceSource, SourceType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserPreferences {
@@ -61,6 +62,173 @@ pub struct SkillActivationPreset {
     pub name: String,
     pub description: Option<String>,
     pub activations: Vec<PresetActivation>,
+}
+
+const MATT_PLANNING_SKILLS: &[&str] = &[
+    "ask-matt",
+    "design-an-interface",
+    "domain-modeling",
+    "grill-me",
+    "grill-with-docs",
+    "grilling",
+    "request-refactor-plan",
+    "research",
+    "to-questionnaire",
+    "to-spec",
+    "to-tickets",
+    "ubiquitous-language",
+    "wayfinder",
+];
+
+const MATT_BUILD_SKILLS: &[&str] = &[
+    "codebase-design",
+    "implement",
+    "improve-codebase-architecture",
+    "migrate-to-shoehorn",
+    "prototype",
+    "scaffold-exercises",
+    "setup-pre-commit",
+    "setup-ts-deep-modules",
+    "tdd",
+];
+
+const MATT_REVIEW_SKILLS: &[&str] = &[
+    "code-review",
+    "diagnosing-bugs",
+    "git-guardrails-claude-code",
+    "qa",
+    "resolving-merge-conflicts",
+    "triage",
+];
+
+const MATT_WRITING_SKILLS: &[&str] = &[
+    "edit-article",
+    "obsidian-vault",
+    "teach",
+    "writing-beats",
+    "writing-fragments",
+    "writing-great-skills",
+    "writing-shape",
+];
+
+const MATT_WORKFLOW_SKILLS: &[&str] = &[
+    "batch-grill-me",
+    "claude-handoff",
+    "handoff",
+    "loop-me",
+    "setup-matt-pocock-skills",
+    "wizard",
+];
+
+const MATT_ALL_SKILLS: &[&str] = &[
+    "ask-matt",
+    "batch-grill-me",
+    "claude-handoff",
+    "code-review",
+    "codebase-design",
+    "design-an-interface",
+    "diagnosing-bugs",
+    "domain-modeling",
+    "edit-article",
+    "git-guardrails-claude-code",
+    "grill-me",
+    "grill-with-docs",
+    "grilling",
+    "handoff",
+    "implement",
+    "improve-codebase-architecture",
+    "loop-me",
+    "migrate-to-shoehorn",
+    "obsidian-vault",
+    "prototype",
+    "qa",
+    "request-refactor-plan",
+    "research",
+    "resolving-merge-conflicts",
+    "scaffold-exercises",
+    "setup-matt-pocock-skills",
+    "setup-pre-commit",
+    "setup-ts-deep-modules",
+    "tdd",
+    "teach",
+    "to-questionnaire",
+    "to-spec",
+    "to-tickets",
+    "triage",
+    "ubiquitous-language",
+    "wayfinder",
+    "wizard",
+    "writing-beats",
+    "writing-fragments",
+    "writing-great-skills",
+    "writing-shape",
+];
+
+fn matt_skill_ids(names: &[&str]) -> Vec<String> {
+    names
+        .iter()
+        .map(|name| format!("tool:codex:{name}"))
+        .collect()
+}
+
+fn matt_preset(id: &str, name: &str, description: &str, skills: &[&str]) -> SkillActivationPreset {
+    SkillActivationPreset {
+        id: id.to_string(),
+        name: name.to_string(),
+        description: Some(description.to_string()),
+        activations: vec![PresetActivation {
+            tool_id: "codex".to_string(),
+            skill_ids: matt_skill_ids(skills),
+        }],
+    }
+}
+
+/// Built-in starting points for the direct Codex skills installed from
+/// mattpocock-skills. They are intentionally Codex-scoped: applying one to a
+/// different agent requires an explicit membership selection first.
+pub fn builtin_skill_activation_presets() -> Vec<SkillActivationPreset> {
+    vec![
+        matt_preset(
+            "builtin-matt-planning",
+            "Matt · Planning",
+            "Clarify a problem, explore options, and turn decisions into an executable plan.",
+            MATT_PLANNING_SKILLS,
+        ),
+        matt_preset(
+            "builtin-matt-build",
+            "Matt · Build",
+            "Implement changes with deep-module design, tests, and project setup guidance.",
+            MATT_BUILD_SKILLS,
+        ),
+        matt_preset(
+            "builtin-matt-review",
+            "Matt · Review & Debug",
+            "Review changes, diagnose failures, and keep risky repository operations safe.",
+            MATT_REVIEW_SKILLS,
+        ),
+        matt_preset(
+            "builtin-matt-writing",
+            "Matt · Writing",
+            "Shape, teach, edit, and develop writing with the Matt Pocock workflow skills.",
+            MATT_WRITING_SKILLS,
+        ),
+        matt_preset(
+            "builtin-matt-workflow",
+            "Matt · Workflow",
+            "Hand off work, run guided workflows, and manage the Matt skills setup itself.",
+            MATT_WORKFLOW_SKILLS,
+        ),
+        matt_preset(
+            "builtin-matt-full",
+            "Matt · Full Set",
+            "Enable the complete installed Matt Pocock skill set for Codex.",
+            MATT_ALL_SKILLS,
+        ),
+    ]
+}
+
+pub fn is_builtin_skill_activation_preset_id(id: &str) -> bool {
+    id.starts_with("builtin-matt-")
 }
 
 fn default_theme() -> String {
@@ -135,22 +303,74 @@ struct LegacyProjectBinding {
     pub skills_dir: Option<PathBuf>,
 }
 
+pub(crate) fn infer_project_root_from_skills_dir(skills_dir: &Path) -> Option<PathBuf> {
+    let mut suffixes = Vec::new();
+    for definition in SUPPORTED_TOOLS {
+        suffixes.push(PathBuf::from(definition.config_dir).join("skills"));
+        suffixes.extend(
+            definition
+                .alt_config_dirs
+                .iter()
+                .map(|alternate| PathBuf::from(alternate).join("skills")),
+        );
+    }
+    suffixes.push(PathBuf::from("skills"));
+
+    suffixes
+        .into_iter()
+        .find_map(|suffix| strip_path_suffix_case_insensitive(skills_dir, &suffix))
+}
+
+fn strip_path_suffix_case_insensitive(path: &Path, suffix: &Path) -> Option<PathBuf> {
+    let path_components = path.components().collect::<Vec<_>>();
+    let suffix_components = suffix.components().collect::<Vec<_>>();
+    if path_components.len() <= suffix_components.len() {
+        return None;
+    }
+
+    let start = path_components.len() - suffix_components.len();
+    if !path_components[start..]
+        .iter()
+        .zip(suffix_components.iter())
+        .all(|(path, suffix)| {
+            path.as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&suffix.as_os_str().to_string_lossy())
+        })
+    {
+        return None;
+    }
+
+    let mut root = PathBuf::new();
+    for component in &path_components[..start] {
+        root.push(component.as_os_str());
+    }
+    Some(root)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectBinding {
     pub id: String,
     pub name: String,
     pub skills_dir: PathBuf,
+    pub root_path: Option<PathBuf>,
 }
 
 impl TryFrom<LegacyProjectBinding> for ProjectBinding {
     type Error = String;
 
     fn try_from(value: LegacyProjectBinding) -> Result<Self, Self::Error> {
+        let root_path = value.root_path.or_else(|| {
+            value
+                .skills_dir
+                .as_deref()
+                .and_then(infer_project_root_from_skills_dir)
+        });
         let skills_dir = value
             .skills_dir
             .or_else(|| {
-                value
-                    .root_path
+                root_path
+                    .clone()
                     .map(|root| root.join(".claude").join("skills"))
             })
             .ok_or_else(|| "missing field `skills_dir`".to_string())?;
@@ -159,6 +379,7 @@ impl TryFrom<LegacyProjectBinding> for ProjectBinding {
             id: value.id,
             name: value.name,
             skills_dir,
+            root_path,
         })
     }
 }
@@ -169,10 +390,13 @@ impl Serialize for ProjectBinding {
         S: serde::Serializer,
     {
         use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("ProjectBinding", 3)?;
+        let mut state = serializer.serialize_struct("ProjectBinding", 4)?;
         state.serialize_field("id", &self.id)?;
         state.serialize_field("name", &self.name)?;
         state.serialize_field("skills_dir", &self.skills_dir)?;
+        if let Some(root_path) = &self.root_path {
+            state.serialize_field("root_path", root_path)?;
+        }
         state.end()
     }
 }
@@ -250,7 +474,7 @@ impl Default for AppConfig {
             llm_provider: None,
             auth_session: None,
             initialized: false,
-            presets: Vec::new(),
+            presets: builtin_skill_activation_presets(),
             active_preset_id: None,
         }
     }
@@ -328,11 +552,12 @@ impl AppConfig {
 
 #[cfg(test)]
 mod tests {
+    use super::builtin_skill_activation_presets;
     use super::default_marketplace_sources;
     use super::AppConfig;
     use super::SkillMetadata;
     use crate::models::SourceType;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     #[test]
     fn default_marketplace_sources_matches_remote_source_ids() {
@@ -342,6 +567,42 @@ mod tests {
         assert_eq!(sources[0].source_type, SourceType::Crawler);
         assert_eq!(sources[1].id, "src_composio_awesome_claude_skills");
         assert_eq!(sources[1].source_type, SourceType::Crawler);
+    }
+
+    #[test]
+    fn default_matt_presets_cover_work_types_and_full_skill_set() {
+        let presets = builtin_skill_activation_presets();
+        let ids = presets
+            .iter()
+            .map(|preset| preset.id.as_str())
+            .collect::<HashSet<_>>();
+
+        assert_eq!(presets.len(), 6);
+        for id in [
+            "builtin-matt-planning",
+            "builtin-matt-build",
+            "builtin-matt-review",
+            "builtin-matt-writing",
+            "builtin-matt-workflow",
+            "builtin-matt-full",
+        ] {
+            assert!(ids.contains(id), "missing built-in preset {id}");
+        }
+
+        let full = presets
+            .iter()
+            .find(|preset| preset.id == "builtin-matt-full")
+            .expect("full preset should exist");
+        assert_eq!(full.activations.len(), 1);
+        assert_eq!(full.activations[0].tool_id, "codex");
+        assert_eq!(full.activations[0].skill_ids.len(), 41);
+        assert!(full.activations[0]
+            .skill_ids
+            .contains(&"tool:codex:code-review".to_string()));
+        assert!(AppConfig::default()
+            .presets
+            .iter()
+            .any(|preset| preset.id == "builtin-matt-planning"));
     }
 
     #[test]

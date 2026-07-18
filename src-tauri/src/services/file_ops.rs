@@ -112,11 +112,11 @@ pub fn create_file(path: &str) -> Result<(), String> {
     }
     if let Some(parent) = p.parent() {
         if !parent.exists() {
-            fs::create_dir_all(parent).map_err(|e| format!("Failed to create parent directory: {}", e))?;
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create parent directory: {}", e))?;
         }
     }
-    fs::File::create(p)
-        .map_err(|e| format!("Failed to create file: {}", e))?;
+    fs::File::create(p).map_err(|e| format!("Failed to create file: {}", e))?;
     Ok(())
 }
 
@@ -152,7 +152,8 @@ pub fn rename_path(old_path: &str, new_path: &str) -> Result<(), String> {
     }
     if let Some(parent) = to.parent() {
         if !parent.exists() {
-            fs::create_dir_all(parent).map_err(|e| format!("Failed to create parent directory: {}", e))?;
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create parent directory: {}", e))?;
         }
     }
     fs::rename(from, to).map_err(|e| format!("Failed to rename: {}", e))

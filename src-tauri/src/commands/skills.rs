@@ -1,123 +1,22 @@
-use std::collections::{HashMap, HashSet};
-use std::path::Path;
-
-use crate::models::{AppConfig, InstalledSkillPackage, Skill, SkillScope};
-use crate::services::{
-    is_symlink_or_junction, AppCache, ConfigManager, LinkerService, ScannerService,
-    SkillPackageService,
+use crate::models::config::SkillActivationPreset;
+#[cfg(test)]
+use crate::models::AppConfig;
+use crate::models::{Skill, SkillOperationReport};
+#[cfg(test)]
+use crate::services::skill_control::{
+    apply_preset_to_target_with_skills, apply_skill_tool_enabled, build_batch_operations,
+    delete_skill_from_disk, rename_tool_skill_for_state, resolve_batch_targets,
+    resolve_skill_source_path, BatchSkillToolAction, BatchSkillToolTarget,
+    BatchSkillToolTargetKind, ResolvedBatchSkillTarget,
 };
-use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use crate::services::LinkerService;
+#[cfg(test)]
+use crate::services::ScannerService;
+use crate::services::{AppCache, SkillControlService};
 use tauri::State;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum BatchSkillToolTargetKind {
-    Skill,
-    Group,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum BatchSkillToolAction {
-    Enable,
-    Disable,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct BatchSkillToolTarget {
-    pub kind: BatchSkillToolTargetKind,
-    pub id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct BatchSetSkillToolsRequest {
-    pub targets: Vec<BatchSkillToolTarget>,
-    pub tool_ids: Vec<String>,
-    pub action: BatchSkillToolAction,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct BatchSetSkillToolsFailure {
-    pub target_kind: BatchSkillToolTargetKind,
-    pub target_id: String,
-    pub skill_id: Option<String>,
-    pub tool_id: Option<String>,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct BatchSetSkillToolsResponse {
-    pub requested_target_count: usize,
-    pub requested_tool_count: usize,
-    pub resolved_skill_count: usize,
-    pub attempted_operation_count: usize,
-    pub applied_count: usize,
-    pub skipped_count: usize,
-    pub failed_count: usize,
-    pub failures: Vec<BatchSetSkillToolsFailure>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ResolvedBatchSkillTarget {
-    target_kind: BatchSkillToolTargetKind,
-    target_id: String,
-    skill_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct BatchSkillToolOperation {
-    target_kind: BatchSkillToolTargetKind,
-    target_id: String,
-    skill_id: String,
-    tool_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct BatchOperationPlan {
-    operations: Vec<BatchSkillToolOperation>,
-    skipped_count: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct BatchFailureContext {
-    target_kind: BatchSkillToolTargetKind,
-    target_id: String,
-    skill_id: Option<String>,
-    tool_id: Option<String>,
-    message: String,
-}
-
-impl BatchFailureContext {
-    fn into_failure(self) -> BatchSetSkillToolsFailure {
-        BatchSetSkillToolsFailure {
-            target_kind: self.target_kind,
-            target_id: self.target_id,
-            skill_id: self.skill_id,
-            tool_id: self.tool_id,
-            message: self.message,
-        }
-    }
-}
-
-fn batch_failure(
-    target_kind: BatchSkillToolTargetKind,
-    target_id: impl Into<String>,
-    skill_id: Option<String>,
-    tool_id: Option<String>,
-    message: impl Into<String>,
-) -> BatchFailureContext {
-    BatchFailureContext {
-        target_kind,
-        target_id: target_id.into(),
-        skill_id,
-        tool_id,
-        message: message.into(),
-    }
-}
-
-fn resolve_skill_source_path(_config: &AppConfig, skill: &Skill) -> std::path::PathBuf {
-    skill.path.clone()
-}
+use crate::services::skill_control::{BatchSetSkillToolsRequest, BatchSetSkillToolsResponse};
 
 #[cfg(test)]
 fn load_skill_by_id(config: &AppConfig, skill_id: &str) -> Result<Skill, String> {
@@ -135,337 +34,16 @@ fn load_skill_by_id(config: &AppConfig, skill_id: &str) -> Result<Skill, String>
         .ok_or_else(|| format!("Skill not found: {}", skill_id))
 }
 
-fn load_skill_by_instance_id(config: &AppConfig, instance_id: &str) -> Result<Skill, String> {
-    ScannerService::scan_scoped_skills(config)?
-        .into_iter()
-        .find(|item| item.instance_id == instance_id)
-        .ok_or_else(|| format!("Skill not found: {}", instance_id))
-}
-
-fn apply_skill_tool_enabled(
-    config: &AppConfig,
-    instance_id: &str,
-    tool_id: &str,
-    enabled: bool,
-    skill_path: Option<&Path>,
-) -> Result<(), String> {
-    let tool_config = config
-        .get_tool_config(tool_id)
-        .ok_or_else(|| format!("Tool not found: {}", tool_id))?;
-
-    if !tool_config.enabled {
-        return Err(format!("Tool is disabled: {}", tool_id));
-    }
-
-    if enabled {
-        let skill = load_skill_by_instance_id(config, instance_id)?;
-        let skill_path = match skill_path {
-            Some(path) => path.to_path_buf(),
-            None => resolve_skill_source_path(config, &skill),
-        };
-        if !skill_path.exists() {
-            return Err(format!("Skill not found: {}", instance_id));
-        }
-
-        return LinkerService::enable_skill_for_tool(
-            &skill_path,
-            &tool_config.skills_path,
-            &skill.id,
-            tool_id,
-        );
-    }
-
-    let skill = load_skill_by_instance_id(config, instance_id)?;
-    match LinkerService::check_link_for_scoped_skill(
-        &skill.path,
-        &tool_config.skills_path,
-        &skill.id,
-        tool_id,
-        &skill.scope,
-    ) {
-        crate::services::LinkStatus::Valid => {
-            LinkerService::disable_skill_for_tool(&tool_config.skills_path, &skill.id, tool_id)
-        }
-        crate::services::LinkStatus::Missing => Ok(()),
-        _ => Err(format!(
-            "Skill target belongs to another instance: {}",
-            instance_id
-        )),
-    }
-}
-
-fn delete_skill_from_disk(config: &AppConfig, instance_id: &str) -> Result<(), String> {
-    let skill = load_skill_by_instance_id(config, instance_id)?;
-    let skill_path = resolve_skill_source_path(config, &skill);
-    if !skill_path.exists() {
-        return Err(format!("Skill not found: {}", instance_id));
-    }
-
-    for (tool_id, tool_config) in config.collect_tool_configs() {
-        match LinkerService::check_link_for_scoped_skill(
-            &skill.path,
-            &tool_config.skills_path,
-            &skill.id,
-            &tool_id,
-            &skill.scope,
-        ) {
-            crate::services::LinkStatus::Valid => {
-                let _ = LinkerService::disable_skill_for_tool(
-                    &tool_config.skills_path,
-                    &skill.id,
-                    &tool_id,
-                );
-            }
-            crate::services::LinkStatus::Missing => {}
-            _ => {}
-        }
-    }
-    std::fs::remove_dir_all(&skill_path)
-        .map_err(|e| format!("Failed to delete skill folder: {}", e))?;
-
-    Ok(())
-}
-
-fn resolve_batch_targets(
-    targets: &[BatchSkillToolTarget],
-    skills_by_instance_id: &HashMap<String, Skill>,
-    packages_by_id: &HashMap<String, InstalledSkillPackage>,
-) -> (Vec<ResolvedBatchSkillTarget>, Vec<BatchFailureContext>) {
-    let mut resolved = Vec::new();
-    let mut failures = Vec::new();
-
-    for target in targets {
-        match target.kind {
-            BatchSkillToolTargetKind::Skill => {
-                if skills_by_instance_id.contains_key(&target.id) {
-                    resolved.push(ResolvedBatchSkillTarget {
-                        target_kind: BatchSkillToolTargetKind::Skill,
-                        target_id: target.id.clone(),
-                        skill_id: target.id.clone(),
-                    });
-                } else {
-                    failures.push(batch_failure(
-                        BatchSkillToolTargetKind::Skill,
-                        target.id.clone(),
-                        Some(target.id.clone()),
-                        None,
-                        format!("Skill not found: {}", target.id),
-                    ));
-                }
-            }
-            BatchSkillToolTargetKind::Group => {
-                let Some(skill_package) = packages_by_id.get(&target.id) else {
-                    failures.push(batch_failure(
-                        BatchSkillToolTargetKind::Group,
-                        target.id.clone(),
-                        None,
-                        None,
-                        format!("Skill group not found: {}", target.id),
-                    ));
-                    continue;
-                };
-
-                for skill_id in &skill_package.installed_members {
-                    let matching_skills = skills_by_instance_id
-                        .values()
-                        .filter(|skill| &skill.id == skill_id)
-                        .collect::<Vec<_>>();
-
-                    if matching_skills.is_empty() {
-                        failures.push(batch_failure(
-                            BatchSkillToolTargetKind::Group,
-                            target.id.clone(),
-                            Some(skill_id.clone()),
-                            None,
-                            format!("Skill not found: {}", skill_id),
-                        ));
-                        continue;
-                    }
-
-                    let Some(preferred_skill) = matching_skills
-                        .iter()
-                        .find(|skill| skill.scope == SkillScope::Global)
-                    else {
-                        failures.push(batch_failure(
-                            BatchSkillToolTargetKind::Group,
-                            target.id.clone(),
-                            Some(skill_id.clone()),
-                            None,
-                            format!("Global skill not found for group member: {}", skill_id),
-                        ));
-                        continue;
-                    };
-
-                    resolved.push(ResolvedBatchSkillTarget {
-                        target_kind: BatchSkillToolTargetKind::Group,
-                        target_id: target.id.clone(),
-                        skill_id: preferred_skill.instance_id.clone(),
-                    });
-                }
-            }
-        }
-    }
-
-    (resolved, failures)
-}
-
-fn build_batch_operations(
-    resolved_targets: &[ResolvedBatchSkillTarget],
-    tool_ids: &[String],
-    skills_by_instance_id: &HashMap<String, Skill>,
-    config: &AppConfig,
-    action: &BatchSkillToolAction,
-) -> (BatchOperationPlan, Vec<BatchFailureContext>) {
-    let mut failures = Vec::new();
-    let mut seen = HashSet::new();
-    let mut operations = Vec::new();
-    let mut skipped_count = 0;
-    let should_enable = matches!(action, BatchSkillToolAction::Enable);
-
-    for resolved_target in resolved_targets {
-        let Some(skill) = skills_by_instance_id.get(&resolved_target.skill_id) else {
-            failures.push(batch_failure(
-                resolved_target.target_kind.clone(),
-                resolved_target.target_id.clone(),
-                Some(resolved_target.skill_id.clone()),
-                None,
-                format!("Skill not found: {}", resolved_target.skill_id),
-            ));
-            continue;
-        };
-
-        for tool_id in tool_ids {
-            if !seen.insert((resolved_target.skill_id.clone(), tool_id.clone())) {
-                continue;
-            }
-
-            let Some(tool_config) = config.get_tool_config(tool_id) else {
-                failures.push(batch_failure(
-                    resolved_target.target_kind.clone(),
-                    resolved_target.target_id.clone(),
-                    Some(resolved_target.skill_id.clone()),
-                    Some(tool_id.clone()),
-                    format!("Tool not found: {}", tool_id),
-                ));
-                continue;
-            };
-
-            if !tool_config.enabled {
-                failures.push(batch_failure(
-                    resolved_target.target_kind.clone(),
-                    resolved_target.target_id.clone(),
-                    Some(resolved_target.skill_id.clone()),
-                    Some(tool_id.clone()),
-                    format!("Tool is disabled: {}", tool_id),
-                ));
-                continue;
-            }
-
-            if skill.is_enabled_for(tool_id) == should_enable {
-                skipped_count += 1;
-                continue;
-            }
-
-            operations.push(BatchSkillToolOperation {
-                target_kind: resolved_target.target_kind.clone(),
-                target_id: resolved_target.target_id.clone(),
-                skill_id: resolved_target.skill_id.clone(),
-                tool_id: tool_id.clone(),
-            });
-        }
-    }
-
-    (
-        BatchOperationPlan {
-            operations,
-            skipped_count,
-        },
-        failures,
-    )
-}
-
 #[tauri::command]
 pub fn batch_set_skill_tools(
     request: BatchSetSkillToolsRequest,
     cache: State<AppCache>,
 ) -> Result<BatchSetSkillToolsResponse, String> {
-    let manager = ConfigManager::new();
-    let config = manager.load()?;
-    let skills = ScannerService::scan_scoped_skills(&config)?;
-    let skill_packages = SkillPackageService::list_discovered_packages(&config.skills_dir)?;
-    let skills_by_instance_id: HashMap<String, Skill> = skills
-        .into_iter()
-        .map(|skill| (skill.instance_id.clone(), skill))
-        .collect();
-    let packages_by_id: HashMap<String, InstalledSkillPackage> = skill_packages
-        .into_iter()
-        .map(|skill_package| (skill_package.package_id.clone(), skill_package))
-        .collect();
-
-    let requested_target_count = request.targets.len();
-    let requested_tool_count = request.tool_ids.len();
-    let (resolved_targets, mut failures) =
-        resolve_batch_targets(&request.targets, &skills_by_instance_id, &packages_by_id);
-    let resolved_skill_ids: HashSet<String> = resolved_targets
-        .iter()
-        .map(|target| target.skill_id.clone())
-        .collect();
-    let (operation_plan, operation_failures) = build_batch_operations(
-        &resolved_targets,
-        &request.tool_ids,
-        &skills_by_instance_id,
-        &config,
-        &request.action,
-    );
-    failures.extend(operation_failures);
-
-    let mut applied_count = 0;
-    let should_enable = matches!(request.action, BatchSkillToolAction::Enable);
-
-    for operation in &operation_plan.operations {
-        let skill_path = skills_by_instance_id
-            .get(&operation.skill_id)
-            .map(|skill| skill.path.as_path());
-        if let Err(message) = apply_skill_tool_enabled(
-            &config,
-            &operation.skill_id,
-            &operation.tool_id,
-            should_enable,
-            skill_path,
-        ) {
-            failures.push(batch_failure(
-                operation.target_kind.clone(),
-                operation.target_id.clone(),
-                Some(operation.skill_id.clone()),
-                Some(operation.tool_id.clone()),
-                message,
-            ));
-            continue;
-        }
-
-        applied_count += 1;
-    }
-
-    if applied_count > 0 {
+    let response = SkillControlService::batch_set_skill_tools(request)?;
+    if response.applied_count > 0 {
         cache.invalidate_skills();
     }
-
-    let failures: Vec<BatchSetSkillToolsFailure> = failures
-        .into_iter()
-        .map(BatchFailureContext::into_failure)
-        .collect();
-    let failed_count = failures.len();
-
-    Ok(BatchSetSkillToolsResponse {
-        requested_target_count,
-        requested_tool_count,
-        resolved_skill_count: resolved_skill_ids.len(),
-        attempted_operation_count: operation_plan.operations.len(),
-        applied_count,
-        skipped_count: operation_plan.skipped_count,
-        failed_count,
-        failures,
-    })
+    Ok(response)
 }
 
 #[cfg(test)]
@@ -473,7 +51,9 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
+    use crate::models::config::{PresetActivation, SkillActivationPreset};
     use crate::models::{InstalledSkillPackage, SkillScope, SkillSource, ToolConfig};
+    use crate::services::ConfigManager;
     use crate::test_support::with_temp_home;
     use std::fs;
 
@@ -486,6 +66,7 @@ mod tests {
             scope: SkillScope::Global,
             project_id: None,
             project_name: None,
+            tool_id: None,
             name: id.to_string(),
             description: None,
             version: "1.0.0".to_string(),
@@ -508,6 +89,7 @@ mod tests {
             scope: SkillScope::Global,
             project_id: None,
             project_name: None,
+            tool_id: None,
             name: id.to_string(),
             description: None,
             version: "1.0.0".to_string(),
@@ -521,6 +103,14 @@ mod tests {
                 .collect(),
             path: PathBuf::from(path),
         }
+    }
+
+    fn create_tool_skill(id: &str, tool_id: &str, enabled: bool) -> Skill {
+        let mut skill = create_skill(id, &[(tool_id, enabled)]);
+        skill.scope = SkillScope::Tool;
+        skill.tool_id = Some(tool_id.to_string());
+        skill.instance_id = Skill::tool_instance_id(tool_id, id);
+        skill
     }
 
     #[test]
@@ -601,6 +191,247 @@ mod tests {
             presets: Vec::new(),
             active_preset_id: None,
         }
+    }
+
+    #[test]
+    fn target_preset_controls_managed_and_target_tool_skills() {
+        with_temp_home(|home| {
+            let global_skills_dir = home.join(".skills-manager").join("skills");
+            let tool_skills_dir = home.join(".claude").join("skills");
+            fs::create_dir_all(&global_skills_dir).expect("create global skills root");
+            fs::create_dir_all(tool_skills_dir.join("direct-existing"))
+                .expect("create direct tool skill");
+            fs::create_dir_all(tool_skills_dir.join("direct-disabled"))
+                .expect("create second direct tool skill");
+
+            for skill_id in ["managed-enabled", "managed-disabled"] {
+                let skill_dir = global_skills_dir.join(skill_id);
+                fs::create_dir_all(&skill_dir).expect("create managed skill");
+                fs::write(
+                    skill_dir.join("SKILL.md"),
+                    format!("---\nname: {skill_id}\n---\n"),
+                )
+                .expect("write managed skill");
+            }
+            fs::write(
+                tool_skills_dir.join("direct-existing").join("SKILL.md"),
+                "---\nname: direct-existing\n---\n",
+            )
+            .expect("write direct tool skill");
+            fs::write(
+                tool_skills_dir.join("direct-disabled").join("SKILL.md"),
+                "---\nname: direct-disabled\n---\n",
+            )
+            .expect("write second direct tool skill");
+
+            let mut config = AppConfig::default();
+            config.initialized = true;
+            config.skills_dir = global_skills_dir.clone();
+            config.tools.insert(
+                "claude".to_string(),
+                ToolConfig {
+                    enabled: true,
+                    detected: true,
+                    skills_path: tool_skills_dir.clone(),
+                    config_path: home.join(".claude"),
+                },
+            );
+            config.presets = vec![SkillActivationPreset {
+                id: "preset-target".to_string(),
+                name: "Target preset".to_string(),
+                description: None,
+                activations: vec![PresetActivation {
+                    tool_id: "claude".to_string(),
+                    skill_ids: vec![
+                        "global:managed-enabled".to_string(),
+                        "tool:claude:direct-existing".to_string(),
+                    ],
+                }],
+            }];
+
+            let skills =
+                ScannerService::scan_skills_for_scope(&config, None).expect("scan preset scope");
+            apply_preset_to_target_with_skills("preset-target", "claude", config, skills, None)
+                .expect("apply target preset");
+
+            assert!(tool_skills_dir.join("managed-enabled").exists());
+            assert!(!tool_skills_dir.join("managed-disabled").exists());
+            assert!(tool_skills_dir.join("direct-existing").exists());
+            assert!(!tool_skills_dir.join("direct-disabled").exists());
+            assert!(tool_skills_dir
+                .join("direct-disabled.disabled-by-sm")
+                .exists());
+        });
+    }
+
+    #[test]
+    fn preset_control_service_supports_crud_and_membership_updates() {
+        with_temp_home(|home| {
+            let global_skills_dir = home.join(".skills-manager").join("skills");
+            let tool_skills_dir = home.join(".claude").join("skills");
+            let skill_dir = global_skills_dir.join("preset-skill");
+            fs::create_dir_all(&skill_dir).expect("create global skill");
+            fs::write(skill_dir.join("SKILL.md"), "---\nname: preset-skill\n---\n")
+                .expect("write global skill");
+
+            let mut config = create_config(&[("claude", true)]);
+            config.skills_dir = global_skills_dir;
+            let claude_config = config.tools.get_mut("claude").expect("claude config");
+            claude_config.skills_path = tool_skills_dir;
+            claude_config.config_path = home.join(".claude");
+            ConfigManager::new()
+                .save(&config)
+                .expect("save test config");
+
+            let created = SkillControlService::create_preset(
+                "Preset CRUD",
+                Some("test preset"),
+                false,
+                None,
+                None,
+            )
+            .expect("create preset");
+            assert_eq!(created.activations.len(), 0);
+
+            let skill_id = Skill::global_instance_id("preset-skill");
+            let updated =
+                SkillControlService::set_preset_skill(&created.id, None, "claude", &skill_id, true)
+                    .expect("enable preset skill");
+            assert_eq!(updated.activations[0].skill_ids, vec![skill_id.clone()]);
+
+            let updated = SkillControlService::set_preset_all(&created.id, None, "claude", false)
+                .expect("clear preset skills");
+            assert!(updated.activations[0].skill_ids.is_empty());
+
+            SkillControlService::delete_preset(&created.id).expect("delete preset");
+            let persisted = ConfigManager::new().load().expect("load test config");
+            assert!(!persisted
+                .presets
+                .iter()
+                .any(|preset| preset.id == created.id));
+        });
+    }
+
+    #[test]
+    fn rename_tool_skill_for_state_round_trips_enabled_and_disabled_names() {
+        with_temp_home(|home| {
+            let skills_dir = home.join(".claude").join("skills");
+            let enabled_path = skills_dir.join("direct-skill");
+            fs::create_dir_all(&enabled_path).expect("create direct skill");
+
+            rename_tool_skill_for_state(&enabled_path, &skills_dir, "direct-skill", false)
+                .expect("disable direct skill");
+            let disabled_path = skills_dir.join("direct-skill.disabled-by-sm");
+            assert!(disabled_path.is_dir());
+            assert!(!enabled_path.exists());
+
+            rename_tool_skill_for_state(&disabled_path, &skills_dir, "direct-skill", true)
+                .expect("enable direct skill");
+            assert!(enabled_path.is_dir());
+            assert!(!disabled_path.exists());
+        });
+    }
+
+    #[test]
+    fn rename_tool_skill_for_state_rejects_existing_target_and_outside_paths() {
+        with_temp_home(|home| {
+            let skills_dir = home.join(".claude").join("skills");
+            let enabled_path = skills_dir.join("direct-skill");
+            let disabled_path = skills_dir.join("direct-skill.disabled-by-sm");
+            fs::create_dir_all(&enabled_path).expect("create enabled skill");
+            fs::create_dir_all(&disabled_path).expect("create disabled skill");
+
+            let collision =
+                rename_tool_skill_for_state(&enabled_path, &skills_dir, "direct-skill", false)
+                    .expect_err("target collision should fail");
+            assert!(collision.contains("target already exists"));
+
+            let outside_path = home.join("outside-skill");
+            fs::create_dir_all(&outside_path).expect("create outside skill");
+            let outside =
+                rename_tool_skill_for_state(&outside_path, &skills_dir, "outside-skill", false)
+                    .expect_err("outside path should fail");
+            assert!(outside.contains("outside the configured skills directory"));
+        });
+    }
+
+    #[test]
+    fn apply_skill_tool_enabled_toggles_direct_tool_skill() {
+        with_temp_home(|home| {
+            let skills_dir = home.join(".skills-manager").join("skills");
+            let tool_skills_dir = home.join(".claude").join("skills");
+            let direct_skill_dir = tool_skills_dir.join("direct-skill");
+            fs::create_dir_all(&direct_skill_dir).expect("create direct skill");
+            fs::write(
+                direct_skill_dir.join("SKILL.md"),
+                "---\nname: direct-skill\n---\n",
+            )
+            .expect("write direct skill");
+
+            let mut config = create_config(&[("claude-code", true)]);
+            config.skills_dir = skills_dir;
+            let claude_config = config
+                .tools
+                .get_mut("claude-code")
+                .expect("claude-code config");
+            claude_config.enabled = false;
+            claude_config.skills_path = tool_skills_dir.clone();
+
+            apply_skill_tool_enabled(
+                &config,
+                "tool:claude-code:direct-skill",
+                "claude-code",
+                false,
+                None,
+            )
+            .expect("disable direct tool skill");
+            assert!(tool_skills_dir.join("direct-skill.disabled-by-sm").is_dir());
+
+            apply_skill_tool_enabled(
+                &config,
+                "tool:claude-code:direct-skill",
+                "claude-code",
+                true,
+                None,
+            )
+            .expect("enable direct tool skill");
+            assert!(direct_skill_dir.is_dir());
+        });
+    }
+
+    #[test]
+    fn apply_skill_tool_enabled_toggles_direct_codex_plugin_state() {
+        with_temp_home(|home| {
+            let skills_dir = home.join(".skills-manager").join("skills");
+            let codex_dir = home.join(".codex");
+            let codex_skills_dir = codex_dir.join("skills");
+            let direct_skill_dir = codex_skills_dir.join("imagegen");
+            fs::create_dir_all(&direct_skill_dir).expect("create codex skill");
+            fs::write(
+                direct_skill_dir.join("SKILL.md"),
+                "---\nname: imagegen\n---\n",
+            )
+            .expect("write codex skill");
+
+            let mut config = create_config(&[("codex", true)]);
+            config.skills_dir = skills_dir;
+            let codex_config = config.tools.get_mut("codex").expect("codex config");
+            codex_config.enabled = false;
+            codex_config.skills_path = codex_skills_dir;
+            codex_config.config_path = codex_dir.clone();
+
+            apply_skill_tool_enabled(&config, "tool:codex:imagegen", "codex", false, None)
+                .expect("disable codex plugin");
+            assert!(fs::read_to_string(codex_dir.join("config.toml"))
+                .expect("read codex config")
+                .contains("enabled = false"));
+
+            apply_skill_tool_enabled(&config, "tool:codex:imagegen", "codex", true, None)
+                .expect("enable codex plugin");
+            assert!(fs::read_to_string(codex_dir.join("config.toml"))
+                .expect("read codex config")
+                .contains("enabled = true"));
+        });
     }
 
     #[test]
@@ -768,7 +599,7 @@ mod tests {
     }
 
     #[test]
-    fn build_batch_operations_skips_already_enabled_and_reports_disabled_tools() {
+    fn build_batch_operations_skips_already_enabled_and_keeps_disabled_tools_actionable() {
         let skills_by_id = HashMap::from([(
             "skill-a".to_string(),
             create_skill("skill-a", &[("claude", true)]),
@@ -788,10 +619,35 @@ mod tests {
             &BatchSkillToolAction::Enable,
         );
 
-        assert_eq!(plan.operations.len(), 0);
+        assert_eq!(plan.operations.len(), 1);
         assert_eq!(plan.skipped_count, 1);
-        assert_eq!(failures.len(), 1);
-        assert_eq!(failures[0].tool_id.as_deref(), Some("codex"));
+        assert!(failures.is_empty());
+        assert_eq!(plan.operations[0].tool_id, "codex");
+    }
+
+    #[test]
+    fn build_batch_operations_only_targets_a_tool_skill_owner() {
+        let skill = create_tool_skill("direct-skill", "claude", true);
+        let skills_by_id = HashMap::from([(skill.instance_id.clone(), skill)]);
+        let config = create_config(&[("claude", true), ("codex", true)]);
+        let resolved_targets = vec![ResolvedBatchSkillTarget {
+            target_kind: BatchSkillToolTargetKind::Skill,
+            target_id: "tool:claude:direct-skill".to_string(),
+            skill_id: "tool:claude:direct-skill".to_string(),
+        }];
+
+        let (plan, failures) = build_batch_operations(
+            &resolved_targets,
+            &["claude".to_string(), "codex".to_string()],
+            &skills_by_id,
+            &config,
+            &BatchSkillToolAction::Disable,
+        );
+
+        assert!(failures.is_empty());
+        assert_eq!(plan.operations.len(), 1);
+        assert_eq!(plan.operations[0].tool_id, "claude");
+        assert_eq!(plan.skipped_count, 1);
     }
 
     #[test]
@@ -822,10 +678,10 @@ mod tests {
             &BatchSkillToolAction::Enable,
         );
 
-        assert!(plan.operations.is_empty());
+        assert_eq!(plan.operations.len(), 1);
         assert_eq!(plan.skipped_count, 1);
-        assert_eq!(failures.len(), 1);
-        assert_eq!(failures[0].tool_id.as_deref(), Some("codex"));
+        assert!(failures.is_empty());
+        assert_eq!(plan.operations[0].tool_id, "codex");
     }
 
     #[test]
@@ -943,9 +799,7 @@ pub fn list_skills(cache: State<AppCache>) -> Result<Vec<Skill>, String> {
     }
 
     // Cache miss - scan and cache
-    let manager = ConfigManager::new();
-    let config = manager.load()?;
-    let skills = ScannerService::scan_scoped_skills(&config)?;
+    let skills = SkillControlService::list_scoped_skills()?;
     cache.set_skills(skills.clone());
     Ok(skills)
 }
@@ -955,22 +809,12 @@ pub fn enable_skill(
     instance_id: String,
     tool_id: String,
     cache: State<AppCache>,
-) -> Result<(), String> {
-    let manager = ConfigManager::new();
-    let config = manager.load()?;
-
-    let skill = load_skill_by_instance_id(&config, &instance_id)?;
-    apply_skill_tool_enabled(
-        &config,
-        &instance_id,
-        &tool_id,
-        true,
-        Some(skill.path.as_path()),
-    )?;
+) -> Result<SkillOperationReport, String> {
+    let report = SkillControlService::set_skill_enabled(&instance_id, &tool_id, true)?;
 
     // Invalidate cache after modification
     cache.invalidate_skills();
-    Ok(())
+    Ok(report)
 }
 
 #[tauri::command]
@@ -978,15 +822,12 @@ pub fn disable_skill(
     instance_id: String,
     tool_id: String,
     cache: State<AppCache>,
-) -> Result<(), String> {
-    let manager = ConfigManager::new();
-    let config = manager.load()?;
-
-    apply_skill_tool_enabled(&config, &instance_id, &tool_id, false, None)?;
+) -> Result<SkillOperationReport, String> {
+    let report = SkillControlService::set_skill_enabled(&instance_id, &tool_id, false)?;
 
     // Invalidate cache after modification
     cache.invalidate_skills();
-    Ok(())
+    Ok(report)
 }
 
 #[tauri::command]
@@ -999,9 +840,7 @@ pub fn import_skills_to_hub(
     skill_paths: Vec<String>,
     cache: State<AppCache>,
 ) -> Result<(), String> {
-    for path in skill_paths {
-        crate::services::LinkerService::import_to_hub(&path)?;
-    }
+    SkillControlService::import_skills_to_hub(&skill_paths)?;
     // Invalidate cache after import
     cache.invalidate_skills();
     Ok(())
@@ -1009,10 +848,7 @@ pub fn import_skills_to_hub(
 
 #[tauri::command]
 pub fn delete_skill(instance_id: String, cache: State<AppCache>) -> Result<(), String> {
-    let manager = ConfigManager::new();
-    let config = manager.load()?;
-
-    delete_skill_from_disk(&config, &instance_id)?;
+    SkillControlService::delete_skill(&instance_id)?;
 
     // Invalidate cache after deletion
     cache.invalidate_skills();
@@ -1025,47 +861,7 @@ pub fn create_skill(
     description: Option<String>,
     cache: State<AppCache>,
 ) -> Result<Skill, String> {
-    let manager = ConfigManager::new();
-    let config = manager.load()?;
-
-    // Convert name to a valid folder ID: lowercase, spaces to hyphens, remove special chars
-    let id: String = name
-        .trim()
-        .to_lowercase()
-        .chars()
-        .map(|c| if c == ' ' { '-' } else { c })
-        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
-        .collect();
-
-    if id.is_empty() {
-        return Err("Invalid skill name".to_string());
-    }
-
-    let skill_path = config.skills_dir.join(&id);
-    if skill_path.exists() {
-        return Err(format!("Skill \"{}\" already exists", id));
-    }
-
-    // Create the skill folder
-    std::fs::create_dir_all(&skill_path)
-        .map_err(|e| format!("Failed to create skill folder: {}", e))?;
-
-    // Generate initial SKILL.md with frontmatter (follows official template)
-    let desc = description
-        .as_deref()
-        .filter(|d| !d.is_empty())
-        .unwrap_or("Replace with description of the skill and when Claude should use it.");
-    let content = format!(
-        "---\nname: {}\ndescription: {}\n---\n\n# Insert instructions below\n",
-        id, desc
-    );
-
-    let skill_md_path = skill_path.join("SKILL.md");
-    std::fs::write(&skill_md_path, &content)
-        .map_err(|e| format!("Failed to write SKILL.md: {}", e))?;
-
-    // Load and return the new Skill object
-    let skill = ScannerService::load_skill_with_config(&skill_path, &config)?;
+    let skill = SkillControlService::create_skill(&name, description.as_deref())?;
 
     // Invalidate cache
     cache.invalidate_skills();
@@ -1075,116 +871,113 @@ pub fn create_skill(
 
 #[tauri::command]
 pub fn refresh_skills(cache: State<AppCache>) -> Result<Vec<Skill>, String> {
-    let manager = ConfigManager::new();
-    let config = manager.load()?;
-
-    // Scan all tool directories for new skills and import them to hub
-    // Use rayon for parallel processing to speed up IO on Windows
-    use rayon::prelude::*;
-
-    let tools = config.collect_tool_configs();
-
-    tools.par_iter().for_each(|(_tool_id, tool_config)| {
-        if tool_config.skills_path.exists() {
-            if let Ok(entries) = std::fs::read_dir(&tool_config.skills_path) {
-                // Use par_bridge to iterate over directory entries in parallel
-                entries.flatten().par_bridge().for_each(|entry| {
-                    let path = entry.path();
-                    // Skip hidden directories and non-directories
-                    if !path.is_dir() {
-                        return;
-                    }
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        if name.starts_with('.') {
-                            return;
-                        }
-                    }
-                    // Skip if it's already a symlink or Junction (managed by us)
-                    if is_symlink_or_junction(&path) {
-                        return;
-                    }
-                    // Import this skill to hub
-                    let _ = LinkerService::import_to_hub(path.to_string_lossy().as_ref());
-                });
-            }
-        }
-    });
-
-    // Scan and update cache
-    let skills = ScannerService::scan_scoped_skills(&config)?;
+    // Refresh is intentionally read-only. Directly installed Tool skills must remain
+    // in their owning tool directory; importing into the hub is an explicit action.
+    let skills = SkillControlService::list_scoped_skills()?;
     cache.set_skills(skills.clone());
     Ok(skills)
+}
+
+#[tauri::command]
+pub fn scan_skills_for_scope(project_id: Option<String>) -> Result<Vec<Skill>, String> {
+    SkillControlService::list_skills(project_id.as_deref())
 }
 
 #[tauri::command]
 pub fn apply_preset(
     preset_id: String,
     cache: State<AppCache>,
-) -> Result<(), String> {
-    let manager = ConfigManager::new();
-    let mut config = manager.load()?;
+) -> Result<SkillOperationReport, String> {
+    let report = SkillControlService::apply_preset(&preset_id)?;
+    cache.invalidate_skills();
+    Ok(report)
+}
 
-    // 1. Find the preset
-    let preset = config
-        .presets
-        .iter()
-        .find(|p| p.id == preset_id)
-        .ok_or_else(|| format!("Preset not found: {}", preset_id))?
-        .clone();
+#[tauri::command]
+pub fn apply_preset_for_scope(
+    preset_id: String,
+    project_id: Option<String>,
+    cache: State<AppCache>,
+) -> Result<SkillOperationReport, String> {
+    let report = SkillControlService::apply_preset_for_scope(&preset_id, project_id.as_deref())?;
+    cache.invalidate_skills();
+    Ok(report)
+}
 
-    // 2. Scan all skills
-    let skills = ScannerService::scan_scoped_skills(&config)?;
+#[tauri::command]
+pub fn apply_preset_for_target(
+    preset_id: String,
+    project_id: Option<String>,
+    tool_id: String,
+    cache: State<AppCache>,
+) -> Result<SkillOperationReport, String> {
+    let report =
+        SkillControlService::apply_preset_for_target(&preset_id, project_id.as_deref(), &tool_id)?;
+    cache.invalidate_skills();
+    Ok(report)
+}
 
-    // 3. Collect active mappings of tool_id -> HashSet of active skill IDs or instance_ids
-    let mut active_mappings: HashMap<String, HashSet<String>> = HashMap::new();
-    for activation in &preset.activations {
-        let skill_set: HashSet<String> = activation.skill_ids.iter().cloned().collect();
-        active_mappings.insert(activation.tool_id.clone(), skill_set);
-    }
-
-    // 4. For each tool, disable/enable links
-    for (tool_id, tool_config) in config.collect_tool_configs() {
-        if !tool_config.enabled || !tool_config.detected {
-            continue;
-        }
-
-        let active_set = active_mappings.get(&tool_id);
-
-        for skill in &skills {
-            let should_be_enabled = match active_set {
-                Some(set) => set.contains(&skill.instance_id) || set.contains(&skill.id),
-                None => false,
-            };
-
-            if let Err(e) = apply_skill_tool_enabled(
-                &config,
-                &skill.instance_id,
-                &tool_id,
-                should_be_enabled,
-                Some(skill.path.as_path()),
-            ) {
-                return Err(format!(
-                    "Failed to set skill {} for tool {}: {}",
-                    skill.instance_id, tool_id, e
-                ));
-            }
-        }
-    }
-
-    // 5. Update active preset ID
-    config.active_preset_id = Some(preset_id);
-    manager.save(&config)?;
-
+#[tauri::command]
+pub fn clear_active_preset(cache: State<AppCache>) -> Result<(), String> {
+    SkillControlService::clear_active_preset()?;
     cache.invalidate_skills();
     Ok(())
 }
 
 #[tauri::command]
-pub fn clear_active_preset(cache: State<AppCache>) -> Result<(), String> {
-    let manager = ConfigManager::new();
-    let mut config = manager.load()?;
-    config.active_preset_id = None;
-    manager.save(&config)?;
-    cache.invalidate_skills();
-    Ok(())
+pub fn create_preset(
+    name: String,
+    description: Option<String>,
+    copy_current_state: bool,
+    project_id: Option<String>,
+    tool_id: Option<String>,
+) -> Result<SkillActivationPreset, String> {
+    SkillControlService::create_preset(
+        &name,
+        description.as_deref(),
+        copy_current_state,
+        project_id.as_deref(),
+        tool_id.as_deref(),
+    )
+}
+
+#[tauri::command]
+pub fn delete_preset(preset_id: String) -> Result<(), String> {
+    SkillControlService::delete_preset(&preset_id)
+}
+
+#[tauri::command]
+pub fn capture_preset(
+    preset_id: String,
+    project_id: Option<String>,
+    tool_id: String,
+) -> Result<SkillActivationPreset, String> {
+    SkillControlService::capture_preset(&preset_id, project_id.as_deref(), &tool_id)
+}
+
+#[tauri::command]
+pub fn set_preset_skill(
+    preset_id: String,
+    project_id: Option<String>,
+    tool_id: String,
+    skill_id: String,
+    enabled: bool,
+) -> Result<SkillActivationPreset, String> {
+    SkillControlService::set_preset_skill(
+        &preset_id,
+        project_id.as_deref(),
+        &tool_id,
+        &skill_id,
+        enabled,
+    )
+}
+
+#[tauri::command]
+pub fn set_preset_all(
+    preset_id: String,
+    project_id: Option<String>,
+    tool_id: String,
+    enabled: bool,
+) -> Result<SkillActivationPreset, String> {
+    SkillControlService::set_preset_all(&preset_id, project_id.as_deref(), &tool_id, enabled)
 }
