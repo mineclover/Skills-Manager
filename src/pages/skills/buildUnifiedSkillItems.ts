@@ -1,5 +1,12 @@
-import type { InstalledSkillPackage, Skill, SkillMetadataMap, Tool } from "../../types/index.ts";
-import { getEnabledToolIds } from "./getEnabledToolIds.ts";
+import type {
+  InstalledSkillPackage,
+  Skill,
+  SkillBinding,
+  SkillBindingState,
+  SkillMetadataMap,
+  Tool,
+} from "../../types/index.ts";
+import { getDetectedToolIds } from "./getEnabledToolIds.ts";
 import { orderToolIdsForSkill } from "./orderToolIds.ts";
 import { summarizeEnabledTools, type EnabledToolsSummary } from "./summarizeEnabledTools.ts";
 import { getGroupMetadataKey, getGroupTags, getSkillTagsForSkill, normalizeSkillTags, type SkillTagSummary } from "./skillTags.ts";
@@ -23,7 +30,7 @@ export interface UnifiedSkillListItem {
   tags: string[];
   supportsTagFilter: boolean;
   badgeLabel: string | null;
-  scopeLabel: "global" | "project" | null;
+  scopeLabel: "global" | "project" | "tool" | null;
   previewChips: string[];
   previewOverflowCount: number;
   sortName: string;
@@ -47,7 +54,17 @@ interface UnifiedSkillListFilters {
   searchQuery: string;
   selectedTags: string[];
   untaggedOnly: boolean;
-  scopeFilter?: "all" | "global" | "project";
+  scopeFilter?: "all" | "global" | "project" | "tool";
+  provider?: UnifiedSkillProviderFilter;
+  bindingState?: SkillBindingState | "all";
+  sourceFilter?: Skill["source"] | "all";
+  bindings?: SkillBinding[];
+}
+
+export interface UnifiedSkillProviderFilter {
+  providerId: string;
+  rootPath?: string | null;
+  consumerIds?: string[];
 }
 
 function buildSearchText(parts: Array<string | null | undefined>): string {
@@ -80,6 +97,70 @@ function getSearchRank(item: UnifiedSkillListItem, query: string): number {
   }
 
   return 3;
+}
+
+function normalizePath(value: string): string {
+  return value.replace(/\\/g, "/").replace(/\/$/, "").toLowerCase();
+}
+
+function isPathWithinRoot(path: string, rootPath: string | null | undefined): boolean {
+  if (!rootPath) {
+    return false;
+  }
+  const normalizedPath = normalizePath(path);
+  const normalizedRoot = normalizePath(rootPath);
+  return normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot}/`);
+}
+
+function skillMatchesProvider(skill: Skill, provider: UnifiedSkillProviderFilter): boolean {
+  if (provider.providerId === "orca") {
+    return false;
+  }
+
+  if (skill.scope === "tool") {
+    return skill.tool_id === provider.providerId
+      || (provider.providerId === "agents-directory" && isPathWithinRoot(skill.path, provider.rootPath));
+  }
+
+  if (provider.providerId === "agents-directory") {
+    return isPathWithinRoot(skill.path, provider.rootPath)
+      || (provider.consumerIds ?? []).some((consumerId) => Object.prototype.hasOwnProperty.call(skill.enabled, consumerId));
+  }
+
+  // A disabled binding is still a visible binding. Presence in the enabled
+  // map is therefore more important than the boolean value here.
+  return Object.prototype.hasOwnProperty.call(skill.enabled, provider.providerId);
+}
+
+function itemMatchesProvider(item: UnifiedSkillListItem, provider: UnifiedSkillProviderFilter): boolean {
+  if (item.kind === "skill") {
+    return item.skill ? skillMatchesProvider(item.skill, provider) : false;
+  }
+
+  // Groups contain global managed members. Keep them visible for filesystem
+  // providers so the existing group editor can still configure the selected
+  // provider; Orca remains a read-only topic inventory.
+  return provider.providerId !== "orca";
+}
+
+function itemMatchesBindingState(
+  item: UnifiedSkillListItem,
+  state: SkillBindingState | "all",
+  bindings: SkillBinding[],
+  provider?: UnifiedSkillProviderFilter,
+): boolean {
+  if (state === "all") {
+    return true;
+  }
+  if (item.kind !== "skill" || !item.skill) {
+    return false;
+  }
+  return bindings.some((binding) => {
+    if (binding.skill_instance_id !== item.skill?.instance_id || binding.state !== state) {
+      return false;
+    }
+    return !provider || binding.provider_id === provider.providerId;
+  });
 }
 
 export function getGroupMemberSkills(skillPackage: InstalledSkillPackage, skills: Skill[]): Skill[] {
@@ -160,6 +241,7 @@ function getSkillSearchText(skill: Skill, tags: string[]): string {
     skill.instance_id,
     skill.description,
     skill.scope,
+    skill.tool_id ?? null,
     skill.project_id ?? null,
     skill.project_name ?? null,
     ...tags,
@@ -177,11 +259,14 @@ export function buildUnifiedSkillItems({
   skillMetadata,
   groupBadgeLabel,
 }: BuildUnifiedSkillItemsOptions): UnifiedSkillListItem[] {
-  const enabledToolIds = getEnabledToolIds(tools);
+  const detectedToolIds = getDetectedToolIds(tools);
 
   const skillItems = skills.map((skill): UnifiedSkillListItem => {
     const tags = getSkillTagsForSkill(skill, skillMetadata);
-    const orderedToolIds = orderToolIdsForSkill(enabledToolIds, skill.enabled);
+    const manageableToolIds = skill.scope === "tool" && skill.tool_id
+      ? [skill.tool_id]
+      : detectedToolIds;
+    const orderedToolIds = orderToolIdsForSkill(manageableToolIds, skill.enabled);
     const previewChips = getSkillPreviewChips(skill, tags);
     const previewTotal = tags.length;
 
@@ -200,7 +285,7 @@ export function buildUnifiedSkillItems({
       previewChips,
       previewOverflowCount: Math.max(0, previewTotal - previewChips.length),
       sortName: skill.name.toLowerCase(),
-      sortPriority: skill.scope === "project" ? 0 : 1,
+      sortPriority: skill.scope === "project" ? 0 : (skill.scope === "tool" ? 1 : 2),
       toolSummary: summarizeEnabledTools(orderedToolIds, skill.enabled, 2),
       skill,
     };
@@ -233,9 +318,9 @@ export function buildUnifiedSkillItems({
         (tags.length > 0 ? tags.length : skillPackage.installed_members.length) - previewChips.length,
       ),
       sortName: skillPackage.name.toLowerCase(),
-      sortPriority: 2,
+      sortPriority: 3,
       memberCount: skillPackage.installed_members.length,
-      groupToolStateById: buildGroupToolStateById(skillPackage, skills, enabledToolIds),
+      groupToolStateById: buildGroupToolStateById(skillPackage, skills, detectedToolIds),
       skillPackage,
     };
   });
@@ -266,12 +351,29 @@ export function filterUnifiedSkillItems(
   const query = filters.searchQuery.trim().toLowerCase();
   const selectedTags = normalizeSkillTags(filters.selectedTags);
   const scopeFilter = filters.scopeFilter ?? "all";
+  const bindingState = filters.bindingState ?? "all";
+  const sourceFilter = filters.sourceFilter ?? "all";
+  const bindings = filters.bindings ?? [];
 
   return items.filter((item) => {
+    if (filters.provider && !itemMatchesProvider(item, filters.provider)) {
+      return false;
+    }
+
     if (scopeFilter !== "all") {
       if (item.scopeLabel !== scopeFilter) {
         return false;
       }
+    }
+
+    if (sourceFilter !== "all") {
+      if (item.kind !== "skill" || item.skill?.source !== sourceFilter) {
+        return false;
+      }
+    }
+
+    if (!itemMatchesBindingState(item, bindingState, bindings, filters.provider)) {
+      return false;
     }
 
     if (query && !item.searchText.includes(query)) {

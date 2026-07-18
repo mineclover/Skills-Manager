@@ -21,6 +21,11 @@ import {
   InstalledSkillPackage,
   ProjectBinding,
   Skill,
+  SkillBinding,
+  SkillBindingState,
+  SkillOperationPreview,
+  SkillOperationReport,
+  SkillProviderInventory,
   Tool,
 } from "@/types";
 import { useTranslation, TranslationPath } from "@/i18n";
@@ -49,7 +54,7 @@ import {
   migrateSkillMetadataToInstanceIds,
 } from "./skills/skillTags";
 import { orderToolIdsForSkill } from "./skills/orderToolIds";
-import { getEnabledToolIds } from "./skills/getEnabledToolIds";
+import { getDetectedToolIds } from "./skills/getEnabledToolIds";
 import {
   getSkillBulkToggleConfirmKey,
   getSkillBulkToggleMode,
@@ -65,6 +70,7 @@ import {
   removeGroupSkillMetadataEntries,
   shouldShowGroupToolInEnabledOnly,
   type UnifiedSkillListItem,
+  type UnifiedSkillProviderFilter,
   sortUnifiedSkillItems,
 } from "./skills/buildUnifiedSkillItems";
 import {
@@ -91,14 +97,13 @@ import {
   type SkillsHeaderActionId,
 } from "./skills/headerActionLayout";
 import {
-  buildProjectBindingFromSkillsDir,
-  hasProjectSkillsDirConflict,
   resolveActiveProjectId,
-  resolveNextActiveProjectIdAfterAddition,
-  resolveNextProjectBindingsAfterRemoval,
 } from "./projectBindings";
 import { ProjectBindingsDialog } from "./ProjectBindingsDialog";
 import { getToolIconUrl } from "@/assets/tools";
+import { ProviderInventoryCard } from "@/components/skills/ProviderInventoryCard";
+import { ScopeSelector } from "@/components/ScopeSelector";
+import { OperationReportCard } from "@/components/skills/OperationReportCard";
 
 function getToolDisplayName(toolId: string, tools: Tool[]): string {
   const tool = tools.find((t) => t.id === toolId);
@@ -604,13 +609,23 @@ export function Skills() {
   const [skills, setSkills] = useState<Skill[]>(() => skillsPageCache?.skills ?? []);
   const [skillPackages, setSkillPackages] = useState<InstalledSkillPackage[]>(() => skillsPageCache?.skillPackages ?? []);
   const [tools, setTools] = useState<Tool[]>(() => skillsPageCache?.tools ?? []);
+  const [providerInventory, setProviderInventory] = useState<SkillProviderInventory | null>(null);
+  const [providerBindings, setProviderBindings] = useState<SkillBinding[]>([]);
   const [config, setConfig] = useState<AppConfig | null>(() => skillsPageCache?.config ?? null);
+  // Global is the safe default. A repository/worktree is always selected
+  // explicitly on this page instead of following active_project_id silently.
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [scopeLoading, setScopeLoading] = useState(false);
+  const [lastOperationReport, setLastOperationReport] = useState<SkillOperationReport | null>(null);
   // Page-level search query is shared with the TopBar scope field via context,
   // so the Skills page no longer renders its own search input.
   const { query: searchQuery } = usePageSearch(t("skills.searchPlaceholder"));
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [untaggedOnly, setUntaggedOnly] = useState(false);
-  const [scopeFilter, setScopeFilter] = useState<"all" | "global" | "project">("all");
+  const [scopeFilter, setScopeFilter] = useState<"all" | "global" | "project" | "tool">("all");
+  const [providerFilter, setProviderFilter] = useState("all");
+  const [bindingStateFilter, setBindingStateFilter] = useState<SkillBindingState | "all">("all");
+  const [sourceFilter, setSourceFilter] = useState<Skill["source"] | "all">("all");
   const [togglingSkill, setTogglingSkill] = useState<string | null>(null);
   const [deletingSkill, setDeletingSkill] = useState<string | null>(null);
   const [toolEditorSkillId, setToolEditorSkillId] = useState<string | null>(null);
@@ -674,9 +689,12 @@ export function Skills() {
     }
   }, [config, navigate, addToast]);
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (projectId = selectedProjectId) => {
+    setScopeLoading(true);
     const settled = await Promise.allSettled([
-      invoke<Skill[]>("list_skills"),
+      // Refresh on first load so skills installed directly by a tool CLI are
+      // visible even when the manager cache was populated earlier.
+      invoke<Skill[]>("scan_skills_for_scope", { projectId }),
       invoke<InstalledSkillPackage[]>("list_skill_packages"),
       invoke<AppConfig>("get_config"),
       invoke<Tool[]>("detect_tools"),
@@ -720,14 +738,46 @@ export function Skills() {
       }
     } finally {
       setInitialLoading(false);
+      setScopeLoading(false);
     }
-  }, [addToast]);
+  }, [addToast, selectedProjectId]);
+
+  const loadProviderInventory = useCallback(async () => {
+    try {
+      const inventory = await invoke<SkillProviderInventory>("list_skill_providers");
+      setProviderInventory(inventory);
+    } catch (err) {
+      // Provider inventory is supplementary; keep the skill list usable when
+      // an integration is unavailable or an older backend is running.
+      console.warn("Failed to load provider inventory", err);
+    }
+  }, []);
+
+  const loadProviderBindings = useCallback(async (projectId = selectedProjectId) => {
+    try {
+      const scopeIds = projectId ? [null, projectId] : [null];
+      const results = await Promise.all(
+        scopeIds.map((scopeProjectId) => invoke<SkillBinding[]>("list_skill_bindings", {
+          projectId: scopeProjectId,
+        })),
+      );
+      const byKey = new Map<string, SkillBinding>();
+      for (const binding of results.flat()) {
+        byKey.set(`${binding.provider_id}:${binding.skill_instance_id}`, binding);
+      }
+      setProviderBindings(Array.from(byKey.values()));
+    } catch (err) {
+      // Binding details are supplementary; keep the main skill list usable if
+      // an older backend does not expose the endpoint yet.
+      console.warn("Failed to load provider bindings", err);
+    }
+  }, [selectedProjectId]);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
       const [skillsResult, skillPackagesResult, configResult, toolsResult] = await Promise.all([
-        invoke<Skill[]>("refresh_skills"),
+        invoke<Skill[]>("scan_skills_for_scope", { projectId: selectedProjectId }),
         invoke<InstalledSkillPackage[]>("list_skill_packages"),
         invoke<AppConfig>("get_config"),
         invoke<Tool[]>("detect_tools"),
@@ -736,18 +786,20 @@ export function Skills() {
       setSkillPackages(skillPackagesResult);
       setConfig(configResult);
       setTools(toolsResult);
+      void loadProviderInventory();
+      void loadProviderBindings(selectedProjectId);
       addToast(t("common.refreshSuccess"), "success");
     } catch (err) {
       addToast(err instanceof Error ? err.message : String(err), "error");
     } finally {
       setRefreshing(false);
     }
-  }, [addToast, t]);
+  }, [addToast, loadProviderBindings, loadProviderInventory, selectedProjectId, t]);
 
   const reloadData = useCallback(async () => {
     try {
       const [skillsResult, skillPackagesResult, configResult, toolsResult] = await Promise.all([
-        invoke<Skill[]>("list_skills"),
+        invoke<Skill[]>("scan_skills_for_scope", { projectId: selectedProjectId }),
         invoke<InstalledSkillPackage[]>("list_skill_packages"),
         invoke<AppConfig>("get_config"),
         invoke<Tool[]>("detect_tools"),
@@ -756,22 +808,30 @@ export function Skills() {
       setSkillPackages(skillPackagesResult);
       setConfig(configResult);
       setTools(toolsResult);
+      void loadProviderBindings(selectedProjectId);
     } catch (err) {
       addToast(err instanceof Error ? err.message : String(err), "error");
     }
-  }, [addToast]);
+  }, [addToast, loadProviderBindings, selectedProjectId]);
 
-  // Track whether this mount had cached data. If so, skip the automatic
-  // loadData() — the cache was just populated moments ago when the user was
-  // last on this page. The background Tauri calls would return identical data
-  // but with new object references, triggering a wasteful full re-render of
-  // 38+ useMemos and all skill cards. The user can click refresh for fresh data.
-  const hadCacheOnMountRef = useRef(skillsPageCache !== null);
+  const handleScopeChange = useCallback((projectId: string | null) => {
+    setSelectedProjectId(projectId);
+    setLastOperationReport(null);
+    setSelectedTags([]);
+    setUntaggedOnly(false);
+    setScopeFilter("all");
+    setProviderFilter("all");
+    setBindingStateFilter("all");
+    setSourceFilter("all");
+  }, []);
 
+  // Render cached data immediately, then refresh it in the background so
+  // skills installed outside the manager are not hidden until a manual click.
   useEffect(() => {
-    if (hadCacheOnMountRef.current) return;
     loadData();
-  }, [loadData]);
+    void loadProviderInventory();
+    void loadProviderBindings();
+  }, [loadData, loadProviderBindings, loadProviderInventory]);
 
   // Keep the module-level cache in sync with the latest loaded data so the
   // next mount can render immediately without a PageLoader flash.
@@ -892,6 +952,9 @@ export function Skills() {
     setSelectedTags(next.selectedTags);
     setUntaggedOnly(next.untaggedOnly);
     setScopeFilter("all");
+    setProviderFilter("all");
+    setBindingStateFilter("all");
+    setSourceFilter("all");
     setShowTagFilterMenu(false);
   }, [selectedTags, untaggedOnly]);
 
@@ -920,13 +983,46 @@ export function Skills() {
     const toggleKey = `${instanceId}:${toolId}`;
     setTogglingSkill(toggleKey);
     try {
-      if (enabled) {
-        await invoke("enable_skill", { instanceId, toolId });
-        addToast(t("skills.enableSuccess").replace("{skill}", skillName).replace("{tool}", getToolDisplayName(toolId, tools)), "success");
-      } else {
-        await invoke("disable_skill", { instanceId, toolId });
-        addToast(t("skills.disableSuccess").replace("{skill}", skillName).replace("{tool}", getToolDisplayName(toolId, tools)), "success");
+      const targetSkill = skills.find((skill) => skill.instance_id === instanceId);
+      const preview = await invoke<SkillOperationPreview>("preview_skill_operation", {
+        projectId: targetSkill?.project_id ?? null,
+        skillInstanceId: instanceId,
+        providerId: toolId,
+        enabled,
+      });
+      if (preview.requires_confirmation) {
+        const impactNames = preview.impacts.map((impact) => impact.display_name).join(", ");
+        const confirmed = await confirm(
+          `${preview.warning ?? t("skills.sharedImpactConfirm")}${impactNames ? `\n\n${impactNames}` : ""}`,
+          { title: t("skills.sharedImpactConfirmTitle"), kind: "warning" },
+        );
+        if (!confirmed) {
+          return;
+        }
       }
+
+      let report: SkillOperationReport;
+      if (enabled) {
+        report = await invoke<SkillOperationReport>("enable_skill", { instanceId, toolId });
+      } else {
+        report = await invoke<SkillOperationReport>("disable_skill", { instanceId, toolId });
+      }
+      setLastOperationReport(report);
+      if (report.failed_count > 0) {
+        throw new Error(report.failures[0]?.message || t("skills.toggleFailed"));
+      }
+      const scopeLabel = targetSkill?.scope === "project"
+        ? (targetSkill.project_name ?? selectedProjectName ?? t("skills.scopeProject"))
+        : targetSkill?.scope === "tool"
+          ? `${getToolDisplayName(toolId, tools)} ${t("skills.scopeTool")}`
+          : t("skills.scopeGlobal");
+      addToast(
+        (enabled ? t("skills.enableSuccess") : t("skills.disableSuccess"))
+          .replace("{skill}", skillName)
+          .replace("{tool}", getToolDisplayName(toolId, tools))
+          .replace("{scope}", scopeLabel),
+        "success",
+      );
       await reloadData();
     } catch (err) {
       addToast(err instanceof Error ? err.message : String(err), "error");
@@ -1297,8 +1393,8 @@ export function Skills() {
   );
 
   const showTagFilterControl = useMemo(
-    () => hasSelectableTagFilters(allTagSummaries),
-    [allTagSummaries],
+    () => hasSelectableTagFilters(allTagSummaries) || Boolean(providerInventory?.providers.length),
+    [allTagSummaries, providerInventory?.providers.length],
   );
 
   const tagFilterSelection = useMemo(
@@ -1306,27 +1402,59 @@ export function Skills() {
     [selectedTags, untaggedOnly],
   );
 
-  const activeProjectName = useMemo(() => {
+  const selectedProject = useMemo(() => {
     const projects = config?.projects ?? [];
-    const activeId = resolveActiveProjectId(config?.active_project_id, projects);
-    if (!activeId) {
+    if (!selectedProjectId) {
       return null;
     }
-    return projects.find((project) => project.id === activeId)?.name ?? null;
-  }, [config?.active_project_id, config?.projects]);
+    return projects.find((project) => project.id === selectedProjectId) ?? null;
+  }, [config?.projects, selectedProjectId]);
 
-  const hasActiveSkillFilters = Boolean(searchQuery.trim()) || selectedTags.length > 0 || untaggedOnly || scopeFilter !== "all";
+  const selectedProjectName = selectedProject?.name ?? null;
+  const projectScopedSkills = useMemo(
+    () => skills.filter((skill) => skill.scope === "project"),
+    [skills],
+  );
+  const toolScopedSkills = useMemo(
+    () => skills.filter((skill) => skill.scope === "tool"),
+    [skills],
+  );
+
+  const providerFilterConfig = useMemo<UnifiedSkillProviderFilter | undefined>(() => {
+    if (providerFilter === "all" || !providerInventory) {
+      return undefined;
+    }
+    const provider = providerInventory.providers.find((item) => item.provider_id === providerFilter);
+    if (!provider) {
+      return undefined;
+    }
+    return {
+      providerId: provider.provider_id,
+      rootPath: provider.root_path,
+      consumerIds: provider.provider_id === "agents-directory"
+        ? providerInventory.providers
+          .filter((item) => item.provider_id !== "agents-directory" && item.root_path === provider.root_path)
+          .map((item) => item.provider_id)
+        : undefined,
+    };
+  }, [providerFilter, providerInventory]);
+
+  const hasActiveSkillFilters = Boolean(searchQuery.trim()) || selectedTags.length > 0 || untaggedOnly || scopeFilter !== "all" || providerFilter !== "all" || bindingStateFilter !== "all" || sourceFilter !== "all";
 
   // Active tag-filter conditions shown as a numeric badge on the filter icon.
   const tagFilterActiveCount =
     (scopeFilter !== "all" ? 1 : 0) +
+    (providerFilter !== "all" ? 1 : 0) +
+    (bindingStateFilter !== "all" ? 1 : 0) +
+    (sourceFilter !== "all" ? 1 : 0) +
     (untaggedOnly ? 1 : 0) +
     selectedTags.length;
 
   const scopeFilterCounts = useMemo(() => {
     const globalCount = unifiedItems.filter((item) => item.scopeLabel === "global").length;
     const projectCount = unifiedItems.filter((item) => item.scopeLabel === "project").length;
-    return { global: globalCount, project: projectCount };
+    const toolCount = unifiedItems.filter((item) => item.scopeLabel === "tool").length;
+    return { global: globalCount, project: projectCount, tool: toolCount };
   }, [unifiedItems]);
 
   const filteredUnifiedItems = useMemo(() => filterUnifiedSkillItems(unifiedItems, {
@@ -1334,7 +1462,11 @@ export function Skills() {
     selectedTags,
     untaggedOnly,
     scopeFilter,
-  }), [searchQuery, selectedTags, unifiedItems, untaggedOnly, scopeFilter]);
+    provider: providerFilterConfig,
+    bindingState: bindingStateFilter,
+    sourceFilter,
+    bindings: providerBindings,
+  }), [bindingStateFilter, providerBindings, providerFilterConfig, searchQuery, selectedTags, sourceFilter, unifiedItems, untaggedOnly, scopeFilter]);
 
   const sortedUnifiedItems = useMemo(
     () => sortUnifiedSkillItems(filteredUnifiedItems, searchQuery),
@@ -1400,6 +1532,11 @@ export function Skills() {
   const batchToolStates = useMemo(
     () => buildBatchToolStateSummaries(selectedBatchItems, skills, tools),
     [selectedBatchItems, skills, tools],
+  );
+
+  const batchActionableToolIds = useMemo(
+    () => actionableToolIds.filter((toolId) => (batchToolStates[toolId]?.selectedCount ?? 0) > 0),
+    [actionableToolIds, batchToolStates],
   );
 
   const headerActionLayout = useMemo(
@@ -1637,27 +1774,32 @@ export function Skills() {
     }
   }, [selectedImportPaths, addToast, t, handleRefresh]);
 
-  const saveProjectBindingsConfig = useCallback(async (nextConfig: AppConfig) => {
+  const runProjectBindingCommand = useCallback(async (
+    command: () => Promise<AppConfig>,
+  ): Promise<AppConfig | null> => {
     const previousConfig = config;
     const previousSkills = skills;
-    setConfig(nextConfig);
     setProjectBindingsSaving(true);
 
     try {
-      await invoke("save_config", { config: nextConfig });
-      const refreshedSkills = await invoke<Skill[]>("refresh_skills");
+      const nextConfig = await command();
+      setConfig(nextConfig);
+      const refreshedSkills = await invoke<Skill[]>("scan_skills_for_scope", {
+        projectId: selectedProjectId,
+      });
       setSkills(refreshedSkills);
+      return nextConfig;
     } catch (err) {
       if (previousConfig) {
         setConfig(previousConfig);
       }
       setSkills(previousSkills);
       addToast(err instanceof Error ? err.message : String(err), "error");
-      throw err;
+      return null;
     } finally {
       setProjectBindingsSaving(false);
     }
-  }, [addToast, config, skills]);
+  }, [addToast, config, selectedProjectId, skills]);
 
   const handleAddProjectBinding = useCallback(async () => {
     const selected = await open({
@@ -1671,7 +1813,11 @@ export function Skills() {
     }
 
     try {
-      setPendingProjectBinding(buildProjectBindingFromSkillsDir(selected));
+      const binding = await invoke<ProjectBinding>("preview_project_binding", {
+        path: selected,
+        name: null,
+      });
+      setPendingProjectBinding(binding);
     } catch (err) {
       if (err instanceof Error) {
         addToast(err.message, "error");
@@ -1698,41 +1844,22 @@ export function Skills() {
   }, []);
 
   const handleConfirmPendingProjectBinding = useCallback(async () => {
-    if (!config || !pendingProjectBinding) {
+    if (!pendingProjectBinding) {
       return;
     }
 
-    try {
-      const nextProject = buildProjectBindingFromSkillsDir(
-        pendingProjectBinding.skills_dir,
-        pendingProjectBinding.name,
-      );
-      const existingProjects = config.projects ?? [];
-      if (hasProjectSkillsDirConflict(existingProjects, nextProject)) {
-        addToast(t("settings.projectAlreadyAdded").replace("{name}", nextProject.name), "error");
-        return;
-      }
-
-      const nextConfig: AppConfig = {
-        ...config,
-        projects: [...existingProjects, nextProject],
-        active_project_id: resolveNextActiveProjectIdAfterAddition(
-          config.active_project_id,
-          existingProjects,
-          nextProject,
-        ),
-      };
-      await saveProjectBindingsConfig(nextConfig);
+    const nextConfig = await runProjectBindingCommand(() => invoke<AppConfig>(
+      "register_project_binding",
+      {
+        path: pendingProjectBinding.root_path ?? pendingProjectBinding.skills_dir,
+        name: pendingProjectBinding.name,
+      },
+    ));
+    if (nextConfig) {
       setPendingProjectBinding(null);
-      addToast(t("settings.projectAdded").replace("{name}", nextProject.name), "success");
-    } catch (err) {
-      if (err instanceof Error) {
-        addToast(err.message, "error");
-      } else if (typeof err === "string") {
-        addToast(err, "error");
-      }
+      addToast(t("settings.projectAdded").replace("{name}", pendingProjectBinding.name), "success");
     }
-  }, [addToast, config, pendingProjectBinding, saveProjectBindingsConfig, t]);
+  }, [addToast, pendingProjectBinding, runProjectBindingCommand, t]);
 
   const handleCloseProjectBindingsDialog = useCallback(() => {
     if (projectBindingsSaving) {
@@ -1743,34 +1870,18 @@ export function Skills() {
   }, [projectBindingsSaving]);
 
   const handleSetActiveProjectBinding = useCallback(async (projectId: string | null) => {
-    if (!config) {
-      return;
-    }
-
-    const nextConfig: AppConfig = {
-      ...config,
-      active_project_id: resolveActiveProjectId(projectId, config.projects ?? []),
-    };
-    await saveProjectBindingsConfig(nextConfig);
-  }, [config, saveProjectBindingsConfig]);
+    await runProjectBindingCommand(() => invoke<AppConfig>(
+      "set_active_project_binding",
+      { projectId },
+    ));
+  }, [runProjectBindingCommand]);
 
   const handleRemoveProjectBinding = useCallback(async (projectId: string) => {
-    if (!config) {
-      return;
-    }
-
-    const nextProjectBindings = resolveNextProjectBindingsAfterRemoval(
-      config.projects,
-      projectId,
-      config.active_project_id,
-    );
-    const nextConfig: AppConfig = {
-      ...config,
-      projects: nextProjectBindings.projects,
-      active_project_id: nextProjectBindings.activeProjectId,
-    };
-    await saveProjectBindingsConfig(nextConfig);
-  }, [config, saveProjectBindingsConfig]);
+    await runProjectBindingCommand(() => invoke<AppConfig>(
+      "remove_project_binding",
+      { projectId },
+    ));
+  }, [runProjectBindingCommand]);
 
   const handleSubmitBatchToolAction = useCallback(async (
     action: "enable" | "disable",
@@ -1805,6 +1916,7 @@ export function Skills() {
         action,
       };
       const response = await invoke<BatchSetSkillToolsResponse>("batch_set_skill_tools", { request });
+      setLastOperationReport(response.report);
 
       if (response.applied_count > 0) {
         addToast(t("skills.batchSubmitSuccess").replace("{count}", String(response.applied_count)), "success");
@@ -1932,7 +2044,7 @@ export function Skills() {
   }, [allBatchItemKeys, isBatchManageMode]);
 
   const toolIds = useMemo(
-    () => getEnabledToolIds(tools),
+    () => getDetectedToolIds(tools),
     [tools],
   );
 
@@ -1946,7 +2058,10 @@ export function Skills() {
       return [];
     }
 
-    return orderToolIdsForSkill(toolIds, toolEditorSkill.enabled);
+    const manageableToolIds = toolEditorSkill.scope === "tool" && toolEditorSkill.tool_id
+      ? [toolEditorSkill.tool_id]
+      : toolIds;
+    return orderToolIdsForSkill(manageableToolIds, toolEditorSkill.enabled);
   }, [toolEditorSkill, toolIds]);
 
   const toolEditorFilteredToolIds = useMemo(() => {
@@ -2021,15 +2136,22 @@ export function Skills() {
       const tool = tools.find((item) => item.id === toolId);
       const isDetected = tool?.detected ?? false;
       const isToolEnabled = tool?.config.enabled ?? false;
-      const isDisabled = toolEditorIsBulkToggling || isToggling || !isDetected || !isToolEnabled;
+      // Manager-level tool activation must not block a Skill-level toggle.
+      // The tool can be disabled for manager-wide sync while its own CLI
+      // installed Skills remain independently manageable.
+      const isDisabled = toolEditorIsBulkToggling || isToggling || !isDetected;
 
       return {
         id: toolId,
         label: getToolDisplayName(toolId, tools),
         enabled: isEnabled,
         disabled: isDisabled,
-        tooltip: !isDetected ? t("skills.toolNotDetected") : undefined,
-        dimmed: !isDetected,
+        tooltip: !isDetected
+          ? t("skills.toolNotDetected")
+          : !isToolEnabled
+            ? t("tools.skillsManageDisabled")
+            : undefined,
+        dimmed: !isDetected || !isToolEnabled,
       };
     });
   }, [toolEditorFilteredToolIds, toolEditorIsBulkToggling, toolEditorSkill, togglingSkill, tools, t]);
@@ -2190,6 +2312,7 @@ export function Skills() {
     setTogglingGroupToolKey(toggleKey);
     try {
       const response = await invoke<BatchSetSkillToolsResponse>("batch_set_skill_tools", { request });
+      setLastOperationReport(response.report);
 
       if (response.applied_count > 0) {
         const message = enabled ? t("skills.groupToolEnableSuccess") : t("skills.groupToolDisableSuccess");
@@ -2239,6 +2362,7 @@ export function Skills() {
     setBulkTogglingGroupId(groupItem.id);
     try {
       const response = await invoke<BatchSetSkillToolsResponse>("batch_set_skill_tools", { request: plan.request });
+      setLastOperationReport(response.report);
 
       if (response.applied_count > 0) {
         const successMessage = plan.bulkMode === "enable" ? t("skills.groupBulkEnableSuccess") : t("skills.groupBulkDisableSuccess");
@@ -2513,7 +2637,7 @@ export function Skills() {
                             {t("skills.tagFilterHintCompact")}
                           </div>
                         </div>
-                        {(selectedTags.length > 0 || untaggedOnly || scopeFilter !== "all") && (
+                        {(selectedTags.length > 0 || untaggedOnly || scopeFilter !== "all" || providerFilter !== "all" || bindingStateFilter !== "all" || sourceFilter !== "all") && (
                           <button
                             type="button"
                             onClick={handleResetTagFilters}
@@ -2533,11 +2657,52 @@ export function Skills() {
                         )}
                       </div>
 
+                      {providerInventory && providerInventory.providers.length > 0 && (
+                        <div style={{ display: "flex", flexDirection: "column", gap: "2px", marginBottom: "10px", paddingBottom: "8px", borderBottom: "1px solid var(--border)" }}>
+                          <div style={{ padding: "4px 6px 5px", fontSize: "11px", fontWeight: 650, color: "var(--muted-foreground)" }}>
+                            {t("skills.providerFilter")}
+                          </div>
+                          {[
+                            { id: "all", label: t("skills.scopeFilterAll"), count: unifiedItems.length },
+                            ...providerInventory.providers.map((provider) => ({
+                              id: provider.provider_id,
+                              label: provider.display_name,
+                              count: provider.skill_count,
+                            })),
+                          ].map(({ id, label, count }) => {
+                            const active = providerFilter === id;
+                            return (
+                              <button
+                                key={id}
+                                type="button"
+                                onClick={() => { setProviderFilter(id); setShowTagFilterMenu(false); }}
+                                onMouseEnter={(e) => {
+                                  if (!active) e.currentTarget.style.backgroundColor = "var(--surface-hover)";
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.backgroundColor = active ? "var(--primary-tint)" : "transparent";
+                                }}
+                                style={buildTagFilterMenuItemStyle(active)}
+                              >
+                                <TagFilterCheck active={active} />
+                                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                                  {label}
+                                </span>
+                                <span style={{ fontSize: "11px", color: active ? "var(--primary)" : "var(--muted-foreground)", fontVariantNumeric: "tabular-nums" }}>
+                                  {count}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+
                       <div style={{ display: "flex", flexDirection: "column", gap: "2px", marginBottom: "10px" }}>
                         {([
                           { value: "all" as const, label: t("skills.scopeFilterAll"), count: unifiedItems.length },
                           { value: "global" as const, label: t("skills.scopeGlobal"), count: scopeFilterCounts.global },
-                          { value: "project" as const, label: activeProjectName ?? t("skills.scopeProject"), count: scopeFilterCounts.project },
+                          { value: "project" as const, label: selectedProjectName ?? t("skills.scopeProject"), count: scopeFilterCounts.project },
+                          { value: "tool" as const, label: t("skills.scopeTool"), count: scopeFilterCounts.tool },
                         ]).map(({ value, label, count }) => {
                           const isActive = scopeFilter === value;
                           return (
@@ -2577,6 +2742,65 @@ export function Skills() {
                               }}>
                                 {count}
                               </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      <div style={{ display: "flex", flexDirection: "column", gap: "2px", marginBottom: "10px", paddingBottom: "8px", borderBottom: "1px solid var(--border)" }}>
+                        <div style={{ padding: "4px 6px 5px", fontSize: "11px", fontWeight: 650, color: "var(--muted-foreground)" }}>
+                          {t("skills.bindingStateFilter")}
+                        </div>
+                        {([
+                          { value: "all" as const, label: t("skills.scopeFilterAll"), count: unifiedItems.length },
+                          { value: "enabled" as const, label: t("skills.bindingStateEnabled"), count: providerBindings.filter((binding) => binding.state === "enabled").length },
+                          { value: "disabled" as const, label: t("skills.bindingStateDisabled"), count: providerBindings.filter((binding) => binding.state === "disabled").length },
+                          { value: "missing" as const, label: t("skills.bindingStateMissing"), count: providerBindings.filter((binding) => binding.state === "missing").length },
+                          { value: "conflict" as const, label: t("skills.bindingStateConflict"), count: providerBindings.filter((binding) => binding.state === "conflict").length },
+                          { value: "unavailable" as const, label: t("skills.bindingStateUnavailable"), count: providerBindings.filter((binding) => binding.state === "unavailable").length },
+                        ]).map(({ value, label, count }) => {
+                          const active = bindingStateFilter === value;
+                          return (
+                            <button
+                              key={value}
+                              type="button"
+                              onClick={() => { setBindingStateFilter(value); setShowTagFilterMenu(false); }}
+                              onMouseEnter={(e) => { if (!active) e.currentTarget.style.backgroundColor = "var(--surface-hover)"; }}
+                              onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = active ? "var(--primary-tint)" : "transparent"; }}
+                              style={buildTagFilterMenuItemStyle(active)}
+                            >
+                              <TagFilterCheck active={active} />
+                              <span style={{ flex: 1 }}>{label}</span>
+                              <span style={{ fontSize: "11px", color: active ? "var(--primary)" : "var(--muted-foreground)" }}>{count}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      <div style={{ display: "flex", flexDirection: "column", gap: "2px", marginBottom: "10px", paddingBottom: "8px", borderBottom: "1px solid var(--border)" }}>
+                        <div style={{ padding: "4px 6px 5px", fontSize: "11px", fontWeight: 650, color: "var(--muted-foreground)" }}>
+                          {t("skills.sourceFilter")}
+                        </div>
+                        {([
+                          { value: "all" as const, label: t("skills.scopeFilterAll"), count: unifiedItems.length },
+                          { value: "local" as const, label: t("skills.sourceLocal"), count: skills.filter((skill) => skill.source === "local").length },
+                          { value: "imported" as const, label: t("skills.sourceImported"), count: skills.filter((skill) => skill.source === "imported").length },
+                          { value: "marketplace" as const, label: t("skills.sourceMarketplace"), count: skills.filter((skill) => skill.source === "marketplace").length },
+                          { value: "vault" as const, label: t("skills.sourceVault"), count: skills.filter((skill) => skill.source === "vault").length },
+                        ]).map(({ value, label, count }) => {
+                          const active = sourceFilter === value;
+                          return (
+                            <button
+                              key={value}
+                              type="button"
+                              onClick={() => { setSourceFilter(value); setShowTagFilterMenu(false); }}
+                              onMouseEnter={(e) => { if (!active) e.currentTarget.style.backgroundColor = "var(--surface-hover)"; }}
+                              onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = active ? "var(--primary-tint)" : "transparent"; }}
+                              style={buildTagFilterMenuItemStyle(active)}
+                            >
+                              <TagFilterCheck active={active} />
+                              <span style={{ flex: 1 }}>{label}</span>
+                              <span style={{ fontSize: "11px", color: active ? "var(--primary)" : "var(--muted-foreground)" }}>{count}</span>
                             </button>
                           );
                         })}
@@ -2735,6 +2959,140 @@ export function Skills() {
         }}
       >
         <div style={{ maxWidth: "1600px", margin: "0 auto" }}>
+          <section
+            aria-label={t("skills.scopeSelection")}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "12px",
+              flexWrap: "wrap",
+              padding: "10px 12px",
+              marginBottom: "16px",
+              border: "1px solid var(--border)",
+              borderRadius: "10px",
+              background: "var(--card)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
+              <ScopeSelector
+                projects={config?.projects ?? []}
+                value={selectedProjectId}
+                onChange={handleScopeChange}
+                label={t("skills.scopeSelection")}
+                disabled={scopeLoading}
+              />
+              <span style={{ fontSize: "10px", color: "var(--muted-foreground)" }}>
+                {selectedProject
+                  ? t("skills.projectScopeRequired")
+                  : t("skills.globalScopeDescription")}
+              </span>
+            </div>
+            {scopeLoading && (
+              <span role="status" style={{ fontSize: "10px", color: "var(--muted-foreground)" }}>
+                {t("loading.refreshing")}
+              </span>
+            )}
+          </section>
+          {lastOperationReport && (
+            <OperationReportCard
+              report={lastOperationReport}
+              scopeLabel={selectedProjectName ?? t("skills.scopeGlobal")}
+              providerLabel={lastOperationReport.provider_id
+                ? getToolDisplayName(lastOperationReport.provider_id, tools)
+                : t("skills.providerInventoryTitle")}
+            />
+          )}
+          {providerInventory && <ProviderInventoryCard inventory={providerInventory} />}
+          <div
+            role="status"
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "10px",
+              padding: "14px 16px",
+              marginBottom: "16px",
+              borderRadius: "14px",
+              border: selectedProject ? "1px solid var(--primary-tint-border)" : "1px solid var(--border)",
+              background: selectedProject ? "var(--primary-tint)" : "var(--secondary)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "16px", flexWrap: "wrap" }}>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: "10px", minWidth: 0 }}>
+                <div style={{
+                  width: 30,
+                  height: 30,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexShrink: 0,
+                  borderRadius: 9,
+                  color: selectedProject ? "var(--primary)" : "var(--muted-foreground)",
+                  background: selectedProject ? "var(--background)" : "var(--card)",
+                }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5v-9Z" />
+                    <path d="m3 7.5 9 4.5 9-4.5M12 12v9" />
+                  </svg>
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                    <strong style={{ fontSize: "13px", color: "var(--foreground)" }}>
+                      {selectedProject ? selectedProject.name : t("skills.scopeGlobal")}
+                    </strong>
+                    {selectedProject && (
+                      <span style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        height: 18,
+                        padding: "0 7px",
+                        borderRadius: 999,
+                        color: "var(--primary)",
+                        background: "var(--background)",
+                        fontSize: 10,
+                        fontWeight: 700,
+                      }}>
+                        {t("skills.projectScopeActive")}
+                      </span>
+                    )}
+                  </div>
+                  <div
+                    style={{
+                      maxWidth: "min(760px, 100%)",
+                      marginTop: 4,
+                      overflow: "hidden",
+                      color: "var(--muted-foreground)",
+                      fontSize: 11,
+                      lineHeight: 1.45,
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                    title={selectedProject?.root_path ?? selectedProject?.skills_dir}
+                  >
+                    {selectedProject
+                      ? (selectedProject.root_path ?? selectedProject.skills_dir)
+                      : t("skills.globalScopeDescription")}
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", color: "var(--muted-foreground)", fontSize: 11 }}>
+                <span>{t("skills.projectScopeStats")
+                  .replace("{project}", String(projectScopedSkills.length))
+                  .replace("{tool}", String(toolScopedSkills.length))}</span>
+              </div>
+            </div>
+            {toolScopedSkills.length > 0 && (
+              <div style={{
+                paddingTop: 9,
+                borderTop: "1px solid color-mix(in srgb, var(--border) 70%, transparent)",
+                color: "var(--muted-foreground)",
+                fontSize: 11,
+                lineHeight: 1.45,
+              }}>
+                {t("skills.toolScopeHint")}
+              </div>
+            )}
+          </div>
           {isBatchManageMode && (
             <div
               style={{
@@ -2884,6 +3242,9 @@ export function Skills() {
                 const fileProgressPercent = fileProgress && fileProgress.total > 0
                   ? Math.max(0, Math.min(100, (fileProgress.current / fileProgress.total) * 100))
                   : 0;
+                const itemBindings = item.kind === "skill" && item.skill
+                  ? providerBindings.filter((binding) => binding.skill_instance_id === item.skill?.instance_id)
+                  : [];
 
                 const isBatchSelected = selectedBatchItemKeys.has(item.key);
                 const isCardExpanded = expandedCardKeys.has(item.key);
@@ -3005,18 +3366,26 @@ export function Skills() {
                               letterSpacing: "0.02em",
                               color: item.scopeLabel === "project"
                                 ? "var(--primary-foreground)"
-                                : "var(--muted-foreground)",
+                                : item.scopeLabel === "tool"
+                                  ? "#10b981"
+                                  : "var(--muted-foreground)",
                               backgroundColor: item.scopeLabel === "project"
                                 ? "var(--primary)"
-                                : "var(--background)",
+                                : item.scopeLabel === "tool"
+                                  ? "rgba(16, 185, 129, 0.1)"
+                                  : "var(--background)",
                               border: item.scopeLabel === "project"
                                 ? "none"
-                                : "1px solid var(--border)",
+                                : item.scopeLabel === "tool"
+                                  ? "1px solid rgba(16, 185, 129, 0.2)"
+                                  : "1px solid var(--border)",
                               borderRadius: "4px",
                             }}>
                               {item.scopeLabel === "project"
-                                ? (activeProjectName ?? t("skills.scopeProject"))
-                                : t("skills.scopeGlobal")}
+                                ? (selectedProjectName ?? t("skills.scopeProject"))
+                                : item.scopeLabel === "tool"
+                                  ? (item.skill?.tool_id ? `${item.skill.tool_id.toUpperCase()} ${t("skills.scopeTool")}` : t("skills.scopeTool"))
+                                  : t("skills.scopeGlobal")}
                             </span>
                           )}
                           {item.badgeLabel && (
@@ -3294,7 +3663,9 @@ export function Skills() {
                                   {t("skills.configureToolsTitle")}
                                 </div>
                                 <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
-                                  {toolIds.map((toolId) => {
+                                  {(item.skill!.scope === "tool" && item.skill!.tool_id
+                                    ? [item.skill!.tool_id]
+                                    : toolIds).map((toolId) => {
                                     const isEnabled = item.skill!.enabled[toolId] ?? false;
                                     const tool = tools.find((it) => it.id === toolId);
                                     const isDetected = tool?.detected ?? false;
@@ -3307,6 +3678,63 @@ export function Skills() {
                                         enabled={isEnabled}
                                         detected={isDetected}
                                       />
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+                            {itemBindings.length > 0 && (
+                              <div>
+                                <div style={{
+                                  fontSize: "11px",
+                                  fontWeight: 600,
+                                  color: "var(--muted-foreground)",
+                                  marginBottom: "6px",
+                                  textTransform: "uppercase",
+                                  letterSpacing: "0.04em",
+                                }}>
+                                  {t("skills.bindingDetails")}
+                                </div>
+                                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                                  {itemBindings.map((binding) => {
+                                    const stateLabel: Record<SkillBindingState, string> = {
+                                      enabled: t("skills.bindingStateEnabled"),
+                                      disabled: t("skills.bindingStateDisabled"),
+                                      missing: t("skills.bindingStateMissing"),
+                                      conflict: t("skills.bindingStateConflict"),
+                                      unavailable: t("skills.bindingStateUnavailable"),
+                                    };
+                                    const stateColor = binding.state === "enabled"
+                                      ? "var(--success, #22c55e)"
+                                      : binding.state === "disabled"
+                                        ? "var(--muted-foreground)"
+                                        : binding.state === "unavailable"
+                                          ? "var(--muted-foreground)"
+                                          : "var(--warning, #f59e0b)";
+                                    return (
+                                      <div
+                                        key={`${binding.provider_id}:${binding.skill_instance_id}`}
+                                        style={{
+                                          display: "grid",
+                                          gridTemplateColumns: "minmax(120px, auto) auto minmax(0, 1fr)",
+                                          alignItems: "center",
+                                          gap: "8px",
+                                          padding: "7px 8px",
+                                          borderRadius: "7px",
+                                          background: "var(--secondary)",
+                                          fontSize: "11px",
+                                        }}
+                                      >
+                                        <span style={{ fontWeight: 650, color: "var(--foreground)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                          {binding.provider_id}
+                                        </span>
+                                        <span style={{ color: stateColor, whiteSpace: "nowrap" }}>
+                                          {stateLabel[binding.state]}
+                                        </span>
+                                        <span style={{ minWidth: 0, color: "var(--muted-foreground)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                          {binding.reason || binding.target_path || binding.source_path || "-"}
+                                        </span>
+                                      </div>
                                     );
                                   })}
                                 </div>
@@ -3486,7 +3914,7 @@ export function Skills() {
       <BatchManageToolsDialog
         open={isBatchToolDialogOpen}
         selectedSummary={batchSelectionSummary}
-        tools={tools.filter((tool) => actionableToolIds.includes(tool.id))}
+        tools={tools.filter((tool) => batchActionableToolIds.includes(tool.id))}
         toolStates={batchToolStates}
         query={batchToolQuery}
         submitting={batchSubmitting}
@@ -3494,14 +3922,14 @@ export function Skills() {
         onToggleTool={(toolId, enabled) => void handleBatchToolToggle(toolId, enabled)}
         onSubmitEnableAll={() => void handleSubmitBatchToolAction(
           "enable",
-          actionableToolIds,
+          batchActionableToolIds,
           t("skills.batchConfirmEnableAllTools")
             .replace("{count}", String(batchSelectionSummary.totalCount))
             .replace("{affected}", String(batchSelectionSummary.affectedSkillCount)),
         )}
         onSubmitDisableAll={() => void handleSubmitBatchToolAction(
           "disable",
-          actionableToolIds,
+          batchActionableToolIds,
           t("skills.batchConfirmDisableAllTools")
             .replace("{count}", String(batchSelectionSummary.totalCount))
             .replace("{affected}", String(batchSelectionSummary.affectedSkillCount)),

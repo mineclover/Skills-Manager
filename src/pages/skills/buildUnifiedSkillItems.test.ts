@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { InstalledSkillPackage, Skill, SkillMetadataMap, Tool } from "../../types/index.ts";
+import type { InstalledSkillPackage, Skill, SkillBinding, SkillMetadataMap, Tool } from "../../types/index.ts";
 import {
   buildUnifiedSkillItems,
   filterUnifiedSkillItems,
@@ -121,6 +121,41 @@ test("buildUnifiedSkillItems merges skills and groups into one list", () => {
   );
 });
 
+test("tool-scoped skills only summarize and filter their owning tool", () => {
+  const toolSkill: Skill = {
+    id: "direct-skill",
+    instance_id: "tool:codex:direct-skill",
+    scope: "tool",
+    project_id: null,
+    project_name: null,
+    tool_id: "codex",
+    name: "Direct Skill",
+    description: "Installed directly in Codex",
+    version: "1.0.0",
+    source: "local",
+    enabled: { codex: true },
+    path: "/tmp/codex/direct-skill",
+  };
+  const items = buildUnifiedSkillItems({
+    skills: [toolSkill],
+    skillPackages: [],
+    tools,
+    skillMetadata: {},
+    groupBadgeLabel: "Group",
+  });
+  const item = items[0];
+
+  assert.equal(item.scopeLabel, "tool");
+  assert.equal(item.toolSummary?.totalCount, 1);
+  assert.equal(item.toolSummary?.state, "all");
+  assert.deepEqual(filterUnifiedSkillItems(items, {
+    searchQuery: "",
+    selectedTags: [],
+    untaggedOnly: false,
+    scopeFilter: "tool",
+  }).map((filtered) => filtered.id), ["tool:codex:direct-skill"]);
+});
+
 test("buildUnifiedSkillItems keeps tags isolated for same skill id across global and project instances", () => {
   const sharedSkills: Skill[] = [
     {
@@ -223,6 +258,117 @@ test("filterUnifiedSkillItems matches skill names and tags", () => {
     untaggedOnly: false,
   });
   assert.deepEqual(byTag.map((item) => item.id), ["skill-alpha"]);
+});
+
+test("filterUnifiedSkillItems keeps disabled bindings visible for a provider", () => {
+  const items = createItems();
+
+  const filtered = filterUnifiedSkillItems(items, {
+    searchQuery: "",
+    selectedTags: [],
+    untaggedOnly: false,
+    provider: { providerId: "codex" },
+  });
+
+  assert.deepEqual(
+    filtered.filter((item) => item.kind === "skill").map((item) => item.id),
+    ["skill-alpha", "skill-beta", "project:proj-1:skill-delta"],
+  );
+});
+
+test("filterUnifiedSkillItems keeps direct skills with their owning provider", () => {
+  const directSkill: Skill = {
+    id: "direct-skill",
+    instance_id: "tool:codex:direct-skill",
+    scope: "tool",
+    project_id: null,
+    project_name: null,
+    tool_id: "codex",
+    name: "Direct Skill",
+    description: null,
+    version: "1.0.0",
+    source: "local",
+    enabled: { codex: false },
+    path: "C:\\Users\\minec\\.codex\\skills\\direct-skill.disabled-by-sm",
+  };
+  const items = buildUnifiedSkillItems({
+    skills: [directSkill],
+    skillPackages: [],
+    tools,
+    skillMetadata: {},
+    groupBadgeLabel: "Group",
+  });
+
+  assert.equal(filterUnifiedSkillItems(items, {
+    searchQuery: "",
+    selectedTags: [],
+    untaggedOnly: false,
+    provider: { providerId: "codex" },
+  }).length, 1);
+  assert.equal(filterUnifiedSkillItems(items, {
+    searchQuery: "",
+    selectedTags: [],
+    untaggedOnly: false,
+    provider: { providerId: "claude" },
+  }).length, 0);
+});
+
+test("filterUnifiedSkillItems can filter by binding state and source", () => {
+  const items = createItems();
+  const bindings: SkillBinding[] = [
+    {
+      artifact_id: "skill-alpha",
+      skill_instance_id: "skill-alpha",
+      provider_id: "claude",
+      scope: "global",
+      state: "enabled",
+      source_path: "/tmp/alpha",
+      target_path: "/tmp/claude/skill-alpha",
+      last_checked_at: 1,
+    },
+    {
+      artifact_id: "skill-beta",
+      skill_instance_id: "skill-beta",
+      provider_id: "claude",
+      scope: "global",
+      state: "missing",
+      source_path: "/tmp/beta",
+      target_path: "/tmp/claude/skill-beta",
+      last_checked_at: 1,
+    },
+  ];
+
+  assert.deepEqual(
+    filterUnifiedSkillItems(items, {
+      searchQuery: "",
+      selectedTags: [],
+      untaggedOnly: false,
+      bindingState: "missing",
+      bindings,
+    }).map((item) => item.id),
+    ["skill-beta"],
+  );
+  assert.deepEqual(
+    filterUnifiedSkillItems(items, {
+      searchQuery: "",
+      selectedTags: [],
+      untaggedOnly: false,
+      bindingState: "missing",
+      provider: { providerId: "codex" },
+      bindings,
+    }),
+    [],
+  );
+  assert.deepEqual(
+    filterUnifiedSkillItems(items, {
+      searchQuery: "",
+      selectedTags: [],
+      untaggedOnly: false,
+      sourceFilter: "local",
+      bindings,
+    }).map((item) => item.kind),
+    ["skill", "skill", "skill"],
+  );
 });
 
 test("filterUnifiedSkillItems matches groups by package fields and member ids", () => {

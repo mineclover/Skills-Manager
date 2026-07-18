@@ -20,10 +20,10 @@ function createTool(id: string, options: { detected: boolean; toolEnabled: boole
   };
 }
 
-test("isActionableTool returns true only for detected enabled tools", () => {
+test("isActionableTool returns true for detected tools regardless of manager activation", () => {
   assert.equal(isActionableTool(createTool("a", { detected: true, toolEnabled: true })), true);
   assert.equal(isActionableTool(createTool("b", { detected: false, toolEnabled: true })), false);
-  assert.equal(isActionableTool(createTool("c", { detected: true, toolEnabled: false })), false);
+  assert.equal(isActionableTool(createTool("c", { detected: true, toolEnabled: false })), true);
 });
 
 test("getActionableToolIds returns only actionable tool ids", () => {
@@ -34,5 +34,5 @@ test("getActionableToolIds returns only actionable tool ids", () => {
     createTool("d", { detected: true, toolEnabled: true }),
   ];
 
-  assert.deepEqual(getActionableToolIds(tools), ["a", "d"]);
+  assert.deepEqual(getActionableToolIds(tools), ["a", "c", "d"]);
 });

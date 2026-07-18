@@ -1,7 +1,7 @@
 import type { Tool } from "../../types";
 
 export function isActionableTool(tool: Pick<Tool, "detected" | "config"> | undefined): boolean {
-  return Boolean(tool?.detected && tool.config.enabled);
+  return Boolean(tool?.detected);
 }
 
 export function getActionableToolIds(tools: Array<Pick<Tool, "id" | "detected" | "config">>): string[] {

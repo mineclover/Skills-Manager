@@ -8,7 +8,9 @@ import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { AppConfig, Tool, Skill, SkillActivationPreset, PresetActivation } from "@/types";
+import { ScopeSelector } from "@/components/ScopeSelector";
+import { OperationReportCard } from "@/components/skills/OperationReportCard";
+import { AppConfig, Tool, Skill, SkillActivationPreset, SkillOperationReport } from "@/types";
 import { Sliders, Plus, Trash2, Play, Check, AlertTriangle, Layers, Download } from "lucide-react";
 
 export function Presets() {
@@ -24,6 +26,12 @@ export function Presets() {
   const [newPresetDesc, setNewPresetDesc] = useState("");
   const [copyCurrentState, setCopyCurrentState] = useState(true);
   const [applyingPresetId, setApplyingPresetId] = useState<string | null>(null);
+  // Presets default to the global source. A project is an explicit alternate
+  // scope so an active project setting never changes this page implicitly.
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [targetToolId, setTargetToolId] = useState("");
+  const [scopeLoading, setScopeLoading] = useState(false);
+  const [lastReport, setLastReport] = useState<SkillOperationReport | null>(null);
 
   // Load all data on mount
   useEffect(() => {
@@ -36,10 +44,25 @@ export function Presets() {
       setConfig(cfg);
 
       const tList = await invoke<Tool[]>("detect_tools");
-      setTools(tList.filter((t) => t.detected && t.config.enabled));
 
-      const sList = await invoke<Skill[]>("list_skills");
+      // Presets default to the global source. Directly installed Tool skills
+      // are included by the scope scanner, including manager-disabled tools.
+      const sList = await invoke<Skill[]>("scan_skills_for_scope", { projectId: null });
       setSkills(sList);
+
+      // An agent can be a valid preset target even when its manager-level
+      // detection flag is off, as long as the scanner found Tool skills owned
+      // by it. Keep those tools selectable without exposing their skills in
+      // the managed preset list.
+      const installedToolIds = new Set(
+        sList
+          .filter((skill) => skill.scope === "tool" && skill.tool_id)
+          .map((skill) => skill.tool_id as string),
+      );
+      const availableTools = tList.filter(
+        (tool) => tool.detected || installedToolIds.has(tool.id),
+      );
+      setTools(availableTools);
 
       // Select active preset or first preset by default
       const savedPresets = cfg.presets || [];
@@ -48,14 +71,59 @@ export function Presets() {
       } else if (savedPresets.length > 0) {
         setSelectedPresetId(savedPresets[0].id);
       }
+
+      const preferredPreset = cfg.active_preset_id
+        ? savedPresets.find((preset) => preset.id === cfg.active_preset_id)
+        : savedPresets[0];
+      const preferredToolId = preferredPreset?.activations[0]?.tool_id;
+      setTargetToolId(
+        preferredToolId && availableTools.some((tool) => tool.id === preferredToolId)
+          ? preferredToolId
+          : availableTools[0]?.id || "",
+      );
     } catch (err) {
       console.error("Failed to load data:", err);
       addToast(t("skills.loadFailed"), "error");
     }
   }
 
+  async function handleScopeChange(nextProjectId: string | null) {
+    setScopeLoading(true);
+    setLastReport(null);
+    try {
+      const scopedSkills = await invoke<Skill[]>("scan_skills_for_scope", {
+        projectId: nextProjectId,
+      });
+      setSelectedProjectId(nextProjectId);
+      setSkills(scopedSkills);
+    } catch (err) {
+      console.error("Failed to load selected scope:", err);
+      addToast(err instanceof Error ? err.message : t("skills.loadFailed"), "error");
+    } finally {
+      setScopeLoading(false);
+    }
+  }
+
   const presetsList = config?.presets || [];
   const selectedPreset = presetsList.find((p) => p.id === selectedPresetId);
+  const selectedPresetIsBuiltin = selectedPreset?.id.startsWith("builtin-matt-") ?? false;
+  const targetTool = tools.find((tool) => tool.id === targetToolId);
+  const targetActivation = selectedPreset?.activations.find(
+    (activation) => activation.tool_id === targetToolId,
+  );
+  const targetConfigured = Boolean(targetActivation);
+  // A preset controls all manager-owned skills plus direct skills belonging
+  // to the selected agent. Direct skills owned by other agents stay isolated.
+  const targetSkills = targetTool
+    ? skills.filter(
+        (skill) => skill.scope !== "tool" || skill.tool_id === targetTool.id,
+      )
+    : [];
+  const selectedCount = targetSkills.filter((skill) => isSkillActiveInPreset(skill.instance_id)).length;
+  const currentCount = targetTool
+    ? targetSkills.filter((skill) => skill.enabled[targetTool.id] === true).length
+    : 0;
+  const isAllSelected = selectedCount === targetSkills.length && targetSkills.length > 0;
 
   // Create new preset
   async function handleCreatePreset() {
@@ -65,38 +133,17 @@ export function Presets() {
       return;
     }
 
-    const newId = `preset-${Date.now()}`;
-    const activations: PresetActivation[] = [];
-    if (copyCurrentState) {
-      tools.forEach((tool) => {
-        const activeSkillIds = skills
-          .filter((skill) => skill.enabled[tool.id] === true)
-          .map((skill) => skill.instance_id);
-        
-        // We push even if activeSkillIds is empty, to explicitly deactivate
-        activations.push({
-          tool_id: tool.id,
-          skill_ids: activeSkillIds,
-        });
-      });
-    }
-
-    const newPreset: SkillActivationPreset = {
-      id: newId,
-      name: newPresetName.trim(),
-      description: newPresetDesc.trim() || null,
-      activations,
-    };
-
-    const updatedConfig = {
-      ...config,
-      presets: [...presetsList, newPreset],
-    };
-
     try {
-      await invoke("save_config", { config: updatedConfig });
+      const newPreset = await invoke<SkillActivationPreset>("create_preset", {
+        name: newPresetName.trim(),
+        description: newPresetDesc.trim() || null,
+        copyCurrentState,
+        projectId: selectedProjectId,
+        toolId: targetToolId || null,
+      });
+      const updatedConfig = await invoke<AppConfig>("get_config");
       setConfig(updatedConfig);
-      setSelectedPresetId(newId);
+      setSelectedPresetId(newPreset.id);
       setIsNewPresetDialogOpen(false);
       setNewPresetName("");
       setNewPresetDesc("");
@@ -114,26 +161,20 @@ export function Presets() {
     if (!config) return;
     const target = presetsList.find((p) => p.id === presetId);
     if (!target) return;
+    if (target.id.startsWith("builtin-matt-")) {
+      addToast(t("presets.builtinCannotDelete"), "error");
+      return;
+    }
 
     if (!confirm(t("presets.deleteConfirm").replace("{name}", target.name))) {
       return;
     }
 
-    const isActive = config.active_preset_id === presetId;
-    const updatedPresets = presetsList.filter((p) => p.id !== presetId);
-    const updatedConfig = {
-      ...config,
-      presets: updatedPresets,
-      active_preset_id: isActive ? null : config.active_preset_id,
-    };
-
     try {
-      await invoke("save_config", { config: updatedConfig });
+      await invoke("delete_preset", { presetId });
+      const updatedConfig = await invoke<AppConfig>("get_config");
+      const updatedPresets = updatedConfig.presets || [];
       setConfig(updatedConfig);
-
-      if (isActive) {
-        await invoke("clear_active_preset");
-      }
 
       // Switch selection
       if (updatedPresets.length > 0) {
@@ -161,33 +202,15 @@ export function Presets() {
       return;
     }
 
-    const activations: PresetActivation[] = tools.map((tool) => {
-      const activeSkillIds = skills
-        .filter((skill) => skill.enabled[tool.id] === true)
-        .map((skill) => skill.instance_id);
-      return {
-        tool_id: tool.id,
-        skill_ids: activeSkillIds,
-      };
-    });
-
-    const updatedPresets = presetsList.map((preset) => {
-      if (preset.id === presetId) {
-        return {
-          ...preset,
-          activations,
-        };
-      }
-      return preset;
-    });
-
-    const updatedConfig = {
-      ...config,
-      presets: updatedPresets,
-    };
+    if (!targetToolId) return;
 
     try {
-      await invoke("save_config", { config: updatedConfig });
+      await invoke<SkillActivationPreset>("capture_preset", {
+        presetId,
+        projectId: selectedProjectId,
+        toolId: targetToolId,
+      });
+      const updatedConfig = await invoke<AppConfig>("get_config");
       setConfig(updatedConfig);
       addToast(t("presets.captureSuccess"), "success");
     } catch (err) {
@@ -196,98 +219,37 @@ export function Presets() {
   }
 
   // Toggle skill in preset
-  async function handleToggleSkill(toolId: string, skillId: string, enabled: boolean) {
-    if (!config || !selectedPresetId) return;
-
-    const updatedPresets = presetsList.map((preset) => {
-      if (preset.id !== selectedPresetId) return preset;
-
-      const activations = [...preset.activations];
-      const toolActIndex = activations.findIndex((a) => a.tool_id === toolId);
-
-      if (toolActIndex > -1) {
-        const toolAct = activations[toolActIndex];
-        let skillIds = [...toolAct.skill_ids];
-
-        if (enabled) {
-          if (!skillIds.includes(skillId)) {
-            skillIds.push(skillId);
-          }
-        } else {
-          skillIds = skillIds.filter((id) => id !== skillId);
-        }
-
-        activations[toolActIndex] = {
-          ...toolAct,
-          skill_ids: skillIds,
-        };
-      } else {
-        // Create new tool activation
-        if (enabled) {
-          activations.push({
-            tool_id: toolId,
-            skill_ids: [skillId],
-          });
-        }
-      }
-
-      return {
-        ...preset,
-        activations,
-      };
-    });
-
-    const updatedConfig = {
-      ...config,
-      presets: updatedPresets,
-    };
+  async function handleToggleSkill(skillId: string, enabled: boolean) {
+    if (!config || !selectedPresetId || !targetToolId) return;
+    const skill = targetSkills.find((item) => item.instance_id === skillId);
+    if (!skill) return;
 
     try {
-      setConfig(updatedConfig);
-      // Auto-save changes to the preset mappings
-      await invoke("save_config", { config: updatedConfig });
+      await invoke<SkillActivationPreset>("set_preset_skill", {
+        presetId: selectedPresetId,
+        projectId: selectedProjectId,
+        toolId: targetToolId,
+        skillId,
+        enabled,
+      });
+      setConfig(await invoke<AppConfig>("get_config"));
     } catch (err) {
       addToast(err instanceof Error ? err.message : t("settings.saveFailed"), "error");
     }
   }
 
   // Select all skills for a tool
-  async function handleSelectAllForTool(toolId: string, selectAll: boolean) {
-    if (!config || !selectedPresetId) return;
-
-    const updatedPresets = presetsList.map((preset) => {
-      if (preset.id !== selectedPresetId) return preset;
-
-      const activations = [...preset.activations];
-      const toolActIndex = activations.findIndex((a) => a.tool_id === toolId);
-      const allSkillIds = selectAll ? skills.map((s) => s.instance_id) : [];
-
-      if (toolActIndex > -1) {
-        activations[toolActIndex] = {
-          tool_id: toolId,
-          skill_ids: allSkillIds,
-        };
-      } else {
-        activations.push({
-          tool_id: toolId,
-          skill_ids: allSkillIds,
-        });
-      }
-
-      return {
-        ...preset,
-        activations,
-      };
-    });
-
-    const updatedConfig = {
-      ...config,
-      presets: updatedPresets,
-    };
+  async function handleSelectAllForTool(selectAll: boolean) {
+    if (!config || !selectedPresetId || !targetToolId) return;
 
     try {
-      setConfig(updatedConfig);
-      await invoke("save_config", { config: updatedConfig });
+      await invoke<SkillActivationPreset>("set_preset_all", {
+        presetId: selectedPresetId,
+        projectId: selectedProjectId,
+        toolId: targetToolId,
+        enabled: selectAll,
+      });
+      setConfig(await invoke<AppConfig>("get_config"));
     } catch (err) {
       addToast(err instanceof Error ? err.message : t("settings.saveFailed"), "error");
     }
@@ -295,18 +257,41 @@ export function Presets() {
 
   // Apply preset to system
   async function handleApplyPreset(presetId: string) {
+    if (!targetToolId) {
+      addToast(t("presets.selectAgent"), "error");
+      return;
+    }
+    if (!targetConfigured) {
+      addToast(
+        t("presets.targetNotConfiguredHint").replace(
+          "{agent}",
+          targetTool?.name || targetToolId,
+        ),
+        "error",
+      );
+      return;
+    }
+
     setApplyingPresetId(presetId);
     try {
-      await invoke("apply_preset", { presetId });
-      
-      // Update config reference
-      if (config) {
-        const updatedConfig = {
-          ...config,
-          active_preset_id: presetId,
-        };
-        setConfig(updatedConfig);
+      const report = await invoke<SkillOperationReport>("apply_preset_for_target", {
+        presetId,
+        projectId: selectedProjectId,
+        toolId: targetToolId,
+      });
+      setLastReport(report);
+      if (report.failed_count > 0) {
+        throw new Error(report.failures[0]?.message || t("presets.applyFailed"));
       }
+
+      // Applying a preset changes the on-disk state. Read it back immediately
+      // so the preset page and the Skills page do not show stale toggles.
+      const [updatedConfig, refreshedSkills] = await Promise.all([
+        invoke<AppConfig>("get_config"),
+        invoke<Skill[]>("scan_skills_for_scope", { projectId: selectedProjectId }),
+      ]);
+      setConfig(updatedConfig);
+      setSkills(refreshedSkills);
 
       addToast(
         t("presets.applySuccess").replace("{name}", selectedPreset?.name || ""),
@@ -314,24 +299,25 @@ export function Presets() {
       );
     } catch (err) {
       console.error(err);
-      addToast(t("presets.applyFailed"), "error");
+      const message =
+        typeof err === "string"
+          ? err
+          : err instanceof Error
+            ? err.message
+            : t("presets.applyFailed");
+      addToast(message, "error");
     } finally {
       setApplyingPresetId(null);
     }
   }
 
   // Helper: check if a skill is active in a preset
-  function isSkillActiveInPreset(toolId: string, skillId: string): boolean {
-    if (!selectedPreset) return false;
-    const toolAct = selectedPreset.activations.find((a) => a.tool_id === toolId);
-    return toolAct ? toolAct.skill_ids.includes(skillId) : false;
-  }
-
-  // Helper: count selected skills in preset for a tool
-  function getSelectedSkillsCountForTool(toolId: string): number {
-    if (!selectedPreset) return 0;
-    const toolAct = selectedPreset.activations.find((a) => a.tool_id === toolId);
-    return toolAct ? toolAct.skill_ids.length : 0;
+  function isSkillActiveInPreset(skillId: string): boolean {
+    if (!selectedPreset || !targetToolId) return false;
+    const toolAct = selectedPreset.activations.find((a) => a.tool_id === targetToolId);
+    if (!toolAct) return false;
+    const skill = targetSkills.find((item) => item.instance_id === skillId);
+    return toolAct.skill_ids.includes(skillId) || Boolean(skill && toolAct.skill_ids.includes(skill.id));
   }
 
   return (
@@ -423,7 +409,10 @@ export function Presets() {
               return (
                 <button
                   key={preset.id}
-                  onClick={() => setSelectedPresetId(preset.id)}
+                  onClick={() => {
+                    setSelectedPresetId(preset.id);
+                    setLastReport(null);
+                  }}
                   className={`w-full text-left p-3 rounded-md transition-colors flex flex-col gap-1 ${
                     isSelected
                       ? "bg-secondary text-foreground"
@@ -438,6 +427,11 @@ export function Presets() {
                     {isActive && (
                       <span className="text-[10px] bg-ember/20 text-ember px-1.5 py-0.5 rounded font-mono font-medium">
                         ACTIVE
+                      </span>
+                    )}
+                    {preset.id.startsWith("builtin-matt-") && (
+                      <span className="text-[9px] border border-border px-1 py-0.5 rounded font-mono font-medium opacity-70">
+                        {t("presets.builtinPreset")}
                       </span>
                     )}
                   </div>
@@ -480,6 +474,54 @@ export function Presets() {
                 <p className="text-xs text-muted-foreground truncate">
                   {selectedPreset.description || t("skills.noDescription")}
                 </p>
+                <div className="flex items-center gap-2 gap-y-2 pt-2 flex-wrap">
+                  <ScopeSelector
+                    projects={config?.projects ?? []}
+                    value={selectedProjectId}
+                    onChange={(projectId) => void handleScopeChange(projectId)}
+                    label={t("presets.readScope")}
+                    disabled={scopeLoading || applyingPresetId !== null}
+                  />
+                  {scopeLoading && (
+                    <span className="text-[10px] text-muted-foreground">
+                      {t("presets.scopeLoading")}
+                    </span>
+                  )}
+                  <span className="text-[10px] font-medium text-muted-foreground ml-2">
+                    {t("presets.targetAgent")}
+                  </span>
+                  <select
+                    value={targetToolId}
+                    onChange={(event) => {
+                      setTargetToolId(event.target.value);
+                      setLastReport(null);
+                    }}
+                    disabled={scopeLoading || applyingPresetId !== null}
+                    className="h-7 min-w-[180px] rounded border border-border bg-background px-2 text-[11px] text-foreground outline-none disabled:opacity-60"
+                  >
+                    <option value="" disabled>
+                      {t("presets.selectAgent")}
+                    </option>
+                    {tools.map((tool) => (
+                      <option key={tool.id} value={tool.id}>
+                        {tool.name}
+                      </option>
+                    ))}
+                  </select>
+                  {targetTool && (
+                    <span
+                      className={`text-[10px] px-1.5 py-0.5 rounded border ${
+                        targetConfigured
+                          ? "text-emerald-600 border-emerald-600/30 bg-emerald-600/5"
+                          : "text-amber-600 border-amber-600/30 bg-amber-600/5"
+                      }`}
+                    >
+                      {targetConfigured
+                        ? t("presets.targetConfigured")
+                        : t("presets.targetNotConfigured")}
+                    </span>
+                  )}
+                </div>
               </div>
 
               <div className="flex items-center gap-2 flex-shrink-0">
@@ -497,6 +539,7 @@ export function Presets() {
                   size="sm"
                   variant="outline"
                   onClick={() => handleDeletePreset(selectedPreset.id)}
+                  disabled={selectedPresetIsBuiltin}
                   className="h-8 text-xs border-destructive/25 text-destructive hover:bg-destructive/10 hover:text-destructive"
                 >
                   <Trash2 size={14} />
@@ -505,7 +548,9 @@ export function Presets() {
 
                 <Button
                   size="sm"
-                  disabled={applyingPresetId !== null}
+                  disabled={
+                    applyingPresetId !== null || scopeLoading || !targetConfigured
+                  }
                   onClick={() => handleApplyPreset(selectedPreset.id)}
                   className="h-8 text-xs bg-ash text-black hover:bg-ash/90 shadow-sm"
                   style={{
@@ -533,88 +578,120 @@ export function Presets() {
             {/* Description & Explicit Deactivation note */}
             <div className="px-6 py-3 bg-muted/20 border-b border-border flex items-center gap-2 text-[11px] text-muted-foreground">
               <AlertTriangle size={13} className="text-amber" />
-              <span>{t("presets.description")}</span>
+              <span>
+                {targetTool && !targetConfigured
+                  ? t("presets.targetNotConfiguredHint").replace(
+                      "{agent}",
+                      targetTool.name,
+                    )
+                  : t("presets.description")}
+              </span>
             </div>
 
-            {/* Skills selection per tool */}
+            {lastReport && targetTool && (
+              <OperationReportCard
+                report={lastReport}
+                scopeLabel={selectedProjectId
+                  ? (config?.projects ?? []).find((project) => project.id === selectedProjectId)?.name ?? t("skills.scopeProject")
+                  : t("skills.scopeGlobal")}
+                providerLabel={targetTool.name}
+              />
+            )}
+
+            {/* Managed skill set for one selected agent */}
             <ScrollArea className="flex-1 min-h-0">
               <div className="p-6 space-y-6 w-full max-w-full overflow-hidden">
-                {tools.map((tool) => {
-                  const selectedCount = getSelectedSkillsCountForTool(tool.id);
-                  const isAllSelected = selectedCount === skills.length && skills.length > 0;
-                  return (
-                    <Card
-                      key={tool.id}
-                      className="border border-border bg-card/40 w-full max-w-full overflow-hidden"
-                    >
-                      <CardHeader className="p-4 pb-2 flex flex-row items-center justify-between space-y-0">
-                        <div>
-                          <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                            {tool.name}
-                          </CardTitle>
-                          <CardDescription className="text-[10px]">
-                            {t("presets.skillsSelected").replace("{count}", String(selectedCount))}
-                          </CardDescription>
-                        </div>
-
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-7 text-[10px] px-2"
-                            onClick={() => handleSelectAllForTool(tool.id, !isAllSelected)}
-                          >
-                            {isAllSelected ? t("welcome.selectNone") : t("welcome.selectAll")}
-                          </Button>
-                        </div>
-                      </CardHeader>
-                      <CardContent className="p-4 pt-0">
-                        {skills.length > 0 ? (
-                          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-                            {skills.map((skill) => {
-                              const isActive = isSkillActiveInPreset(tool.id, skill.instance_id);
-                              return (
-                                <div
-                                  key={skill.instance_id}
-                                  className="flex items-center justify-between p-3 border border-border rounded-md bg-background/30 hover:bg-secondary/20 transition-colors"
-                                >
-                                  <div className="flex flex-col min-w-0 pr-3">
-                                    <span className="text-xs font-medium text-foreground truncate" title={skill.name}>
-                                      {skill.name}
-                                    </span>
-                                    {skill.description && (
-                                      <span className="text-[10px] text-muted-foreground truncate" title={skill.description}>
-                                        {skill.description}
-                                      </span>
-                                    )}
-                                  </div>
-                                  <Switch
-                                    checked={isActive}
-                                    onCheckedChange={(checked) =>
-                                      handleToggleSkill(tool.id, skill.instance_id, checked)
-                                    }
-                                    className="flex-shrink-0"
-                                  />
-                                </div>
-                              );
-                            })}
-                          </div>
-                        ) : (
-                          <div className="text-center py-6 text-xs text-muted-foreground">
-                            {t("skills.noSkills")}
-                          </div>
-                        )}
-                      </CardContent>
-                    </Card>
-                  );
-                })}
-
-                {tools.length === 0 && (
+                {tools.length === 0 ? (
                   <div className="text-center py-12 space-y-3">
                     <Layers size={36} className="mx-auto text-muted-foreground/30" />
                     <h3 className="text-sm font-semibold">{t("tools.noTools")}</h3>
                     <p className="text-xs text-muted-foreground">{t("tools.noToolsDesc")}</p>
                   </div>
+                ) : !targetTool ? (
+                  <div className="text-center py-12 space-y-3">
+                    <Layers size={36} className="mx-auto text-muted-foreground/30" />
+                    <h3 className="text-sm font-semibold">{t("presets.selectAgent")}</h3>
+                  </div>
+                ) : (
+                  <Card className="border border-border bg-card/40 w-full max-w-full overflow-hidden">
+                    <CardHeader className="p-4 pb-2 flex flex-row items-center justify-between space-y-0">
+                      <div>
+                        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                          {targetTool.name}
+                          {!targetTool.config.enabled && (
+                            <span className="text-[10px] font-medium text-muted-foreground border border-border px-1.5 py-0.5 rounded">
+                              {t("tools.disabled")}
+                            </span>
+                          )}
+                        </CardTitle>
+                        <CardDescription className="text-[10px]">
+                          {t("presets.skillsSelected").replace("{count}", String(selectedCount))}
+                          <span className="mx-1">·</span>
+                          {t("presets.currentSkillsEnabled").replace("{count}", String(currentCount))}
+                        </CardDescription>
+                      </div>
+
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 text-[10px] px-2"
+                        disabled={targetSkills.length === 0}
+                        onClick={() => handleSelectAllForTool(!isAllSelected)}
+                      >
+                        {isAllSelected ? t("welcome.selectNone") : t("welcome.selectAll")}
+                      </Button>
+                    </CardHeader>
+                    <CardContent className="p-4 pt-0">
+                      {targetSkills.length > 0 ? (
+                        <div className="mt-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                          {targetSkills.map((skill) => {
+                            const isActive = isSkillActiveInPreset(skill.instance_id);
+                            const isCurrentlyEnabled = skill.enabled[targetTool.id] === true;
+                            return (
+                              <div
+                                key={skill.instance_id}
+                                className="flex items-center justify-between p-3 border border-border rounded-md bg-background/30 hover:bg-secondary/20 transition-colors"
+                              >
+                                <div className="flex flex-col min-w-0 pr-3">
+                                  <span className="text-xs font-medium text-foreground truncate" title={skill.name}>
+                                    {skill.name}
+                                  </span>
+                                  {skill.scope === "tool" && (
+                                    <span className="text-[9px] text-muted-foreground">
+                                      {t("presets.agentLocalSkill")}
+                                    </span>
+                                  )}
+                                  {skill.description && (
+                                    <span className="text-[10px] text-muted-foreground truncate" title={skill.description}>
+                                      {skill.description}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                                  <span className="text-[9px] text-muted-foreground whitespace-nowrap">
+                                    {t("presets.currentState")}: {isCurrentlyEnabled ? t("tools.enabled") : t("tools.disabled")}
+                                  </span>
+                                  <span className="text-[9px] text-foreground/70 whitespace-nowrap">
+                                    {t("presets.presetState")}
+                                  </span>
+                                  <Switch
+                                    checked={isActive}
+                                    onCheckedChange={(checked) =>
+                                      handleToggleSkill(skill.instance_id, checked)
+                                    }
+                                  />
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="text-center py-6 text-xs text-muted-foreground">
+                          {t("presets.noPresetSkills")}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
                 )}
               </div>
             </ScrollArea>

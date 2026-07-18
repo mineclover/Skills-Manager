@@ -1,14 +1,7 @@
-import { useState, useEffect, useCallback } from "react";
+import { lazy, Suspense, useState, useEffect, useCallback } from "react";
 import { BrowserRouter, Routes, Route, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { Layout } from "@/components/layout/Layout";
-import { Skills } from "@/pages/Skills";
-import { Tools } from "@/pages/Tools";
-import { Presets } from "@/pages/Presets";
-import { Marketplace } from "@/pages/Marketplace";
-import { Settings } from "@/pages/Settings";
-import { Feedback } from "@/pages/Feedback";
-import { EditorPage } from "@/pages/Editor";
 import { Welcome } from "@/pages/Welcome";
 import { useInitialization } from "@/hooks/useInitialization";
 import { ThemeProvider } from "@/hooks/useTheme";
@@ -22,6 +15,14 @@ import { CommandPalette } from "@/components/CommandPalette";
 import { PageHeaderProvider } from "@/components/PageHeaderContext";
 
 type Theme = "light" | "dark" | "system";
+
+const Skills = lazy(() => import("@/pages/Skills").then(({ Skills }) => ({ default: Skills })));
+const Tools = lazy(() => import("@/pages/Tools").then(({ Tools }) => ({ default: Tools })));
+const Presets = lazy(() => import("@/pages/Presets").then(({ Presets }) => ({ default: Presets })));
+const Marketplace = lazy(() => import("@/pages/Marketplace").then(({ Marketplace }) => ({ default: Marketplace })));
+const Settings = lazy(() => import("@/pages/Settings").then(({ Settings }) => ({ default: Settings })));
+const Feedback = lazy(() => import("@/pages/Feedback").then(({ Feedback }) => ({ default: Feedback })));
+const EditorPage = lazy(() => import("@/pages/Editor").then(({ EditorPage }) => ({ default: EditorPage })));
 
 function GlobalShortcuts({ onOpenPalette }: { onOpenPalette: () => void }) {
   const navigate = useNavigate();
@@ -145,17 +146,19 @@ function App() {
             <PageHeaderProvider>
               <SkillTranslationProvider>
                 <GlobalShortcuts onOpenPalette={() => setPaletteOpen(true)} />
-                <Routes>
-                  <Route path="/" element={<Layout onOpenPalette={() => setPaletteOpen(true)} />}>
-                    <Route index element={<Skills />} />
-                    <Route path="tools" element={<Tools />} />
-                    <Route path="presets" element={<Presets />} />
-                    <Route path="marketplace" element={<Marketplace />} />
-                    <Route path="settings" element={<Settings />} />
-                    <Route path="feedback" element={<Feedback />} />
-                  </Route>
-                  <Route path="/editor" element={<EditorPage />} />
-                </Routes>
+                <Suspense fallback={<div className="min-h-screen bg-background flex items-center justify-center"><div className="animate-pulse text-muted-foreground">Loading...</div></div>}>
+                  <Routes>
+                    <Route path="/" element={<Layout onOpenPalette={() => setPaletteOpen(true)} />}>
+                      <Route index element={<Skills />} />
+                      <Route path="tools" element={<Tools />} />
+                      <Route path="presets" element={<Presets />} />
+                      <Route path="marketplace" element={<Marketplace />} />
+                      <Route path="settings" element={<Settings />} />
+                      <Route path="feedback" element={<Feedback />} />
+                    </Route>
+                    <Route path="/editor" element={<EditorPage />} />
+                  </Routes>
+                </Suspense>
                 <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
                 <ToastContainer toasts={toasts} onRemove={removeToast} />
               </SkillTranslationProvider>

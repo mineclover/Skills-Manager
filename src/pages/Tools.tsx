@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 
@@ -121,7 +121,8 @@ export function Tools() {
   // Initial load - uses cached data
   const loadTools = useCallback(async () => {
     try {
-      await fetchToolsAndSkills("detect_tools", "list_skills");
+      // Directly installed skills may not exist in the manager cache yet.
+      await fetchToolsAndSkills("detect_tools", "refresh_skills");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -568,14 +569,9 @@ export function Tools() {
     }
   }, [reloadTools, t]);
 
-  // Track whether this mount had cached data. If so, skip the automatic
-  // loadTools() — the cache was just populated moments ago. Background Tauri
-  // calls would return identical data with new references, causing wasteful
-  // re-renders. User can click refresh for fresh data.
-  const hadCacheOnMountRef = useRef(toolsPageCache !== null);
-
+  // Render cached data immediately, then refresh it in the background so
+  // skills installed outside the manager are not hidden until a manual click.
   useEffect(() => {
-    if (hadCacheOnMountRef.current) return;
     loadTools();
   }, [loadTools]);
 
@@ -640,8 +636,19 @@ export function Tools() {
   );
 
   const skillIds = useMemo(
-    () => skills.map((skill) => skill.instance_id),
-    [skills],
+    () => {
+      if (!toolEditorTool || toolEditorTool.detected) {
+        return skills.map((skill) => skill.instance_id);
+      }
+
+      // A disabled/undetected manager integration can still own directly
+      // installed skills. Keep those rows actionable without exposing every
+      // global skill as if the provider were available.
+      return skills
+        .filter((skill) => skill.scope === "tool" && skill.tool_id === toolEditorTool.id)
+        .map((skill) => skill.instance_id);
+    },
+    [skills, toolEditorTool],
   );
 
   const toolSkillEnabledMap = useMemo(() => {
@@ -727,18 +734,16 @@ export function Tools() {
       return [];
     }
 
-    const shouldDisable = !toolEditorTool.detected || !toolEditorTool.config.enabled;
+    // The manager toggle controls global sync behavior, not whether the
+    // tool's own installed Skills can be managed.
+    const shouldDisable = !toolEditorTool.detected && toolEditorOrderedSkillIds.length === 0;
 
     return toolEditorFilteredSkillIds.map((skillId) => {
       const isEnabled = toolSkillEnabledMap[skillId] ?? false;
       const toggleKey = `${toolEditorTool.id}:${skillId}`;
       const isToggling = togglingSkill === toggleKey;
       const isDisabled = toolEditorIsBulkToggling || isToggling || shouldDisable;
-      const tooltip = !toolEditorTool.detected
-        ? t("skills.toolNotDetected")
-        : !toolEditorTool.config.enabled
-          ? t("tools.skillsManageDisabled")
-          : undefined;
+      const tooltip = !toolEditorTool.detected ? t("skills.toolNotDetected") : undefined;
 
       return {
         id: skillId,
@@ -746,7 +751,7 @@ export function Tools() {
         enabled: isEnabled,
         disabled: isDisabled,
         tooltip,
-        dimmed: !toolEditorTool.detected,
+        dimmed: !toolEditorTool.config.enabled && !isEnabled,
       };
     });
   }, [
@@ -797,12 +802,13 @@ export function Tools() {
           : null
       : null;
     const iconUrl = customIconSrc || getToolIconUrl(tool.id);
-    const manageSkillsDisabled = !tool.detected || !tool.config.enabled;
+    const hasDirectSkills = skills.some(
+      (skill) => skill.scope === "tool" && skill.tool_id === tool.id,
+    );
+    const manageSkillsDisabled = !tool.detected && !hasDirectSkills;
     const manageSkillsTitle = !tool.detected
-      ? t("skills.toolNotDetected")
-      : !tool.config.enabled
-        ? t("tools.skillsManageDisabled")
-        : t("tools.manageSkills");
+      ? hasDirectSkills ? t("tools.manageDirectSkills") : t("skills.toolNotDetected")
+      : t("tools.manageSkills");
 
     return (
       <div
@@ -891,6 +897,19 @@ export function Tools() {
                   border: '1px solid var(--border)',
                 }}>
                   CLI
+                </span>
+              )}
+              {hasDirectSkills && (
+                <span style={{
+                  fontSize: '11px',
+                  fontWeight: 500,
+                  padding: '2px 8px',
+                  borderRadius: '6px',
+                  backgroundColor: 'var(--primary-tint)',
+                  color: 'var(--primary)',
+                  border: '1px solid var(--primary-tint-border)',
+                }}>
+                  {t("tools.directSkills")}
                 </span>
               )}
               {isCustom && (

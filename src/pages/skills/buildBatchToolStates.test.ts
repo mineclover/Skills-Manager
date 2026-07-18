@@ -115,3 +115,22 @@ test("getNextBatchToolEnabledState treats partial coverage as an enable action",
   assert.equal(getNextBatchToolEnabledState({ toolId: "claude", selectedCount: 3, enabledCount: 3, state: "all" }), false);
   assert.equal(getNextBatchToolEnabledState({ toolId: "claude", selectedCount: 3, enabledCount: 0, state: "none" }), true);
 });
+
+test("buildBatchToolStateSummaries only counts a direct tool skill for its owner", () => {
+  const direct: Skill = {
+    ...createSkill("direct", { codex: true }),
+    instance_id: "tool:codex:direct",
+    scope: "tool",
+    tool_id: "codex",
+  };
+
+  const summaries = buildBatchToolStateSummaries(
+    [createSkillItem(direct)],
+    [direct],
+    [createTool("claude"), createTool("codex")],
+  );
+
+  assert.equal(summaries.claude.selectedCount, 0);
+  assert.equal(summaries.codex.selectedCount, 1);
+  assert.equal(summaries.codex.enabledCount, 1);
+});

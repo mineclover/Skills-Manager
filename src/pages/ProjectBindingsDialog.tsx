@@ -274,7 +274,7 @@ export function ProjectBindingsDialog({
                     lineHeight: 1.5,
                   }}
                 >
-                  {pendingProjectBinding.skills_dir}
+                  {pendingProjectBinding.root_path ?? pendingProjectBinding.skills_dir}
                 </code>
               </div>
             </div>
@@ -432,7 +432,7 @@ export function ProjectBindingsDialog({
                             whiteSpace: "nowrap",
                           }}
                         >
-                          {project.skills_dir}
+                          {project.root_path ?? project.skills_dir}
                         </div>
                       </div>
                     </div>

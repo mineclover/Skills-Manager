@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { ScopeSearchField } from "@/components/ScopeSearchField";
-import { useActionsTarget } from "@/components/PageHeaderContext";
+import { useActionsTarget, usePageHeaderState } from "@/components/PageHeaderContext";
+import { useTranslation } from "@/i18n";
 
 interface TopBarProps {
   onOpenPalette: () => void;
@@ -9,6 +10,8 @@ interface TopBarProps {
 export function TopBar({ onOpenPalette }: TopBarProps) {
   const actionsSlotRef = useRef<HTMLDivElement | null>(null);
   const { registerActionsTarget } = useActionsTarget();
+  const { title } = usePageHeaderState();
+  const { t } = useTranslation();
 
   // Register the actions slot as the portal target for PageHeader actions.
   useEffect(() => {
@@ -34,20 +37,40 @@ export function TopBar({ onOpenPalette }: TopBarProps) {
         cursor: "grab",
       }}
     >
-      {/* Left spacer */}
-      <div style={{ flex: 1, minWidth: 0 }} />
+      <div
+        data-tauri-drag-region
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          flex: 1,
+          minWidth: 0,
+        }}
+      >
+        <span style={{ color: "var(--ember)", fontSize: 13 }}>✦</span>
+        <span
+          style={{
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            color: "var(--foreground)",
+            fontSize: 12,
+            fontWeight: 650,
+          }}
+        >
+          {title || t("topbar.brand")}
+        </span>
+      </div>
 
       {/* Center scope search — the field shows the current page as a chip */}
       <ScopeSearchField onOpenPalette={onOpenPalette} />
 
-      {/* Right spacer — mirrors the left spacer so the search field stays
-          visually centered when actions width changes between pages. */}
-      <div style={{ flex: 1, minWidth: 0 }} />
-
       {/* Page actions — portalled here by the active page's <PageHeader/> */}
       <div
         ref={actionsSlotRef}
-        style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, minHeight: 28 }}
+        aria-label={title || t("topbar.brand")}
+        style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, justifyContent: "flex-end", minWidth: 0, minHeight: 28 }}
       />
     </header>
   );

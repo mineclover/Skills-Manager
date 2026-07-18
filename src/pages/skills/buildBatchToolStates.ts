@@ -39,8 +39,11 @@ export function buildBatchToolStateSummaries(
 
   return Object.fromEntries(
     tools.map((tool) => {
-      const selectedCount = uniqueSkills.size;
-      const enabledCount = [...uniqueSkills.values()].filter((skill) => Boolean(skill.enabled[tool.id])).length;
+      const manageableSkills = [...uniqueSkills.values()].filter(
+        (skill) => skill.scope !== "tool" || skill.tool_id === tool.id,
+      );
+      const selectedCount = manageableSkills.length;
+      const enabledCount = manageableSkills.filter((skill) => Boolean(skill.enabled[tool.id])).length;
       const state: BatchToolCoverageState = selectedCount === 0
         ? "none"
         : enabledCount === 0
