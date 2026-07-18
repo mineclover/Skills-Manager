@@ -1,0 +1,4 @@
+interface:
+  display_name: "Skills Manager Tauri"
+  short_description: "Rust and Tauri backend implementation"
+  default_prompt: "Use $skills-manager-tauri to implement backend changes with shared services, safe filesystem behavior, and Rust tests."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Skills Manager Orca"
+  short_description: "Safe Orca runtime integration"
+  default_prompt: "Use $skills-manager-orca to inspect or extend Orca integration, shared agents directories, and read-only runtime capabilities."

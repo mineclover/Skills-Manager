@@ -1,0 +1,4 @@
+interface:
+  display_name: "Skills Manager Testing"
+  short_description: "Provider binding and parity verification"
+  default_prompt: "Use $skills-manager-testing to design and run focused backend, frontend, fixture, and manual verification for Skills Manager."

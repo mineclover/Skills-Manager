@@ -1,0 +1,14 @@
+[plugins."skills-manager-architecture"]
+enabled = true
+
+[plugins."skills-manager-orca"]
+enabled = true
+
+[plugins."skills-manager-tauri"]
+enabled = true
+
+[plugins."skills-manager-testing"]
+enabled = true
+
+[plugins."skills-manager-ui"]
+enabled = true
