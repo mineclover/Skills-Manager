@@ -742,16 +742,18 @@ export function Skills() {
     }
   }, [addToast, selectedProjectId]);
 
-  const loadProviderInventory = useCallback(async () => {
+  const loadProviderInventory = useCallback(async (projectId = selectedProjectId) => {
     try {
-      const inventory = await invoke<SkillProviderInventory>("list_skill_providers");
+      const inventory = await invoke<SkillProviderInventory>("list_skill_providers", {
+        projectId,
+      });
       setProviderInventory(inventory);
     } catch (err) {
       // Provider inventory is supplementary; keep the skill list usable when
       // an integration is unavailable or an older backend is running.
       console.warn("Failed to load provider inventory", err);
     }
-  }, []);
+  }, [selectedProjectId]);
 
   const loadProviderBindings = useCallback(async (projectId = selectedProjectId) => {
     try {
@@ -786,7 +788,7 @@ export function Skills() {
       setSkillPackages(skillPackagesResult);
       setConfig(configResult);
       setTools(toolsResult);
-      void loadProviderInventory();
+      void loadProviderInventory(selectedProjectId);
       void loadProviderBindings(selectedProjectId);
       addToast(t("common.refreshSuccess"), "success");
     } catch (err) {
@@ -808,11 +810,12 @@ export function Skills() {
       setSkillPackages(skillPackagesResult);
       setConfig(configResult);
       setTools(toolsResult);
+      void loadProviderInventory(selectedProjectId);
       void loadProviderBindings(selectedProjectId);
     } catch (err) {
       addToast(err instanceof Error ? err.message : String(err), "error");
     }
-  }, [addToast, loadProviderBindings, selectedProjectId]);
+  }, [addToast, loadProviderBindings, loadProviderInventory, selectedProjectId]);
 
   const handleScopeChange = useCallback((projectId: string | null) => {
     setSelectedProjectId(projectId);
@@ -829,7 +832,7 @@ export function Skills() {
   // skills installed outside the manager are not hidden until a manual click.
   useEffect(() => {
     loadData();
-    void loadProviderInventory();
+    void loadProviderInventory(selectedProjectId);
     void loadProviderBindings();
   }, [loadData, loadProviderBindings, loadProviderInventory]);
 

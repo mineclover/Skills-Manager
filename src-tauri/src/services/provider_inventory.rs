@@ -15,9 +15,9 @@ use crate::services::{
 pub struct ProviderInventoryService;
 
 impl ProviderInventoryService {
-    pub fn list() -> Result<SkillProviderInventory, String> {
+    pub fn list(project_id: Option<&str>) -> Result<SkillProviderInventory, String> {
         let config = ConfigManager::new().load()?;
-        let skills = ScannerService::scan_scoped_skills(&config)?;
+        let skills = ScannerService::scan_skills_for_scope(&config, project_id)?;
         Ok(Self::list_with_skills(&config, &skills))
     }
 

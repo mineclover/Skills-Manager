@@ -47,6 +47,7 @@ enum Command {
         json: bool,
     },
     Providers {
+        project_id: Option<String>,
         json: bool,
     },
     Bindings {
@@ -191,7 +192,7 @@ fn usage() {
          skills-manager-inspect project add --path <directory> [--name <name>] [--json]\n\
          skills-manager-inspect project use --id <project-id> [--json]\n\
          skills-manager-inspect project remove --id <project-id> [--json]\n\
-         skills-manager-inspect providers [--json]\n\
+         skills-manager-inspect providers [--project <id>] [--json]\n\
          skills-manager-inspect bindings [--project <id>] [--provider <id>] [--skill <instance-id>] [--json]\n\
          skills-manager-inspect binding list [--project <id>] [--provider <id>] [--skill <instance-id>] [--json]\n\
          skills-manager-inspect skill preview --id <instance-id> --tool <tool-id> --enable|--disable [--project <id>] [--json]\n\
@@ -359,15 +360,20 @@ fn parse_command() -> Result<Command, String> {
             } else {
                 1
             };
+            let mut project_id = None;
             let mut json = false;
-            for value in &args[offset..] {
-                if value == "--json" {
-                    json = true;
-                } else {
-                    return Err(format!("unknown provider option: {value}"));
+            let mut index = offset;
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--project" => {
+                        project_id = Some(required_option(&args, &mut index, "--project")?)
+                    }
+                    "--json" => json = true,
+                    value => return Err(format!("unknown provider option: {value}")),
                 }
+                index += 1;
             }
-            Ok(Command::Providers { json })
+            Ok(Command::Providers { project_id, json })
         }
         "bindings" | "binding" => {
             let offset = if args[0] == "binding" {
@@ -1377,10 +1383,10 @@ fn main() {
             WorkspaceService::remove_project(&project_id)
                 .and_then(|config| print_project_list(&config, json))
         }
-        Command::Providers { json } => {
+        Command::Providers { project_id, json } => {
             let config = load_persisted_config();
             let inventory = config.and_then(|config| {
-                let skills = ScannerService::scan_scoped_skills(&config)?;
+                let skills = ScannerService::scan_skills_for_scope(&config, project_id.as_deref())?;
                 Ok(ProviderInventoryService::list_with_skills(&config, &skills))
             });
             inventory.and_then(|inventory| {

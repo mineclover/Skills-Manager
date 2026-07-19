@@ -2,8 +2,8 @@ use crate::models::{SkillBinding, SkillOperationPreview, SkillProviderInventory}
 use crate::services::ProviderInventoryService;
 
 #[tauri::command]
-pub fn list_skill_providers() -> Result<SkillProviderInventory, String> {
-    ProviderInventoryService::list()
+pub fn list_skill_providers(project_id: Option<String>) -> Result<SkillProviderInventory, String> {
+    ProviderInventoryService::list(project_id.as_deref())
 }
 
 #[tauri::command]
