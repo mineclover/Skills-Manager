@@ -54,6 +54,24 @@ If you encounter permission issues when syncing skills (symbolic link creation e
 2. **Setup**: On first launch, the app will guide you to select your skills storage directory.
 3. **Sync**: The app automatically detects installed AI tools (like Claude Code) and links your skills.
 
+## 🔎 Read-only Inspector
+
+The Rust inspector exposes the same control-plane inventory used by the UI, which is useful for checking global and project-specific state without opening the app:
+
+```bash
+# Global state (default)
+npm run inspect -- inspect --json
+npm run inspect -- providers --json
+npm run inspect -- bindings --json
+
+# Explicit project state
+npm run inspect -- inspect --project <project-id> --json
+npm run inspect -- providers --project <project-id> --json
+npm run inspect -- bindings --project <project-id> --json
+```
+
+Use `--help` for the complete read-only and mutation command list. Commands that can change skill state require the explicit `--confirm-shared` flag when a shared root would be affected.
+
 ## ❗ Linux Troubleshooting
 
 If you encounter a **blank white screen** when launching the `.AppImage` on Linux (especially in virtual machines like VMware/VirtualBox), it is likely a WebKitGTK hardware acceleration issue.
