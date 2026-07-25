@@ -58,9 +58,28 @@ export interface InstalledSkillPackage {
 export interface SkillMetadata {
   tags: string[];
   comment?: string | null;
+  favorited_at?: number | null;
 }
 
 export type SkillMetadataMap = Record<string, SkillMetadata>;
+
+export interface MarketplaceFavoriteMeta {
+  favorited_at: number;
+  name: string;
+  description?: string | null;
+  source_id: string;
+  source_name: string;
+  repo_url?: string | null;
+  skill_path?: string | null;
+  external_url?: string | null;
+  install_count?: number | null;
+  tags: string[];
+  clawhub_slug?: string | null;
+  clawhub_owner?: string | null;
+  clawhub_version?: string | null;
+}
+
+export type MarketplaceFavoriteMap = Record<string, MarketplaceFavoriteMeta>;
 
 export interface ToolConfig {
   enabled: boolean;
@@ -188,6 +207,37 @@ export interface SkillOperationReport {
 export type VaultBackupConsent = "unknown" | "granted" | "denied";
 export type TelemetryConsent = "unknown" | "granted" | "denied";
 
+// Risk scan
+export type RiskScanMode = "off" | "basic" | "deep";
+export type RiskLevel = "safe" | "low" | "medium" | "high" | "critical";
+export type RiskCategory = "destructive" | "network" | "privilege" | "payload";
+
+export interface RiskLocation {
+  file: string;
+  line: number;
+}
+
+export interface RiskFinding {
+  rule_id: string;
+  category: RiskCategory;
+  level: RiskLevel;
+  confidence: number;
+  message: string;
+  evidence: string;
+  location: RiskLocation;
+  source: "rule" | "llm";
+}
+
+export interface SkillRiskReport {
+  instance_id: string;
+  level: RiskLevel;
+  findings: RiskFinding[];
+  scanned_at: number;
+  scanner_version: string;
+  mode: RiskScanMode;
+  llm_reviewed: boolean;
+}
+
 // User preferences for the application
 export interface UserPreferences {
   // Appearance
@@ -210,9 +260,17 @@ export interface UserPreferences {
   remove_links_when_disabling_tool: boolean;
   vault_backup_consent: VaultBackupConsent;
   telemetry_consent: TelemetryConsent;
+  skill_usage_monitor: boolean;
+  risk_scan_mode: RiskScanMode;
 
   // Marketplace auth
   github_token?: string | null;
+}
+
+export interface SkillUsageStats {
+  total: number;
+  by_tool: Record<string, number>;
+  last_called_at: number | null;
 }
 
 export interface AuthProfile {
@@ -329,6 +387,7 @@ export interface AppConfig {
   tools: Record<string, ToolConfig>;
   custom_tools?: Record<string, CustomToolConfig>;
   skill_metadata?: SkillMetadataMap;
+  marketplace_favorites?: MarketplaceFavoriteMap;
   preferences?: UserPreferences;
   marketplace_sources?: MarketplaceSource[];
   poll_client_state?: PollClientStateConfig | null;
@@ -434,7 +493,7 @@ export interface MarketplaceSource {
   id: string;
   name: string;
   url: string;
-  source_type: "github_repo" | "api" | "crawler" | "manual" | "unknown";
+  source_type: "github_repo" | "api" | "crawler" | "manual" | "unknown" | "clawhub_api";
   enabled: boolean;
   builtin: boolean;
   api_key?: string | null;
@@ -457,6 +516,9 @@ export interface MarketplaceSkill {
   remote_revision?: string | null;
   tags: string[];
   install_status: "not_installed" | "installed" | "update_available";
+  clawhub_slug?: string | null;
+  clawhub_owner?: string | null;
+  clawhub_version?: string | null;
 }
 
 export interface MarketplaceSkillsResponse {
@@ -471,6 +533,13 @@ export interface SkillFileNode {
   download_url: string | null;
   sha?: string | null;
   children?: SkillFileNode[];
+}
+
+/** fetch_clawhub_skill_files 返回结构：文件树 + 解析出的 owner/version */
+export interface ClawhubSkillFilesResponse {
+  tree: SkillFileNode;
+  resolved_owner?: string | null;
+  resolved_version?: string | null;
 }
 
 export interface InstallResult {
@@ -570,4 +639,66 @@ export interface SkillActivationPreset {
   name: string;
   description?: string | null;
   activations: PresetActivation[];
+}
+
+// Skill import/export (cross-device sync)
+export interface ExportedSkillMeta {
+  id: string;
+  name: string;
+  description: string | null;
+  version: string;
+  folder: string;
+  enabled_tools: string[];
+  tags: string[];
+  favorited_at: number | null;
+}
+
+export interface ExportManifest {
+  format_version: number;
+  exported_at: number;
+  app_version: string;
+  skills: ExportedSkillMeta[];
+}
+
+export interface ImportConflict {
+  skill_id: string;
+  skill_name: string;
+  local_path: string;
+}
+
+export interface ImportPreview {
+  manifest: ExportManifest;
+  conflicts: ImportConflict[];
+}
+
+export type ConflictStrategy = "skip" | "overwrite" | "rename";
+
+export interface ImportResolution {
+  skill_id: string;
+  strategy: ConflictStrategy;
+}
+
+export interface ImportedSkillRecord {
+  original_id: string;
+  final_id: string;
+  name: string;
+}
+
+export interface RenamedSkillRecord {
+  original_id: string;
+  new_id: string;
+  name: string;
+}
+
+export interface ImportFailure {
+  skill_id: string;
+  message: string;
+}
+
+export interface ImportResult {
+  imported: ImportedSkillRecord[];
+  skipped: string[];
+  overwritten: string[];
+  renamed: RenamedSkillRecord[];
+  failed: ImportFailure[];
 }

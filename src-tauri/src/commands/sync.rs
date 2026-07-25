@@ -36,6 +36,9 @@ fn should_report_sync_issue(should_be_enabled: bool, current_status: LinkStatus)
         (true, LinkStatus::Valid) => false,
         (false, LinkStatus::Missing) => false,
         (false, LinkStatus::WrongTarget) => false,
+        // NotALink means a real directory/file exists that we did not create.
+        // Never treat it as something to "fix" — that would risk deleting user content.
+        (false, LinkStatus::NotALink) => false,
         _ => true,
     }
 }
@@ -206,6 +209,7 @@ mod tests {
     #[test]
     fn should_report_sync_issue_ignores_wrong_target_for_disabled_skill() {
         assert!(!should_report_sync_issue(false, LinkStatus::WrongTarget));
-        assert!(should_report_sync_issue(false, LinkStatus::NotALink));
+        // NotALink is external content we must never touch
+        assert!(!should_report_sync_issue(false, LinkStatus::NotALink));
     }
 }

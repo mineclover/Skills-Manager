@@ -2,7 +2,6 @@
 use crate::models::home_dir;
 use crate::models::{DetectedEditor, EDITOR_DEFINITIONS};
 use std::env;
-#[cfg(target_os = "macos")]
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -97,6 +96,47 @@ pub fn detect_editors() -> Vec<DetectedEditor> {
         .collect()
 }
 
+/// On Windows, verify that a candidate file is a real executable:
+/// - Reject 0-byte files: WindowsApps app execution aliases are 0-byte stubs
+///   that fail with ERROR_BAD_EXE_FORMAT (os error 193) when stale or disabled.
+/// - Reject `.exe` files without the MZ magic header (e.g. renamed scripts).
+#[cfg(target_os = "windows")]
+fn is_valid_windows_executable(path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+    if metadata.len() == 0 {
+        return false;
+    }
+    if path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
+    {
+        use std::io::Read;
+        let Ok(mut file) = fs::File::open(path) else {
+            return false;
+        };
+        let mut magic = [0u8; 2];
+        return file.read_exact(&mut magic).is_ok() && magic == *b"MZ";
+    }
+    true
+}
+
+/// Build a Windows `Command` for the given program, wrapping `.cmd`/`.bat`
+/// scripts in `cmd /C` since they cannot be spawned directly.
+#[cfg(target_os = "windows")]
+fn build_windows_command(program: &str) -> Command {
+    let lower = program.to_lowercase();
+    if lower.ends_with(".cmd") || lower.ends_with(".bat") {
+        let mut c = Command::new("cmd");
+        c.arg("/C");
+        c.arg(program);
+        c
+    } else {
+        Command::new(program)
+    }
+}
+
 fn get_command_path(cmd: &str) -> Option<String> {
     // Optimized: Check PATH environment variable first
     if let Ok(path_var) = env::var("PATH") {
@@ -106,15 +146,19 @@ fn get_command_path(cmd: &str) -> Option<String> {
                 // Check with extensions on Windows
                 let extensions = [".exe", ".cmd", ".bat"];
 
-                // Also check without extension if it might be a full name
-                let direct = path_str.join(cmd);
-                if direct.is_file() {
-                    return Some(direct.to_string_lossy().to_string());
+                // Only match without extension if the command already includes
+                // one (e.g. "code.cmd"). Extension-less files on Windows (shell
+                // scripts, shims) are not directly executable (os error 193).
+                if cmd.contains('.') {
+                    let direct = path_str.join(cmd);
+                    if direct.is_file() && is_valid_windows_executable(&direct) {
+                        return Some(direct.to_string_lossy().to_string());
+                    }
                 }
 
                 for ext in extensions {
                     let path_with_ext = path_str.join(format!("{}{}", cmd, ext));
-                    if path_with_ext.is_file() {
+                    if path_with_ext.is_file() && is_valid_windows_executable(&path_with_ext) {
                         return Some(path_with_ext.to_string_lossy().to_string());
                     }
                 }
@@ -175,13 +219,13 @@ fn get_command_path(cmd: &str) -> Option<String> {
                     output_str
                         .lines()
                         .map(|s| s.trim())
-                        .find(|s| {
+                        .filter(|s| {
                             let lower = s.to_lowercase();
                             lower.ends_with(".exe")
                                 || lower.ends_with(".cmd")
                                 || lower.ends_with(".bat")
                         })
-                        .or_else(|| output_str.lines().map(|s| s.trim()).next())
+                        .find(|s| is_valid_windows_executable(Path::new(s)))
                         .map(|s| s.to_string())
                 } else {
                     None
@@ -406,17 +450,7 @@ pub fn open_in_external_editor(editor_id: &str, path: &str) -> Result<(), String
     let resolved_program = get_command_path(cmd_program).unwrap_or_else(|| cmd_program.to_string());
 
     #[cfg(target_os = "windows")]
-    let mut cmd = {
-        let lower = resolved_program.to_lowercase();
-        if lower.ends_with(".cmd") || lower.ends_with(".bat") {
-            let mut c = Command::new("cmd");
-            c.arg("/C");
-            c.arg(&resolved_program);
-            c
-        } else {
-            Command::new(&resolved_program)
-        }
-    };
+    let mut cmd = build_windows_command(&resolved_program);
 
     #[cfg(not(target_os = "windows"))]
     let mut cmd = Command::new(&resolved_program);
@@ -441,6 +475,33 @@ pub fn open_in_external_editor(editor_id: &str, path: &str) -> Result<(), String
         cmd.env_remove("LD_LIBRARY_PATH");
     }
 
-    cmd.spawn().map_err(|e| e.to_string())?;
-    Ok(())
+    #[cfg(target_os = "windows")]
+    {
+        match cmd.spawn() {
+            Ok(_) => Ok(()),
+            Err(e) if e.raw_os_error() == Some(193) && resolved_program != cmd_program => {
+                // ERROR_BAD_EXE_FORMAT: the resolved path is not a valid Win32
+                // executable (e.g. a stale WindowsApps alias that slipped past
+                // validation). Retry with the bare command name and let
+                // CreateProcess perform its own resolution.
+                let mut retry = build_windows_command(cmd_program);
+                if editor_id != "terminal" {
+                    retry.creation_flags(0x08000000);
+                }
+                for part in parts.iter().skip(1) {
+                    retry.arg(part);
+                }
+                retry.arg(path);
+                retry.spawn().map_err(|e| e.to_string())?;
+                Ok(())
+            }
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        cmd.spawn().map_err(|e| e.to_string())?;
+        Ok(())
+    }
 }

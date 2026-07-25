@@ -2,7 +2,14 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 
-import { Skill, SkillOperationPreview, SkillOperationReport, Tool } from "@/types";
+import {
+  AppConfig,
+  Skill,
+  SkillMetadataMap,
+  SkillOperationPreview,
+  SkillOperationReport,
+  Tool,
+} from "@/types";
 import { useTranslation } from "@/i18n";
 import { usePageSearch } from "@/components/PageHeaderContext";
 import { getToolIconUrl, GenericToolIcon } from "@/assets/tools";
@@ -30,6 +37,7 @@ import {
   getToolBulkToggleTargets,
 } from "./tools/bulkToggleToolSkills";
 import { mergeSkillOperationReports } from "./tools/mergeSkillOperationReports";
+import { getSkillTagsForSkill } from "./skills/skillTags";
 
 function getSkillDisplayName(skillIdentity: string, skills: Skill[]): string {
   const skill = skills.find((item) => item.instance_id === skillIdentity) ?? skills.find((item) => item.id === skillIdentity);
@@ -42,6 +50,7 @@ function getSkillDisplayName(skillIdentity: string, skills: Skill[]): string {
 interface ToolsPageCache {
   tools: Tool[];
   skills: Skill[];
+  skillMetadata?: SkillMetadataMap;
 }
 let toolsPageCache: ToolsPageCache | null = null;
 
@@ -50,6 +59,7 @@ export function Tools() {
   const { query: searchQuery } = usePageSearch(t("tools.searchPlaceholder"));
   const [tools, setTools] = useState<Tool[]>(() => toolsPageCache?.tools ?? []);
   const [skills, setSkills] = useState<Skill[]>(() => toolsPageCache?.skills ?? []);
+  const [skillMetadata, setSkillMetadata] = useState<SkillMetadataMap | undefined>(() => toolsPageCache?.skillMetadata);
   const [error, setError] = useState<string | null>(null);
   const [initialLoading, setInitialLoading] = useState(() => toolsPageCache === null);
   const [refreshing, setRefreshing] = useState(false);
@@ -111,15 +121,17 @@ export function Tools() {
     toolsCommand: "detect_tools" | "refresh_tools",
   ) => {
     setError(null);
-    const [toolsResult, skillsResult] = await Promise.all([
+    const [toolsResult, skillsResult, configResult] = await Promise.all([
       invoke<Tool[]>(toolsCommand),
       // Tools manages the global/direct agent view. Project-scoped reads are
       // explicit on Skills and Presets, so this page must not follow the
       // persisted active project implicitly.
       invoke<Skill[]>("scan_skills_for_scope", { projectId: null }),
+      invoke<AppConfig>("get_config"),
     ]);
     setTools(toolsResult);
     setSkills(skillsResult);
+    setSkillMetadata(configResult.skill_metadata);
     setIconFallbackStage({});
   }, []);
 
@@ -637,8 +649,8 @@ export function Tools() {
   // next mount can render immediately without a PageLoader flash.
   useEffect(() => {
     if (initialLoading) return;
-    toolsPageCache = { tools, skills };
-  }, [initialLoading, tools, skills]);
+    toolsPageCache = { tools, skills, skillMetadata };
+  }, [initialLoading, tools, skills, skillMetadata]);
 
   useEffect(() => {
     if (!formOpen) {
@@ -743,9 +755,15 @@ export function Tools() {
       }
 
       const displayName = getSkillDisplayName(skillId, skills).toLowerCase();
-      return displayName.includes(normalizedQuery) || skillId.toLowerCase().includes(normalizedQuery);
+      if (displayName.includes(normalizedQuery) || skillId.toLowerCase().includes(normalizedQuery)) {
+        return true;
+      }
+      const skill = skills.find((s) => s.instance_id === skillId);
+      const tags = skill ? getSkillTagsForSkill(skill, skillMetadata) : [];
+      return tags.some((tag) => tag.toLowerCase().includes(normalizedQuery));
     });
   }, [
+    skillMetadata,
     skills,
     toolEditorEnabledOnly,
     toolEditorOrderedSkillIds,
@@ -803,9 +821,13 @@ export function Tools() {
       const isDisabled = toolEditorIsBulkToggling || isToggling || shouldDisable;
       const tooltip = !toolEditorTool.detected ? t("skills.toolNotDetected") : undefined;
 
+      const skill = skills.find((s) => s.instance_id === skillId);
+      const tags = skill ? getSkillTagsForSkill(skill, skillMetadata) : [];
+
       return {
         id: skillId,
         label: getSkillDisplayName(skillId, skills),
+        tags,
         enabled: isEnabled,
         disabled: isDisabled,
         tooltip,
@@ -813,6 +835,7 @@ export function Tools() {
       };
     });
   }, [
+    skillMetadata,
     skills,
     t,
     togglingSkill,
@@ -821,6 +844,16 @@ export function Tools() {
     toolEditorTool,
     toolSkillEnabledMap,
   ]);
+
+  const handleTagBulkToggle = useCallback((tool: Tool, tag: string) => {
+    const targetSkillIds = toolEditorFilteredSkillIds.filter((skillId) => {
+      const skill = skills.find((s) => s.instance_id === skillId);
+      if (!skill) return false;
+      return getSkillTagsForSkill(skill, skillMetadata).includes(tag);
+    });
+    if (targetSkillIds.length === 0) return;
+    handleBulkToggleToolSkills(tool, targetSkillIds);
+  }, [handleBulkToggleToolSkills, skillMetadata, skills, toolEditorFilteredSkillIds]);
 
   const handleIconError = useCallback((toolId: string) => {
     setIconFallbackStage(prev => {
@@ -1500,10 +1533,21 @@ export function Tools() {
           items={toolEditorItems}
           emptyLabel={t("tools.noSkillsInFilter")}
           doneLabel={t("common.done")}
+          tagBulkToggleLabel={(tag, enabled, total) =>
+            t("tools.tagBulkToggleEnable")
+              .replace("{tag}", tag)
+              .replace("{enabled}", String(enabled))
+              .replace("{total}", String(total))}
+          tagBulkToggleAllEnabledLabel={(tag, enabled, total) =>
+            t("tools.tagBulkToggleDisable")
+              .replace("{tag}", tag)
+              .replace("{enabled}", String(enabled))
+              .replace("{total}", String(total))}
           onQueryChange={setToolEditorQuery}
           onEnabledOnlyChange={setToolEditorEnabledOnly}
           onToggle={(skillId, enabled) => handleToggleSkillForTool(toolEditorTool, skillId, enabled)}
           onBulkToggle={() => handleBulkToggleToolSkills(toolEditorTool, toolEditorFilteredSkillIds)}
+          onTagBulkToggle={(tag) => handleTagBulkToggle(toolEditorTool, tag)}
           onClose={closeToolSkillEditor}
         />
       )}

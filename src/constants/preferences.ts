@@ -14,5 +14,7 @@ export const defaultPreferences: UserPreferences = {
   remove_links_when_disabling_tool: false,
   vault_backup_consent: "unknown",
   telemetry_consent: "unknown",
+  skill_usage_monitor: true,
+  risk_scan_mode: "off",
   github_token: "",
 };

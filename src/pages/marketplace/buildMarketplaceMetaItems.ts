@@ -1,17 +1,14 @@
 export interface MarketplaceMetaItem {
   key: string;
-  kind: "source" | "author" | "install_count";
+  kind: "author" | "install_count";
   label: string;
 }
 
 export function buildMarketplaceMetaItems(
-  sourceLabel: string,
   authorLabel?: string | null,
   installCountLabel?: string | null,
 ): MarketplaceMetaItem[] {
-  const items: MarketplaceMetaItem[] = [
-    { key: "source", kind: "source", label: sourceLabel },
-  ];
+  const items: MarketplaceMetaItem[] = [];
 
   if (authorLabel) {
     items.push({ key: "author", kind: "author", label: authorLabel });

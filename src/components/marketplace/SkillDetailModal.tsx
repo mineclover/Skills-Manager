@@ -6,11 +6,12 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { FileTree } from "@/components/editor/FileTree";
 import { InstallCountBadge } from "@/components/marketplace/InstallCountBadge";
-import { MarketplaceSkill, SkillFileNode, FileNode } from "@/types";
+import { MarketplaceSkill, SkillFileNode, FileNode, ClawhubSkillFilesResponse } from "@/types";
 import { useTranslation } from "@/i18n";
 import { useTheme } from "@/hooks/useTheme";
 import { useSkillTranslation, makeTranslationKey } from "@/hooks/useSkillTranslation";
 import { TranslateIconButton } from "@/components/translation/TranslateIconButton";
+import { FavoriteIconButton } from "@/components/favorites/FavoriteIconButton";
 import {
   MODAL_LAYER_Z_INDEX,
   MODAL_MAX_VIEWPORT_WIDTH,
@@ -26,6 +27,11 @@ interface SkillDetailModalProps {
   onClose: () => void;
   onInstall: (skill: MarketplaceSkill, event?: MouseEvent) => void;
   installing: boolean;
+  isFavorite: boolean;
+  onToggleFavorite: (skill: MarketplaceSkill) => void;
+  onTagClick?: (tag: string) => void;
+  /** clawhub skill 文件预览解析出 owner/version 后回调，供父组件补全 skill 元数据 */
+  onResolveClawhubMeta?: (skillId: string, owner: string, version: string) => void;
 }
 
 interface ParsedFrontmatter {
@@ -83,7 +89,7 @@ function clearFileContentCacheForTree(tree: SkillFileNode | null) {
   }
 }
 
-export function SkillDetailModal({ skill, onClose, onInstall, installing }: SkillDetailModalProps) {
+export function SkillDetailModal({ skill, onClose, onInstall, installing, isFavorite, onToggleFavorite, onTagClick, onResolveClawhubMeta }: SkillDetailModalProps) {
   const { t, language } = useTranslation();
   const { theme } = useTheme();
   const translation = useSkillTranslation();
@@ -101,8 +107,18 @@ export function SkillDetailModal({ skill, onClose, onInstall, installing }: Skil
   // Keep a ref to the latest file tree so the unmount cleanup can release the
   // associated file-content cache entries without stale-closure issues.
   const fileTreeRef = useRef<SkillFileNode | null>(null);
-  const canShowFiles = Boolean(skill.repo_url && skill.skill_path);
-  const externalUrl = skill.external_url || skill.repo_url;
+  // clawhub skill 的 owner 在列表端点不可用，文件预览时从详情端点解析后存入此 state。
+  const [resolvedClawhubOwner, setResolvedClawhubOwner] = useState<string | null>(
+    skill.clawhub_owner ?? null,
+  );
+  const canShowFiles = Boolean((skill.repo_url && skill.skill_path) || skill.clawhub_slug);
+  const externalUrl = (() => {
+    // clawhub skill 的外部链接需 owner + slug 构造：{origin}/{owner}/skills/{slug}
+    if (skill.clawhub_slug && resolvedClawhubOwner) {
+      return `https://clawhub.ai/${resolvedClawhubOwner}/skills/${skill.clawhub_slug}`;
+    }
+    return skill.external_url || skill.repo_url;
+  })();
   const isUpdateAvailable = skill.install_status === "update_available";
   const installCountLabel = formatInstallCountLabel(skill.install_count);
 
@@ -362,6 +378,42 @@ export function SkillDetailModal({ skill, onClose, onInstall, installing }: Skil
 
     async function loadFiles() {
       try {
+        if (skill.clawhub_slug) {
+          const cacheKey = makeSkillTreeCacheKey(
+            skill.clawhub_slug,
+            skill.clawhub_version ?? "",
+          );
+          const cachedTree = skillTreeCache.get(cacheKey);
+          if (cachedTree) {
+            if (!cancelled && requestId === previewRequestId.current) {
+              setFileTree(cachedTree);
+              setFilesLoading(false);
+            }
+            return;
+          }
+
+          setFileTree(null);
+          setFilesLoading(true);
+          const response = await invoke<ClawhubSkillFilesResponse>("fetch_clawhub_skill_files", {
+            slug: skill.clawhub_slug,
+            owner: skill.clawhub_owner,
+            version: skill.clawhub_version,
+          });
+          if (!cancelled && requestId === previewRequestId.current) {
+            const { tree: responseTree, resolved_owner, resolved_version } = response;
+            setBoundedCache(skillTreeCache, cacheKey, responseTree, SKILL_TREE_CACHE_MAX);
+            setFileTree(responseTree);
+            // 详情端点解析出的 owner/version 补全到本地 state 和父组件
+            if (resolved_owner) {
+              setResolvedClawhubOwner(resolved_owner);
+            }
+            if (resolved_owner && resolved_version && onResolveClawhubMeta) {
+              onResolveClawhubMeta(skill.id, resolved_owner, resolved_version);
+            }
+          }
+          return;
+        }
+
         if (!skill.repo_url || !skill.skill_path) {
           setFilesLoading(false);
           setFileTree(null);
@@ -533,6 +585,13 @@ export function SkillDetailModal({ skill, onClose, onInstall, installing }: Skil
                   <ExternalLink size={15} />
                 </span>
               )}
+              <FavoriteIconButton
+                favorited={isFavorite}
+                onClick={() => onToggleFavorite(skill)}
+                favoriteLabel={t("skills.favoriteAction")}
+                unfavoriteLabel={t("skills.unfavoriteAction")}
+                size={24}
+              />
               <TranslateIconButton
                 hasTranslation={cachedTranslation != null}
                 showingTranslation={showingTranslation}
@@ -553,18 +612,19 @@ export function SkillDetailModal({ skill, onClose, onInstall, installing }: Skil
                   {t("marketplace.author").replace("{author}", skill.author)}
                 </span>
               )}
-              <span style={{ fontSize: "12px", color: "var(--muted-foreground)" }}>
-                {t("marketplace.source").replace("{source}", skill.source_name)}
-              </span>
             </div>
             {skill.tags.length > 0 && (
               <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
                 {skill.tags.map((tag) => (
-                  <span
+                  <button
                     key={tag}
+                    type="button"
+                    disabled={!onTagClick}
+                    onClick={() => onTagClick?.(tag)}
                     style={{
                       fontSize: "11px",
                       fontWeight: 500,
+                      cursor: onTagClick ? "pointer" : "default",
                       color: "var(--primary)",
                       backgroundColor: "var(--primary-tint)",
                       padding: "3px 8px",
@@ -573,7 +633,7 @@ export function SkillDetailModal({ skill, onClose, onInstall, installing }: Skil
                     }}
                   >
                     {tag}
-                  </span>
+                  </button>
                 ))}
               </div>
             )}

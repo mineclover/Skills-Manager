@@ -185,7 +185,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
     const settingsItems: CommandItem[] = [
       { id: "set-general", label: t("commandPalette.settingGeneral"), meta: "SETTING", section: t("commandPalette.sectionSettings"), icon: "settings", action: () => goToSettingsSection("settings-general") },
       { id: "set-appearance", label: t("commandPalette.settingAppearance"), meta: "SETTING", section: t("commandPalette.sectionSettings"), icon: "settings", action: () => goToSettingsSection("settings-appearance") },
-      { id: "set-marketplace", label: t("commandPalette.settingMarketplace"), meta: "SETTING", section: t("commandPalette.sectionSettings"), icon: "settings", action: () => goToSettingsSection("settings-marketplace") },
+      { id: "set-github-token", label: t("commandPalette.settingGithubToken"), meta: "SETTING", section: t("commandPalette.sectionSettings"), icon: "settings", action: () => goToSettingsSection("settings-general") },
       { id: "set-llm", label: t("commandPalette.settingLlm"), meta: "SETTING", section: t("commandPalette.sectionSettings"), icon: "settings", action: () => goToSettingsSection("settings-llm") },
       { id: "set-account", label: t("commandPalette.settingAccount"), meta: "SETTING", section: t("commandPalette.sectionSettings"), icon: "settings", action: () => goToSettingsSection("settings-account") },
       { id: "set-about", label: t("commandPalette.settingAbout"), meta: "SETTING", section: t("commandPalette.sectionSettings"), icon: "settings", action: () => goToSettingsSection("settings-about") },

@@ -3,27 +3,30 @@ pub mod config;
 pub mod editor;
 pub mod marketplace;
 pub mod provider;
+pub mod risk;
 pub mod skill;
 pub mod skill_package;
 pub mod tool;
 pub mod update;
 
-pub use auth::{AuthProfile, AuthSession};
 pub use config::{
     builtin_skill_activation_presets, home_dir, is_builtin_skill_activation_preset_id, AppConfig,
-    CustomToolConfig, LlmProvider, PresetActivation, ProjectBinding, SkillActivationPreset,
-    SkillMetadata, ToolConfig,
+    CustomToolConfig, LlmProvider, MarketplaceFavoriteMeta, PresetActivation, ProjectBinding,
+    SkillActivationPreset, SkillMetadata, ToolConfig,
 };
 pub use editor::{DetectedEditor, EDITOR_DEFINITIONS};
 pub use marketplace::{
-    GitHubContent, InstallResult, InstallStatus, MarketplaceSkill, MarketplaceSkillsResponse,
-    MarketplaceSource, MarketplaceSyncResult, MarketplaceUpdateCheckResult, SkillFileNode,
-    SourceType,
+    ClawhubSkillFilesResponse, GitHubContent, InstallResult, InstallStatus, MarketplaceSkill,
+    MarketplaceSkillsResponse, MarketplaceSource, MarketplaceSyncResult,
+    MarketplaceUpdateCheckResult, SkillFileNode, SourceType,
 };
 pub use provider::{
     OrcaInventory, OrcaTopic, SkillBinding, SkillBindingImpact, SkillBindingState,
     SkillOperationAction, SkillOperationFailure, SkillOperationPreview, SkillOperationReport,
     SkillProvider, SkillProviderCapabilities, SkillProviderInventory, SkillProviderKind,
+};
+pub use risk::{
+    RiskCacheKey, RiskCategory, RiskFinding, RiskLevel, RiskLocation, RiskScanMode, SkillRiskReport,
 };
 pub use skill::{
     MarketplaceMeta, Skill, SkillScope, SkillSource, VaultMeta, DISABLED_TOOL_SKILL_SUFFIX,

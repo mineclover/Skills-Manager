@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::models::{
-    home_dir, AppConfig, InstallResult, InstallStatus, MarketplaceSkill, MarketplaceSkillsResponse,
-    MarketplaceSource, MarketplaceSyncResult, MarketplaceUpdateCheckResult, Skill, SkillFileNode,
-    SkillSource,
+    home_dir, AppConfig, ClawhubSkillFilesResponse, InstallResult, InstallStatus, MarketplaceSkill,
+    MarketplaceSkillsResponse, MarketplaceSource, MarketplaceSyncResult,
+    MarketplaceUpdateCheckResult, Skill, SkillFileNode, SkillSource,
 };
 use crate::services::marketplace::{
     derive_github_repo_and_skill_path, DIRECT_GITHUB_SOURCE_ID, DIRECT_GITHUB_SOURCE_NAME,
@@ -137,6 +137,9 @@ fn build_marketplace_skill_from_reference(
         remote_revision: reference.remote_revision,
         tags: Vec::new(),
         install_status: InstallStatus::NotInstalled,
+        clawhub_slug: None,
+        clawhub_owner: None,
+        clawhub_version: None,
     })
 }
 
@@ -217,6 +220,9 @@ fn expand_skill_group_reference(
                 remote_revision: None,
                 tags: Vec::new(),
                 install_status: InstallStatus::NotInstalled,
+                clawhub_slug: None,
+                clawhub_owner: None,
+                clawhub_version: None,
             }
         })
         .collect()
@@ -357,6 +363,9 @@ fn collect_installed_marketplace_skills(
                 remote_revision: meta.remote_revision.clone(),
                 tags: Vec::new(),
                 install_status: InstallStatus::Installed,
+                clawhub_slug: None,
+                clawhub_owner: None,
+                clawhub_version: None,
             })
         })
         .collect();
@@ -456,45 +465,6 @@ async fn merge_installed_marketplace_skills_into_page(
     prepend_missing_installed_marketplace_skills(response, hydrated_installed)
 }
 
-fn merge_remote_sources_into_config(
-    config: &mut AppConfig,
-    mut remote_sources: Vec<MarketplaceSource>,
-) -> Vec<MarketplaceSource> {
-    let enabled_map: HashMap<String, bool> = config
-        .marketplace_sources
-        .clone()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|source| (source.id, source.enabled))
-        .collect();
-
-    for source in &mut remote_sources {
-        source.enabled = enabled_map.get(&source.id).copied().unwrap_or(true);
-        source.builtin = true;
-        source.api_key = None;
-    }
-
-    config.marketplace_sources = Some(remote_sources.clone());
-    remote_sources
-}
-
-async fn load_marketplace_sources_for_runtime(
-    manager: &ConfigManager,
-    config: &mut AppConfig,
-) -> Vec<MarketplaceSource> {
-    match MarketplaceService::fetch_marketplace_sources().await {
-        Ok(remote_sources) => {
-            let merged = merge_remote_sources_into_config(config, remote_sources);
-            let _ = manager.save(config);
-            merged
-        }
-        Err(_) => config
-            .marketplace_sources
-            .clone()
-            .unwrap_or_else(|| AppConfig::default().marketplace_sources.unwrap_or_default()),
-    }
-}
-
 fn marketplace_update_check_state_path() -> Option<PathBuf> {
     Some(
         home_dir()?
@@ -560,13 +530,13 @@ pub async fn fetch_marketplace_skills(
     let normalized_source_filter = normalize_source_filter(source_ids);
     let page = page.unwrap_or(1).max(1);
     let manager = ConfigManager::new();
-    let mut config = manager.load()?;
+    let config = manager.load()?;
     let github_token = github_token_from_config(&config);
     let cache_source_scope = resolve_cache_source_scope(
         &normalized_source_filter,
         config.marketplace_sources.as_deref().unwrap_or(&[]),
     );
-    let local_sources = config.marketplace_sources.clone().unwrap_or_default();
+    let sources = config.marketplace_sources.clone().unwrap_or_default();
 
     if !force_refresh {
         if let Some(cached) =
@@ -578,9 +548,9 @@ pub async fn fetch_marketplace_skills(
                 cached,
                 page,
                 &installed_skills,
-                &local_sources,
+                &sources,
                 normalized_query.as_deref(),
-                &normalized_source_filter,
+                &cache_source_scope,
                 &config.skills_dir,
                 github_token.as_deref(),
             )
@@ -588,17 +558,13 @@ pub async fn fetch_marketplace_skills(
         }
     }
 
-    let sources = load_marketplace_sources_for_runtime(&manager, &mut config).await;
     let runtime_cache_source_scope =
         resolve_cache_source_scope(&normalized_source_filter, &sources);
 
     let result = match MarketplaceService::fetch_marketplace_skills_page(
-        &sources,
         &config.skills_dir,
         normalized_query.clone(),
-        None,
         page,
-        normalized_source_filter.clone(),
     )
     .await
     {
@@ -636,7 +602,7 @@ pub async fn fetch_marketplace_skills(
                         &installed_skills,
                         &sources,
                         normalized_query.as_deref(),
-                        &normalized_source_filter,
+                        &runtime_cache_source_scope,
                         &config.skills_dir,
                         github_token.as_deref(),
                     )
@@ -661,7 +627,7 @@ pub async fn fetch_marketplace_skills(
         &installed_skills,
         &sources,
         normalized_query.as_deref(),
-        &normalized_source_filter,
+        &runtime_cache_source_scope,
         &config.skills_dir,
         github_token.as_deref(),
     )
@@ -677,6 +643,15 @@ pub async fn fetch_skill_files(
     let config = manager.load()?;
     let github_token = github_token_from_config(&config);
     MarketplaceService::fetch_skill_files(&repo_url, &skill_path, github_token.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn fetch_clawhub_skill_files(
+    slug: String,
+    owner: Option<String>,
+    version: Option<String>,
+) -> Result<ClawhubSkillFilesResponse, String> {
+    MarketplaceService::fetch_clawhub_skill_files(&slug, owner.as_deref(), version.as_deref()).await
 }
 
 #[tauri::command]
@@ -799,20 +774,13 @@ pub async fn sync_marketplace_installed_skills(
     app_cache: State<'_, AppCache>,
 ) -> Result<MarketplaceSyncResult, String> {
     let manager = ConfigManager::new();
-    let mut config = manager.load()?;
+    let config = manager.load()?;
     let github_token = github_token_from_config(&config);
     let normalized_source_filter = normalize_source_filter(source_ids);
-    let sources = load_marketplace_sources_for_runtime(&manager, &mut config).await;
+    let sources = config.marketplace_sources.clone().unwrap_or_default();
 
-    let listing = MarketplaceService::fetch_marketplace_skills_page(
-        &sources,
-        &config.skills_dir,
-        None,
-        None,
-        1,
-        normalized_source_filter.clone(),
-    )
-    .await?;
+    let listing =
+        MarketplaceService::fetch_marketplace_skills_page(&config.skills_dir, None, 1).await?;
     let installed_skills = load_cached_or_scanned_skills(app_cache.inner(), &config.skills_dir)?;
     let listing = merge_installed_marketplace_skills_into_page(
         listing,
@@ -874,19 +842,12 @@ pub async fn check_marketplace_updates_if_stale(
     }
 
     let manager = ConfigManager::new();
-    let mut config = manager.load()?;
+    let config = manager.load()?;
     let github_token = github_token_from_config(&config);
-    let sources = load_marketplace_sources_for_runtime(&manager, &mut config).await;
+    let sources = config.marketplace_sources.clone().unwrap_or_default();
 
-    let listing = MarketplaceService::fetch_marketplace_skills_page(
-        &sources,
-        &config.skills_dir,
-        None,
-        None,
-        1,
-        None,
-    )
-    .await?;
+    let listing =
+        MarketplaceService::fetch_marketplace_skills_page(&config.skills_dir, None, 1).await?;
     let installed_skills = load_cached_or_scanned_skills(app_cache.inner(), &config.skills_dir)?;
     let merged_listing = merge_installed_marketplace_skills_into_page(
         listing.clone(),
@@ -930,9 +891,8 @@ pub async fn check_marketplace_updates_if_stale(
 #[tauri::command]
 pub async fn get_marketplace_sources() -> Result<Vec<MarketplaceSource>, String> {
     let manager = ConfigManager::new();
-    let mut config = manager.load()?;
-    let sources = load_marketplace_sources_for_runtime(&manager, &mut config).await;
-    Ok(sources)
+    let config = manager.load()?;
+    Ok(config.marketplace_sources.clone().unwrap_or_default())
 }
 
 #[tauri::command]
@@ -1043,6 +1003,9 @@ mod tests {
             remote_revision: Some("rev-remote".to_string()),
             tags: Vec::new(),
             install_status,
+            clawhub_slug: None,
+            clawhub_owner: None,
+            clawhub_version: None,
         }
     }
 
@@ -1184,6 +1147,9 @@ mod tests {
             remote_revision: None,
             tags: Vec::new(),
             install_status: InstallStatus::NotInstalled,
+            clawhub_slug: None,
+            clawhub_owner: None,
+            clawhub_version: None,
         };
         let tree = SkillFileNode {
             name: "skills".to_string(),
@@ -1263,6 +1229,9 @@ mod tests {
             remote_revision: None,
             tags: Vec::new(),
             install_status: InstallStatus::NotInstalled,
+            clawhub_slug: None,
+            clawhub_owner: None,
+            clawhub_version: None,
         };
         let tree = SkillFileNode {
             name: "demo".to_string(),

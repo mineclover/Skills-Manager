@@ -1,6 +1,7 @@
 use super::tool::SUPPORTED_TOOLS;
 use crate::models::auth::AuthSession;
 use crate::models::marketplace::{MarketplaceSource, SourceType};
+use crate::models::RiskScanMode;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -25,8 +26,12 @@ pub struct UserPreferences {
     pub show_sync_notifications: bool,
     #[serde(default = "default_false")]
     pub remove_links_when_disabling_tool: bool,
+    #[serde(default = "default_true")]
+    pub skill_usage_monitor: bool,
     #[serde(default)]
     pub github_token: Option<String>,
+    #[serde(default)]
+    pub risk_scan_mode: RiskScanMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -48,6 +53,8 @@ pub struct SkillMetadata {
     pub tags: Vec<String>,
     #[serde(default)]
     pub comment: Option<String>,
+    #[serde(default)]
+    pub favorited_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -231,6 +238,35 @@ pub fn is_builtin_skill_activation_preset_id(id: &str) -> bool {
     id.starts_with("builtin-matt-")
 }
 
+/// 收藏时的市场 skill 快照，断网也能展示基本信息
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MarketplaceFavoriteMeta {
+    pub favorited_at: i64,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub source_id: String,
+    #[serde(default)]
+    pub source_name: String,
+    #[serde(default)]
+    pub repo_url: Option<String>,
+    #[serde(default)]
+    pub skill_path: Option<String>,
+    #[serde(default)]
+    pub external_url: Option<String>,
+    #[serde(default)]
+    pub install_count: Option<u64>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub clawhub_slug: Option<String>,
+    #[serde(default)]
+    pub clawhub_owner: Option<String>,
+    #[serde(default)]
+    pub clawhub_version: Option<String>,
+}
+
 fn default_theme() -> String {
     "system".to_string()
 }
@@ -253,26 +289,15 @@ fn default_false() -> bool {
     false
 }
 fn default_marketplace_sources() -> Vec<MarketplaceSource> {
-    vec![
-        MarketplaceSource {
-            id: "src_skills_sh_home".to_string(),
-            name: "skills.sh Homepage".to_string(),
-            url: "https://skills.sh".to_string(),
-            source_type: SourceType::Crawler,
-            enabled: true,
-            builtin: true,
-            api_key: None,
-        },
-        MarketplaceSource {
-            id: "src_composio_awesome_claude_skills".to_string(),
-            name: "awesome-claude-skills".to_string(),
-            url: "https://github.com/ComposioHQ/awesome-claude-skills".to_string(),
-            source_type: SourceType::Crawler,
-            enabled: true,
-            builtin: true,
-            api_key: None,
-        },
-    ]
+    vec![MarketplaceSource {
+        id: "src_clawhub".to_string(),
+        name: "ClawHub".to_string(),
+        url: "https://clawhub.ai".to_string(),
+        source_type: SourceType::ClawhubApi,
+        enabled: true,
+        builtin: true,
+        api_key: None,
+    }]
 }
 
 impl Default for UserPreferences {
@@ -287,7 +312,9 @@ impl Default for UserPreferences {
             tab_size: default_tab_size(),
             show_sync_notifications: true,
             remove_links_when_disabling_tool: false,
+            skill_usage_monitor: true,
             github_token: None,
+            risk_scan_mode: RiskScanMode::Off,
         }
     }
 }
@@ -421,6 +448,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub skill_metadata: HashMap<String, SkillMetadata>,
     #[serde(default)]
+    pub marketplace_favorites: HashMap<String, MarketplaceFavoriteMeta>,
+    #[serde(default)]
     pub preferences: Option<UserPreferences>,
     #[serde(default)]
     pub marketplace_sources: Option<Vec<MarketplaceSource>>,
@@ -462,11 +491,12 @@ pub struct ToolConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            version: "2.1.2".to_string(),
+            version: "2.1.7".to_string(),
             skills_dir: Self::default_skills_dir(),
             tools: HashMap::new(),
             custom_tools: HashMap::new(),
             skill_metadata: HashMap::new(),
+            marketplace_favorites: HashMap::new(),
             preferences: Some(UserPreferences::default()),
             marketplace_sources: Some(default_marketplace_sources()),
             projects: Vec::new(),
@@ -562,11 +592,9 @@ mod tests {
     #[test]
     fn default_marketplace_sources_matches_remote_source_ids() {
         let sources = default_marketplace_sources();
-        assert_eq!(sources.len(), 2);
-        assert_eq!(sources[0].id, "src_skills_sh_home");
-        assert_eq!(sources[0].source_type, SourceType::Crawler);
-        assert_eq!(sources[1].id, "src_composio_awesome_claude_skills");
-        assert_eq!(sources[1].source_type, SourceType::Crawler);
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].id, "src_clawhub");
+        assert_eq!(sources[0].source_type, SourceType::ClawhubApi);
     }
 
     #[test]
@@ -648,7 +676,7 @@ mod tests {
             "react-playground".to_string(),
             SkillMetadata {
                 tags: vec!["react".to_string(), "frontend".to_string()],
-                comment: None,
+                ..Default::default()
             },
         );
         config.skill_metadata = metadata;
@@ -660,7 +688,7 @@ mod tests {
             restored.skill_metadata.get("react-playground"),
             Some(&SkillMetadata {
                 tags: vec!["react".to_string(), "frontend".to_string()],
-                comment: None,
+                ..Default::default()
             })
         );
     }

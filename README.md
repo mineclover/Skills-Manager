@@ -3,7 +3,7 @@
 > **A unified desktop application for managing AI coding assistant skills.**
 > Seamlessly organize, sync, and share skills for **Claude Code, Codex, Opencode** and other AI tools.
 
-![Version](https://img.shields.io/badge/version-2.1.0-blue) ![Downloads](https://img.shields.io/github/downloads/jiweiyeah/skills-manager/total?color=brightgreen&label=downloads) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey) ![Tech](https://img.shields.io/badge/built%20with-Tauri%202.0%20%2B%20React%2019-orange)
+![Version](https://img.shields.io/badge/version-2.1.7-blue) ![Downloads](https://img.shields.io/github/downloads/jiweiyeah/skills-manager/total?color=brightgreen&label=downloads) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey) ![Tech](https://img.shields.io/badge/built%20with-Tauri%202.0%20%2B%20React%2019-orange)
 
 [中文说明](./README_CN.md)
 
@@ -11,27 +11,29 @@
 
 **Skills Manager** is a modern desktop application designed to solve the fragmentation of AI assistant skills configurations. Instead of managing skills and prompts separately for different tools, Skills Manager provides a central hub.
 
-It uses a powerful **symlink synchronization mechanism**, allowing you to write a skill once and instantly use it across supported AI tools like Claude Code, Codex, Opencode.
+It uses a powerful **symlink synchronization mechanism**, allowing you to write a skill once and instantly use it across 30+ supported AI tools including Claude Code, Codex, Cursor, Gemini CLI, Windsurf, Trae, and more.
 
 ## ✨ Key Features
 
 - **🎯 Unified Management**: Centralize all your AI skills in one secure location.
 - **🔄 Smart Synchronization**: Automatic symlink management ensures your tools always have the latest version of your skills without file duplication.
 - **🎛️ Granular Control**: Enable or disable specific skills for individual tools without deleting the original files.
+- **🛒 Marketplace**: Browse, install, and share community-contributed skills directly within the app.
+- **🌐 AI Translation**: Translate skill names, descriptions, and content into your preferred language using LLM.
+- **⌨️ Command Palette**: Quick navigation and actions via `⌘K` / `Ctrl+K`.
+- **🌍 Bilingual UI**: Full English and Chinese interface support.
 - **⚡ High Performance**: Built with **Rust** and **Tauri 2.0** for a lightweight, blazing-fast experience.
 - **🛡️ Cross-Platform**: Native support for macOS, Windows, and Linux.
-- **🔌 Multi-Tool Support**: Out-of-the-box support for **Claude Code, Codex, Opencode** and extensible to others.
+- **🔌 Multi-Tool Support**: Out-of-the-box support for 30+ AI tools (Claude Code, Codex, Cursor, Gemini CLI, Windsurf, Trae, Cline, Augment, Goose, and many more), extensible via custom tools.
 - **🧩 Custom Tools**: Add your own tools with custom paths and optional icons.
-- **🎨 Modern UI**: Beautiful interface built with React 19, Tailwind CSS v4, and Radix UI.
+- **🎨 Modern UI**: Beautiful Raycast-style interface built with React 19, Tailwind CSS v4, and Radix UI.
 
 ## 📸 Screenshots
 
 <p align="center">
-  <img src="https://image.freeourdays.com/141.png" alt="应用截图 1" ">
-  <img src="https://image.freeourdays.com/142.png" alt="应用截图 2" ">
-  <img src="https://image.freeourdays.com/143.png" alt="应用截图 3" ">
-  <img src="https://image.freeourdays.com/144.png" alt="应用截图 4" ">
-  <img src="https://image.freeourdays.com/145.png" alt="应用截图 5" ">
+    <img src="https://image.freeourdays.com/sk1.png" alt="应用截图 1" ">
+    <img src="https://image.freeourdays.com/sk2.png" alt="应用截图 2" ">
+    <img src="https://image.freeourdays.com/sk3.png" alt="应用截图 3" ">
 </p>
 
 ## 📥 Download
@@ -79,7 +81,7 @@ If you encounter a **blank white screen** when launching the `.AppImage` on Linu
 Please run the application from the terminal with the following command:
 
 ```bash
-WEBKIT_DISABLE_COMPOSITING_MODE=1 ./Skills-Manager_1.0.1_amd64.AppImage
+WEBKIT_DISABLE_COMPOSITING_MODE=1 ./Skills-Manager_<version>_amd64.AppImage
 ```
 
 ## 🛠️ Technology Stack
@@ -97,8 +99,8 @@ Designed for developers who care about performance and stability:
 We are actively working on making Skills Manager better. Here is what we are planning:
 
 - [x] Core features (e.g., soft link synchronization, multi-tool support).
-- [ ] Community Hub – Share and download community-contributed Skills, etc.
-- [ ] Cloud synchronization, allowing one-click migration of existing Skills and more when changing devices.
+- [x] Marketplace – Browse, install, and share community-contributed skills.
+- [x] AI translation for skill content.
 - [ ] Plugin system to support more AI tool extensions.
 - [ ] Integrated AI chat interface for testing Skills directly within the application.
 

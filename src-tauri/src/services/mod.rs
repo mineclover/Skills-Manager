@@ -10,9 +10,11 @@ pub mod llm;
 pub mod marketplace;
 pub mod orca;
 pub mod provider_inventory;
+pub mod risk;
 pub mod scanner;
 pub mod skill_control;
 pub mod skill_packages;
+pub mod skill_transfer;
 pub mod tool_control;
 pub mod translation;
 pub mod translation_cache;
@@ -33,6 +35,10 @@ pub use linker::{LinkReport, LinkStatus, LinkerService};
 pub use marketplace::{MarketplaceCache, MarketplaceService};
 pub use orca::OrcaService;
 pub use provider_inventory::ProviderInventoryService;
+pub use risk::{
+    clear_cache as clear_risk_cache, invalidate_skill as invalidate_risk_cache, scan_all_skills,
+    scan_skill, scanner_version,
+};
 pub use scanner::ScannerService;
 pub use skill_control::{
     BatchSetSkillToolsFailure, BatchSetSkillToolsRequest, BatchSetSkillToolsResponse,

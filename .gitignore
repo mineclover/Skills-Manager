@@ -31,3 +31,6 @@ temp.md
 
 # Design assets (local only)
 design/
+
+# Local tool config
+config/

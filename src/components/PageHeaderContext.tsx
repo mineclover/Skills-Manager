@@ -9,6 +9,7 @@ import {
   useSyncExternalStore,
   ReactNode,
 } from "react";
+import { listen, UnlistenFn } from "@tauri-apps/api/event";
 
 interface PageHeaderContextValue {
   title: string;
@@ -25,6 +26,9 @@ interface PageHeaderContextValue {
   /** Placeholder the active page advertises to the scope search field. */
   pageSearchPlaceholder: string;
   setPageSearchPlaceholder: (p: string) => void;
+  /** 全局风险扫描状态：true 表示扫描进行中。由 Settings 页触发，搜索框 chip 消费。 */
+  riskScanning: boolean;
+  setRiskScanning: (v: boolean) => void;
 }
 
 const PageHeaderContext = createContext<PageHeaderContextValue | null>(null);
@@ -33,6 +37,28 @@ export function PageHeaderProvider({ children }: { children: ReactNode }) {
   const [title, setTitle] = useState("");
   const [pageSearchQuery, setPageSearchQuery] = useState("");
   const [pageSearchPlaceholder, setPageSearchPlaceholder] = useState("");
+  const [riskScanning, setRiskScanning] = useState(false);
+
+  // 兜底：监听 risk-scan-completed 事件重置扫描状态。覆盖 Settings 页
+  // unmount 后 invoke Promise 回调无法更新状态的边界情况（如用户切走页面）。
+  // Skills 页保留自己的监听用于刷新 riskReports，两者各司其职。
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+    let cancelled = false;
+    listen("risk-scan-completed", () => {
+      setRiskScanning(false);
+    }).then((stop) => {
+      if (cancelled) {
+        stop();
+      } else {
+        unlisten = stop;
+      }
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   // The actions target is a DOM node owned by the TopBar. Pages render their
   // actions into it via a React portal. Keeping it as an external subscription
@@ -72,6 +98,8 @@ export function PageHeaderProvider({ children }: { children: ReactNode }) {
         setPageSearchQuery,
         pageSearchPlaceholder,
         setPageSearchPlaceholder,
+        riskScanning,
+        setRiskScanning,
       }}
     >
       {children}

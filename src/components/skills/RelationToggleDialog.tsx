@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Toggle } from "@/components/ui/toggle";
 import { CustomCaretInput } from "@/components/ui/custom-caret-input";
 import {
@@ -13,6 +13,13 @@ export type RelationToggleItem = {
   disabled: boolean;
   tooltip?: string;
   dimmed?: boolean;
+  tags?: string[];
+};
+
+export type TagBulkSummary = {
+  tag: string;
+  total: number;
+  enabled: number;
 };
 
 export function RelationToggleDialog({
@@ -28,10 +35,13 @@ export function RelationToggleDialog({
   items,
   emptyLabel,
   doneLabel,
+  tagBulkToggleLabel,
+  tagBulkToggleAllEnabledLabel,
   onQueryChange,
   onEnabledOnlyChange,
   onToggle,
   onBulkToggle,
+  onTagBulkToggle,
   onClose,
 }: {
   title: string;
@@ -46,10 +56,13 @@ export function RelationToggleDialog({
   items: RelationToggleItem[];
   emptyLabel: string;
   doneLabel: string;
+  tagBulkToggleLabel: (tag: string, enabled: number, total: number) => string;
+  tagBulkToggleAllEnabledLabel: (tag: string, enabled: number, total: number) => string;
   onQueryChange: (query: string) => void;
   onEnabledOnlyChange: (enabledOnly: boolean) => void;
   onToggle: (itemId: string, enabled: boolean) => void;
   onBulkToggle: () => void;
+  onTagBulkToggle?: (tag: string) => void;
   onClose: () => void;
 }) {
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -80,6 +93,21 @@ export function RelationToggleDialog({
   }, [bulkToggleDisabled, onBulkToggle, onClose]);
 
   const enabledCount = items.filter((i) => i.enabled).length;
+
+  const tagSummaries = useMemo<TagBulkSummary[]>(() => {
+    if (!onTagBulkToggle) return [];
+    const map = new Map<string, TagBulkSummary>();
+    for (const item of items) {
+      if (!item.tags || item.tags.length === 0) continue;
+      for (const tag of item.tags) {
+        const entry = map.get(tag) ?? { tag, total: 0, enabled: 0 };
+        entry.total += 1;
+        if (item.enabled) entry.enabled += 1;
+        map.set(tag, entry);
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => a.tag.localeCompare(b.tag));
+  }, [items, onTagBulkToggle]);
 
   return (
     <div
@@ -330,6 +358,73 @@ export function RelationToggleDialog({
           </button>
         </div>
 
+        {/* Tag bulk-action bar — click a tag to enable/disable all its skills */}
+        {tagSummaries.length > 0 && (
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "6px",
+              padding: "0 18px 10px",
+            }}
+          >
+            {tagSummaries.map(({ tag, total, enabled: enabledCount }) => {
+              const allEnabled = enabledCount === total;
+              const title = allEnabled
+                ? tagBulkToggleAllEnabledLabel(tag, enabledCount, total)
+                : tagBulkToggleLabel(tag, enabledCount, total);
+              return (
+                <button
+                  key={tag}
+                  type="button"
+                  onClick={() => onTagBulkToggle?.(tag)}
+                  title={title}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "5px",
+                    fontSize: "11px",
+                    fontWeight: 500,
+                    color: allEnabled ? "var(--primary)" : "var(--muted-foreground)",
+                    backgroundColor: allEnabled
+                      ? "color-mix(in srgb, var(--primary) 10%, transparent)"
+                      : "var(--secondary)",
+                    border: allEnabled
+                      ? "1px solid color-mix(in srgb, var(--primary) 25%, transparent)"
+                      : "1px solid var(--border)",
+                    borderRadius: "999px",
+                    padding: "3px 8px",
+                    lineHeight: 1.2,
+                    cursor: "pointer",
+                    transition: "background-color 0.15s, border-color 0.15s, color 0.15s",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = allEnabled
+                      ? "color-mix(in srgb, var(--primary) 18%, transparent)"
+                      : "var(--muted)";
+                    e.currentTarget.style.borderColor = "var(--ring)";
+                    e.currentTarget.style.color = "var(--foreground)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = allEnabled
+                      ? "color-mix(in srgb, var(--primary) 10%, transparent)"
+                      : "var(--secondary)";
+                    e.currentTarget.style.borderColor = allEnabled
+                      ? "color-mix(in srgb, var(--primary) 25%, transparent)"
+                      : "var(--border)";
+                    e.currentTarget.style.color = allEnabled ? "var(--primary)" : "var(--muted-foreground)";
+                  }}
+                >
+                  <span>#{tag}</span>
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: "10px", opacity: 0.8 }}>
+                    {enabledCount}/{total}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {/* List — single column, Raycast-style rows */}
         <div
           style={{
@@ -422,10 +517,55 @@ export function RelationToggleDialog({
                       overflow: "hidden",
                       whiteSpace: "nowrap",
                       textOverflow: "ellipsis",
+                      flexShrink: 1,
                     }}
                   >
                     {item.label}
                   </div>
+                  {item.tags && item.tags.length > 0 && (
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "4px",
+                        flexShrink: 0,
+                      }}
+                    >
+                      {item.tags.slice(0, 3).map((tag) => (
+                        <span
+                          key={tag}
+                          style={{
+                            fontSize: "11px",
+                            fontWeight: 500,
+                            color: "var(--primary)",
+                            backgroundColor:
+                              "color-mix(in srgb, var(--primary) 10%, transparent)",
+                            border:
+                              "1px solid color-mix(in srgb, var(--primary) 25%, transparent)",
+                            borderRadius: "999px",
+                            padding: "2px 7px",
+                            lineHeight: 1.2,
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          #{tag}
+                        </span>
+                      ))}
+                      {item.tags.length > 3 && (
+                        <span
+                          style={{
+                            fontSize: "11px",
+                            fontWeight: 500,
+                            color: "var(--muted-foreground)",
+                            padding: "2px 0",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          +{item.tags.length - 3}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div onClick={(e) => e.stopPropagation()}>
                   <Toggle

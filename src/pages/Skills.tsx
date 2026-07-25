@@ -1,7 +1,10 @@
-import { useState, useEffect, useCallback, useMemo, useRef, type CSSProperties } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, type CSSProperties, type MouseEvent } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { Check, ChevronRight, ExternalLink, Layers3, List, Minus, Sparkles } from "lucide-react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { confirm, open } from "@tauri-apps/plugin-dialog";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 import { ToastContainer, useToast } from "@/components/ui/toast";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { PageHeader } from "@/components/ui/page-header";
@@ -18,6 +21,9 @@ import {
   AppConfig,
   BatchSetSkillToolsRequest,
   BatchSetSkillToolsResponse,
+  ImportPreview,
+  ImportResolution,
+  ImportResult,
   InstalledSkillPackage,
   ProjectBinding,
   Skill,
@@ -26,6 +32,8 @@ import {
   SkillOperationPreview,
   SkillOperationReport,
   SkillProviderInventory,
+  SkillRiskReport,
+  SkillUsageStats,
   Tool,
 } from "@/types";
 import { useTranslation, TranslationPath } from "@/i18n";
@@ -35,6 +43,9 @@ import {
   type SkillFileTranslationProgress,
 } from "@/hooks/useSkillTranslation";
 import { TranslateIconButton } from "@/components/translation/TranslateIconButton";
+import { useFavorites } from "@/hooks/useFavorites";
+import { useClickOutside } from "@/hooks/useClickOutside";
+import { FavoriteIconButton } from "@/components/favorites/FavoriteIconButton";
 import {
   applyTagFilterAction,
   getGroupMetadataKey,
@@ -65,6 +76,7 @@ import {
   buildUnifiedItemTagSummaries,
   filterUnifiedSkillItems,
   getGroupBulkModeState,
+  getGroupMemberSkills,
   getGroupToolLabel,
   getGroupToolVisualState,
   removeGroupSkillMetadataEntries,
@@ -87,11 +99,16 @@ import {
 } from "./skills/batchManageSelection";
 import { getActionableToolIds } from "./skills/getActionableToolIds";
 import { BatchManageToolsDialog } from "./skills/BatchManageToolsDialog";
+import { ImportConflictDialog } from "./skills/ImportConflictDialog";
 import { buildBatchToolStateSummaries } from "./skills/buildBatchToolStates";
 import {
   buildGroupBulkToolActionPlan,
   buildGroupSingleToolActionRequest,
 } from "./skills/groupToolBatchActions";
+import {
+  buildGroupedSkillSections,
+  type GroupedSkillSection,
+} from "./skills/buildGroupedSkillSections";
 import {
   buildSkillsHeaderActionLayout,
   type SkillsHeaderActionId,
@@ -104,6 +121,34 @@ import { getToolIconUrl } from "@/assets/tools";
 import { ProviderInventoryCard } from "@/components/skills/ProviderInventoryCard";
 import { ScopeSelector } from "@/components/ScopeSelector";
 import { OperationReportCard } from "@/components/skills/OperationReportCard";
+
+type SkillsListViewMode = "grouped" | "flat";
+
+const SKILLS_LIST_VIEW_MODE_KEY = "skills-manager:skills-list-view-mode:v2";
+const EXPANDED_SKILL_GROUPS_KEY = "skills-manager:expanded-skill-groups:v1";
+
+function loadSkillsListViewMode(): SkillsListViewMode {
+  try {
+    return window.localStorage.getItem(SKILLS_LIST_VIEW_MODE_KEY) === "grouped" ? "grouped" : "flat";
+  } catch {
+    return "flat";
+  }
+}
+
+function loadExpandedSkillGroups(): Set<string> {
+  try {
+    const stored = window.localStorage.getItem(EXPANDED_SKILL_GROUPS_KEY);
+    if (!stored) {
+      return new Set();
+    }
+    const parsed: unknown = JSON.parse(stored);
+    return Array.isArray(parsed)
+      ? new Set(parsed.filter((item): item is string => typeof item === "string"))
+      : new Set();
+  } catch {
+    return new Set();
+  }
+}
 
 function getToolDisplayName(toolId: string, tools: Tool[]): string {
   const tool = tools.find((t) => t.id === toolId);
@@ -240,7 +285,7 @@ function TagFilterCheck({ active }: { active: boolean }) {
   );
 }
 
-type SkillEditorTab = "tools" | "tags";
+type SkillEditorTab = "tools" | "tags" | "risk";
 
 type SkillCardActionMenuProps = {
   deleting: boolean;
@@ -283,13 +328,15 @@ function SkillsHeaderMoreMenu({
   items: SkillsHeaderMoreMenuItem[];
 }) {
   const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  useClickOutside(containerRef, open, () => setOpen(false));
 
   if (items.length === 0) {
     return null;
   }
 
   return (
-    <div style={{ position: "relative", flexShrink: 0 }}>
+    <div ref={containerRef} style={{ position: "relative", flexShrink: 0 }}>
       <button
         type="button"
         aria-label={label}
@@ -328,33 +375,24 @@ function SkillsHeaderMoreMenu({
       </button>
 
       {open && (
-        <>
-          <div
-            style={{
-              position: "fixed",
-              inset: 0,
-              zIndex: MODAL_LAYER_Z_INDEX - 1,
-            }}
-            onClick={() => setOpen(false)}
-          />
-          <div
-            className="glass-elevated animate-popover"
-            style={{
-              position: "absolute",
-              top: "calc(100% + 6px)",
-              right: 0,
-              display: "flex",
-              flexDirection: "column",
-              gap: "2px",
-              minWidth: "120px",
-              maxHeight: "320px",
-              overflow: "auto",
-              padding: "8px",
-              borderRadius: "var(--radius-lg)",
-              zIndex: MODAL_LAYER_Z_INDEX,
-              background: "var(--background)",
-            }}
-          >
+        <div
+          className="glass-elevated animate-popover"
+          style={{
+            position: "absolute",
+            top: "calc(100% + 6px)",
+            right: 0,
+            display: "flex",
+            flexDirection: "column",
+            gap: "2px",
+            minWidth: "120px",
+            maxHeight: "320px",
+            overflow: "auto",
+            padding: "8px",
+            borderRadius: "var(--radius-lg)",
+            zIndex: MODAL_LAYER_Z_INDEX,
+            background: "var(--background)",
+          }}
+        >
             {items.map((item) => (
               <button
                 key={item.id}
@@ -384,8 +422,7 @@ function SkillsHeaderMoreMenu({
                 {item.label}
               </button>
             ))}
-          </div>
-        </>
+        </div>
       )}
     </div>
   );
@@ -434,6 +471,34 @@ function renderPreviewChips(chips: string[], overflowCount: number) {
   );
 }
 
+function SelectionIndicator({
+  checked,
+  indeterminate = false,
+  label,
+  onToggle,
+}: {
+  checked: boolean;
+  indeterminate?: boolean;
+  label: string;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="skills-selection-indicator"
+      data-state={checked ? "checked" : indeterminate ? "mixed" : "unchecked"}
+      aria-label={label}
+      aria-pressed={checked}
+      onClick={(event) => {
+        event.stopPropagation();
+        onToggle();
+      }}
+    >
+      {checked ? <Check size={13} strokeWidth={3} /> : indeterminate ? <Minus size={13} strokeWidth={3} /> : null}
+    </button>
+  );
+}
+
 function getUnifiedItemMetaLabel(item: UnifiedSkillListItem, t: (key: TranslationPath) => string) {
   if (item.kind === "group") {
     return t("skills.groupMembersCount").replace("{count}", String(item.memberCount ?? 0));
@@ -460,6 +525,37 @@ function SkillCardActionMenu({
   onDelete,
 }: SkillCardActionMenuProps) {
   const [open, setOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState<{
+    top?: number;
+    bottom?: number;
+    right: number;
+  } | null>(null);
+
+  const closeMenu = useCallback(() => {
+    setOpen(false);
+    setMenuPosition(null);
+  }, []);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        closeMenu();
+      }
+    };
+
+    window.addEventListener("resize", closeMenu);
+    window.addEventListener("scroll", closeMenu, true);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("resize", closeMenu);
+      window.removeEventListener("scroll", closeMenu, true);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [closeMenu, open]);
 
   return (
     <div style={{ position: "relative", flexShrink: 0 }}>
@@ -468,7 +564,20 @@ function SkillCardActionMenu({
         aria-label={moreActionsLabel}
         onClick={(e) => {
           e.stopPropagation();
-          setOpen((current) => !current);
+          if (open) {
+            closeMenu();
+            return;
+          }
+
+          const triggerRect = e.currentTarget.getBoundingClientRect();
+          const gap = 6;
+          const menuHeight = 96;
+          const right = Math.max(8, window.innerWidth - triggerRect.right);
+          const hasRoomBelow = triggerRect.bottom + gap + menuHeight <= window.innerHeight - 8;
+          setMenuPosition(hasRoomBelow
+            ? { top: triggerRect.bottom + gap, right }
+            : { bottom: window.innerHeight - triggerRect.top + gap, right });
+          setOpen(true);
         }}
         disabled={deleting}
         style={{
@@ -502,18 +611,19 @@ function SkillCardActionMenu({
         </svg>
       </button>
 
-      {open && (
+      {open && menuPosition && createPortal(
         <>
           <button
             type="button"
             aria-label={moreActionsLabel}
             onClick={(e) => {
               e.stopPropagation();
-              setOpen(false);
+              closeMenu();
             }}
             style={{
               position: "fixed",
               inset: 0,
+              zIndex: MODAL_LAYER_Z_INDEX - 1,
               background: "transparent",
               border: "none",
               padding: 0,
@@ -525,9 +635,10 @@ function SkillCardActionMenu({
             className="glass-elevated animate-popover"
             onClick={(e) => e.stopPropagation()}
             style={{
-              position: "absolute",
-              top: "calc(100% + 6px)",
-              right: 0,
+              position: "fixed",
+              top: menuPosition.top,
+              bottom: menuPosition.bottom,
+              right: menuPosition.right,
               display: "flex",
               flexDirection: "column",
               gap: "2px",
@@ -543,7 +654,7 @@ function SkillCardActionMenu({
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                setOpen(false);
+                closeMenu();
                 onEdit();
               }}
               style={menuItemBaseStyle}
@@ -560,7 +671,7 @@ function SkillCardActionMenu({
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                setOpen(false);
+                closeMenu();
                 onDelete();
               }}
               disabled={deleting}
@@ -582,7 +693,8 @@ function SkillCardActionMenu({
               {deleteLabel}
             </button>
           </div>
-        </>
+        </>,
+        document.body,
       )}
     </div>
   );
@@ -626,6 +738,8 @@ export function Skills() {
   const [providerFilter, setProviderFilter] = useState("all");
   const [bindingStateFilter, setBindingStateFilter] = useState<SkillBindingState | "all">("all");
   const [sourceFilter, setSourceFilter] = useState<Skill["source"] | "all">("all");
+  const [riskOnly, setRiskOnly] = useState(false);
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [togglingSkill, setTogglingSkill] = useState<string | null>(null);
   const [deletingSkill, setDeletingSkill] = useState<string | null>(null);
   const [toolEditorSkillId, setToolEditorSkillId] = useState<string | null>(null);
@@ -639,6 +753,10 @@ export function Skills() {
   const [bulkTogglingGroupId, setBulkTogglingGroupId] = useState<string | null>(null);
   const [deletingGroupId, setDeletingGroupId] = useState<string | null>(null);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [importProcessing, setImportProcessing] = useState(false);
+  const importZipPathRef = useRef("");
   const [showProjectBindingsDialog, setShowProjectBindingsDialog] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [scannedSkills, setScannedSkills] = useState<{ id: string; name: string; description?: string | null; path: string; }[]>([]);
@@ -649,6 +767,8 @@ export function Skills() {
   const [creating, setCreating] = useState(false);
   const [projectBindingsSaving, setProjectBindingsSaving] = useState(false);
   const [showTagFilterMenu, setShowTagFilterMenu] = useState(false);
+  const tagFilterMenuRef = useRef<HTMLDivElement>(null);
+  useClickOutside(tagFilterMenuRef, showTagFilterMenu, () => setShowTagFilterMenu(false));
   const [skillEditorTab, setSkillEditorTab] = useState<SkillEditorTab>("tools");
   const [tagDraft, setTagDraft] = useState("");
   const [savingTagsSkillId, setSavingTagsSkillId] = useState<string | null>(null);
@@ -659,15 +779,53 @@ export function Skills() {
   const [batchSubmitting, setBatchSubmitting] = useState(false);
   const [initialLoading, setInitialLoading] = useState(() => skillsPageCache === null);
   const [refreshing, setRefreshing] = useState(false);
+  const [skillListViewMode, setSkillListViewMode] = useState<SkillsListViewMode>(loadSkillsListViewMode);
+  const [expandedSkillGroups, setExpandedSkillGroups] = useState<Set<string>>(loadExpandedSkillGroups);
   const [expandedCardKeys, setExpandedCardKeys] = useState<Set<string>>(new Set());
   const [batchDeleting, setBatchDeleting] = useState(false);
   const [highlightKey, setHighlightKey] = useState<string | null>(null);
+  const [usageStats, setUsageStats] = useState<Record<string, SkillUsageStats>>({});
+  const [riskReports, setRiskReports] = useState<Record<string, SkillRiskReport>>({});
   const [searchParams, setSearchParams] = useSearchParams();
   const { toasts, addToast, updateToast, removeToast } = useToast();
   const skillMetadata = config?.skill_metadata;
+  const favorites = useFavorites(skillMetadata);
   const listContainerRef = useRef<HTMLElement | null>(null);
   const hasRestoredScrollRef = useRef(false);
   const highlightTargetRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SKILLS_LIST_VIEW_MODE_KEY, skillListViewMode);
+    } catch {
+      // Local storage is optional; the in-memory preference still works.
+    }
+  }, [skillListViewMode]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(EXPANDED_SKILL_GROUPS_KEY, JSON.stringify([...expandedSkillGroups]));
+    } catch {
+      // Local storage is optional; the in-memory expansion state still works.
+    }
+  }, [expandedSkillGroups]);
+
+  const handleToggleFavorite = useCallback(async (instanceId: string, skillName: string, event: MouseEvent) => {
+    event.stopPropagation();
+    const willFavorite = !favorites.isSkillFavorite(instanceId);
+    try {
+      await favorites.toggleSkillFavorite(instanceId, willFavorite);
+      addToast(
+        t(willFavorite ? "skills.favoriteSuccess" : "skills.unfavoriteSuccess").replace(
+          "{name}",
+          skillName,
+        ),
+        "success",
+      );
+    } catch (err) {
+      addToast(err instanceof Error ? err.message : String(err), "error");
+    }
+  }, [addToast, favorites, t]);
 
   const handleOpenUnifiedItem = useCallback(async (item: UnifiedSkillListItem) => {
     if (!item.openPath) {
@@ -689,6 +847,12 @@ export function Skills() {
     }
   }, [config, navigate, addToast]);
 
+  const loadRiskReports = useCallback(() => {
+    invoke<Record<string, SkillRiskReport>>("get_risk_reports_batch")
+      .then(setRiskReports)
+      .catch(() => {});
+  }, []);
+
   const loadData = useCallback(async (projectId = selectedProjectId) => {
     setScopeLoading(true);
     const settled = await Promise.allSettled([
@@ -698,9 +862,10 @@ export function Skills() {
       invoke<InstalledSkillPackage[]>("list_skill_packages"),
       invoke<AppConfig>("get_config"),
       invoke<Tool[]>("detect_tools"),
+      invoke<Record<string, SkillUsageStats>>("get_skill_usage_stats"),
     ]);
 
-    const [skillsR, packagesR, configR, toolsR] = settled;
+    const [skillsR, packagesR, configR, toolsR, usageR] = settled;
     const failures: string[] = [];
     for (const r of settled) {
       if (r.status === "rejected") {
@@ -712,6 +877,7 @@ export function Skills() {
       if (skillsR.status === "fulfilled") setSkills(skillsR.value);
       if (packagesR.status === "fulfilled") setSkillPackages(packagesR.value);
       if (toolsR.status === "fulfilled") setTools(toolsR.value);
+      if (usageR.status === "fulfilled") setUsageStats(usageR.value);
 
       if (configR.status === "fulfilled") {
         const configResult = configR.value;
@@ -740,7 +906,9 @@ export function Skills() {
       setInitialLoading(false);
       setScopeLoading(false);
     }
-  }, [addToast, selectedProjectId]);
+    // Backend risk scanning is supplementary and must not block inventory loading.
+    void loadRiskReports();
+  }, [addToast, loadRiskReports, selectedProjectId]);
 
   const loadProviderInventory = useCallback(async (projectId = selectedProjectId) => {
     try {
@@ -774,15 +942,15 @@ export function Skills() {
       console.warn("Failed to load provider bindings", err);
     }
   }, [selectedProjectId]);
-
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      const [skillsResult, skillPackagesResult, configResult, toolsResult] = await Promise.all([
+      const [skillsResult, skillPackagesResult, configResult, toolsResult, usageResult] = await Promise.all([
         invoke<Skill[]>("scan_skills_for_scope", { projectId: selectedProjectId }),
         invoke<InstalledSkillPackage[]>("list_skill_packages"),
         invoke<AppConfig>("get_config"),
         invoke<Tool[]>("detect_tools"),
+        invoke<Record<string, SkillUsageStats>>("get_skill_usage_stats"),
       ]);
       setSkills(skillsResult);
       setSkillPackages(skillPackagesResult);
@@ -790,13 +958,16 @@ export function Skills() {
       setTools(toolsResult);
       void loadProviderInventory(selectedProjectId);
       void loadProviderBindings(selectedProjectId);
+      setUsageStats(usageResult);
       addToast(t("common.refreshSuccess"), "success");
+      // 后台异步刷新风险报告
+      void loadRiskReports();
     } catch (err) {
       addToast(err instanceof Error ? err.message : String(err), "error");
     } finally {
       setRefreshing(false);
     }
-  }, [addToast, loadProviderBindings, loadProviderInventory, selectedProjectId, t]);
+  }, [addToast, loadProviderBindings, loadProviderInventory, loadRiskReports, selectedProjectId, t]);
 
   const reloadData = useCallback(async () => {
     try {
@@ -835,6 +1006,48 @@ export function Skills() {
     void loadProviderInventory(selectedProjectId);
     void loadProviderBindings();
   }, [loadData, loadProviderBindings, loadProviderInventory]);
+
+  // 监听 usage-stats-updated 事件，自动刷新调用次数统计
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+    let cancelled = false;
+    listen("usage-stats-updated", () => {
+      invoke<Record<string, SkillUsageStats>>("get_skill_usage_stats")
+        .then(setUsageStats)
+        .catch(() => {});
+    }).then((stop) => {
+      if (cancelled) {
+        stop();
+      } else {
+        unlisten = stop;
+      }
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // 监听 risk-scan-completed 事件，自动刷新风险报告
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+    let cancelled = false;
+    listen("risk-scan-completed", () => {
+      invoke<Record<string, SkillRiskReport>>("get_risk_reports_batch")
+        .then(setRiskReports)
+        .catch(() => {});
+    }).then((stop) => {
+      if (cancelled) {
+        stop();
+      } else {
+        unlisten = stop;
+      }
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   // Keep the module-level cache in sync with the latest loaded data so the
   // next mount can render immediately without a PageLoader flash.
@@ -944,8 +1157,18 @@ export function Skills() {
     );
     setSelectedTags(next.selectedTags);
     setUntaggedOnly(next.untaggedOnly);
+    setRiskOnly(false);
+    setFavoritesOnly(false);
     setShowTagFilterMenu(false);
   }, [selectedTags, untaggedOnly]);
+
+  const handleToggleRiskOnly = useCallback(() => {
+    setRiskOnly((prev) => !prev);
+    // 风险筛选与未标记筛选互斥
+    setUntaggedOnly(false);
+    setFavoritesOnly(false);
+    setShowTagFilterMenu(false);
+  }, []);
 
   const handleResetTagFilters = useCallback(() => {
     const next = applyTagFilterAction(
@@ -954,6 +1177,8 @@ export function Skills() {
     );
     setSelectedTags(next.selectedTags);
     setUntaggedOnly(next.untaggedOnly);
+    setRiskOnly(false);
+    setFavoritesOnly(false);
     setScopeFilter("all");
     setProviderFilter("all");
     setBindingStateFilter("all");
@@ -1442,7 +1667,7 @@ export function Skills() {
     };
   }, [providerFilter, providerInventory]);
 
-  const hasActiveSkillFilters = Boolean(searchQuery.trim()) || selectedTags.length > 0 || untaggedOnly || scopeFilter !== "all" || providerFilter !== "all" || bindingStateFilter !== "all" || sourceFilter !== "all";
+  const hasActiveSkillFilters = Boolean(searchQuery.trim()) || selectedTags.length > 0 || untaggedOnly || riskOnly || favoritesOnly || scopeFilter !== "all" || providerFilter !== "all" || bindingStateFilter !== "all" || sourceFilter !== "all";
 
   // Active tag-filter conditions shown as a numeric badge on the filter icon.
   const tagFilterActiveCount =
@@ -1451,6 +1676,7 @@ export function Skills() {
     (bindingStateFilter !== "all" ? 1 : 0) +
     (sourceFilter !== "all" ? 1 : 0) +
     (untaggedOnly ? 1 : 0) +
+    (riskOnly ? 1 : 0) +
     selectedTags.length;
 
   const scopeFilterCounts = useMemo(() => {
@@ -1460,21 +1686,72 @@ export function Skills() {
     return { global: globalCount, project: projectCount, tool: toolCount };
   }, [unifiedItems]);
 
-  const filteredUnifiedItems = useMemo(() => filterUnifiedSkillItems(unifiedItems, {
-    searchQuery,
-    selectedTags,
-    untaggedOnly,
-    scopeFilter,
-    provider: providerFilterConfig,
-    bindingState: bindingStateFilter,
-    sourceFilter,
-    bindings: providerBindings,
-  }), [bindingStateFilter, providerBindings, providerFilterConfig, searchQuery, selectedTags, sourceFilter, unifiedItems, untaggedOnly, scopeFilter]);
+  const riskMarkedCount = useMemo(() => {
+    return unifiedItems.filter((item) =>
+      item.kind === "skill" && item.skill
+        ? riskReports[item.skill.instance_id]?.level !== "safe" && riskReports[item.skill.instance_id]?.level !== undefined
+        : false,
+    ).length;
+  }, [unifiedItems, riskReports]);
 
-  const sortedUnifiedItems = useMemo(
-    () => sortUnifiedSkillItems(filteredUnifiedItems, searchQuery),
-    [filteredUnifiedItems, searchQuery],
+  const filteredUnifiedItems = useMemo(() => {
+    const base = filterUnifiedSkillItems(unifiedItems, {
+      searchQuery,
+      selectedTags,
+      untaggedOnly,
+      scopeFilter,
+      provider: providerFilterConfig,
+      bindingState: bindingStateFilter,
+      sourceFilter,
+      bindings: providerBindings,
+    });
+    let result = base;
+    if (riskOnly) {
+      result = base.filter((item) =>
+        item.kind === "skill" && item.skill
+          ? riskReports[item.skill.instance_id]?.level !== "safe" && riskReports[item.skill.instance_id]?.level !== undefined
+          : false,
+      );
+    }
+    if (!favoritesOnly) return result;
+    // 仅看收藏：只保留已收藏的 skill（group 项不参与）
+    return result.filter((item) =>
+      item.kind === "skill" && item.skill
+        ? favorites.isSkillFavorite(item.skill.instance_id)
+        : false,
+    );
+  }, [bindingStateFilter, favorites, favoritesOnly, providerBindings, providerFilterConfig, riskOnly, riskReports, searchQuery, selectedTags, sourceFilter, unifiedItems, untaggedOnly, scopeFilter]);
+
+  const sortedUnifiedItems = useMemo(() => {
+    const sorted = sortUnifiedSkillItems(filteredUnifiedItems, searchQuery);
+    // 已收藏的 skill 置顶（按收藏时间倒序，最新收藏在前）
+    const ts = favorites.skillFavoriteTimestamps;
+    if (ts.size === 0) return sorted;
+    return [...sorted].sort((a, b) => {
+      const aFav = a.kind === "skill" && a.skill ? ts.get(a.skill.instance_id) : undefined;
+      const bFav = b.kind === "skill" && b.skill ? ts.get(b.skill.instance_id) : undefined;
+      if (aFav && bFav) return bFav - aFav;
+      if (aFav) return -1;
+      if (bFav) return 1;
+      return 0;
+    });
+  }, [filteredUnifiedItems, searchQuery, favorites.skillFavoriteTimestamps]);
+
+  const groupedSkillCollection = useMemo(
+    () => buildGroupedSkillSections(unifiedItems, sortedUnifiedItems),
+    [sortedUnifiedItems, unifiedItems],
   );
+
+  const flatSkillItems = useMemo(
+    () => sortedUnifiedItems.filter((item) => item.kind === "skill"),
+    [sortedUnifiedItems],
+  );
+
+  const hasVisibleSkillItems = skillListViewMode === "grouped"
+    ? groupedSkillCollection.groups.length > 0 || groupedSkillCollection.standaloneSkills.length > 0
+    : flatSkillItems.length > 0;
+
+  const forceExpandFilteredGroups = hasActiveSkillFilters;
 
   useEffect(() => {
     const highlight = searchParams.get("highlight");
@@ -1512,10 +1789,16 @@ export function Skills() {
     [tools],
   );
 
-  const visibleBatchItemKeys = useMemo(
-    () => sortedUnifiedItems.map((item) => item.key),
-    [sortedUnifiedItems],
-  );
+  const visibleBatchItemKeys = useMemo(() => {
+    if (skillListViewMode === "flat") {
+      return flatSkillItems.map((item) => item.key);
+    }
+
+    return [
+      ...groupedSkillCollection.groups.flatMap((section) => section.members.map((item) => item.key)),
+      ...groupedSkillCollection.standaloneSkills.map((item) => item.key),
+    ];
+  }, [flatSkillItems, groupedSkillCollection, skillListViewMode]);
 
   const allBatchItemKeys = useMemo(
     () => unifiedItems.map((item) => item.key),
@@ -1547,6 +1830,25 @@ export function Skills() {
     [isBatchManageMode],
   );
 
+  // In batch mode, compute the set of skill instance_ids to export based on
+  // current selection (expands group selections to their member skills).
+  const selectedExportInstanceIds = useMemo(() => {
+    if (!isBatchManageMode || selectedBatchItems.length === 0) {
+      return undefined;
+    }
+    const ids = new Set<string>();
+    selectedBatchItems.forEach((item) => {
+      if (item.kind === "skill" && item.skill) {
+        ids.add(item.skill.instance_id);
+      } else if (item.kind === "group" && item.skillPackage) {
+        getGroupMemberSkills(item.skillPackage, skills).forEach((s) =>
+          ids.add(s.instance_id),
+        );
+      }
+    });
+    return ids.size > 0 ? Array.from(ids) : undefined;
+  }, [isBatchManageMode, selectedBatchItems, skills]);
+
   const enterBatchManageMode = useCallback(() => {
     setIsBatchManageMode(true);
   }, []);
@@ -1571,6 +1873,18 @@ export function Skills() {
     });
   }, []);
 
+  const handleToggleSkillGroup = useCallback((packageId: string) => {
+    setExpandedSkillGroups((current) => {
+      const next = new Set(current);
+      if (next.has(packageId)) {
+        next.delete(packageId);
+      } else {
+        next.add(packageId);
+      }
+      return next;
+    });
+  }, []);
+
   const handleToggleBatchItemSelection = useCallback((itemKey: string) => {
     setSelectedBatchItemKeys((current) => toggleBatchSelection(current, itemKey));
   }, []);
@@ -1582,6 +1896,131 @@ export function Skills() {
   const handleClearBatchSelection = useCallback(() => {
     setSelectedBatchItemKeys(new Set());
   }, []);
+
+  const handleExportSkills = useCallback(async (instanceIds?: string[]) => {
+    // Filter to global-scope, local/imported source skills (matches backend rule).
+    const eligibleInstanceIds = skills
+      .filter((skill) => skill.scope === "global"
+        && (skill.source === "local" || skill.source === "imported"))
+      .map((skill) => skill.instance_id);
+
+    if (eligibleInstanceIds.length === 0) {
+      addToast(t("skills.exportNoSkills"), "error");
+      return;
+    }
+
+    // If caller passed explicit ids (batch mode), intersect with eligible.
+    const targetIds = instanceIds
+      ? instanceIds.filter((id) => eligibleInstanceIds.includes(id))
+      : undefined;
+
+    if (targetIds && targetIds.length === 0) {
+      addToast(t("skills.exportNoSkills"), "error");
+      return;
+    }
+
+    const defaultName = `skills-export-${new Date().toISOString().slice(0, 10)}.zip`;
+    const outputPath = await save({
+      defaultPath: defaultName,
+      filters: [{ name: "ZIP", extensions: ["zip"] }],
+    });
+
+    if (!outputPath || typeof outputPath !== "string") {
+      return;
+    }
+
+    try {
+      const exportedCount = await invoke<number>("export_skills", {
+        instanceIds: targetIds,
+        outputPath,
+      });
+      addToast(
+        t("skills.exportSuccess").replace("{count}", String(exportedCount)),
+        "success",
+      );
+    } catch (err) {
+      addToast(
+        t("skills.exportFailed").replace(
+          "{error}",
+          err instanceof Error ? err.message : String(err),
+        ),
+        "error",
+      );
+    }
+  }, [addToast, skills, t]);
+
+  const handleImportSkillsFromZip = useCallback(async () => {
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: "ZIP", extensions: ["zip"] }],
+      title: t("skills.importSelectFile"),
+    });
+
+    if (!selected || Array.isArray(selected)) {
+      return;
+    }
+
+    const zipPath = selected as string;
+    try {
+      const preview = await invoke<ImportPreview>("preview_import_skills", { zipPath });
+      importZipPathRef.current = zipPath;
+      setImportPreview(preview);
+      setImportDialogOpen(true);
+    } catch (err) {
+      addToast(
+        t("skills.importFailed").replace(
+          "{error}",
+          err instanceof Error ? err.message : String(err),
+        ),
+        "error",
+      );
+    }
+  }, [addToast, t]);
+
+  const handleConfirmImport = useCallback(async (resolutions: ImportResolution[]) => {
+    if (!importPreview) {
+      return;
+    }
+
+    setImportProcessing(true);
+    try {
+      const result = await invoke<ImportResult>("import_skills", {
+        zipPath: importZipPathRef.current,
+        resolutions,
+      });
+
+      const importedCount = result.imported.length + result.renamed.length;
+      const failedCount = result.failed.length;
+      addToast(
+        t("skills.importResultSummary")
+          .replace("{imported}", String(importedCount))
+          .replace("{failed}", String(failedCount)),
+        failedCount > 0 ? "error" : "success",
+      );
+
+      setImportDialogOpen(false);
+      setImportPreview(null);
+      await reloadData();
+    } catch (err) {
+      addToast(
+        t("skills.importFailed").replace(
+          "{error}",
+          err instanceof Error ? err.message : String(err),
+        ),
+        "error",
+      );
+    } finally {
+      setImportProcessing(false);
+    }
+  }, [addToast, importPreview, reloadData, t]);
+
+  const handleCloseImportDialog = useCallback(() => {
+    if (importProcessing) {
+      return;
+    }
+    setImportDialogOpen(false);
+    setImportPreview(null);
+  }, [importProcessing]);
 
   const handleOpenBatchToolDialog = useCallback(() => {
     if (selectedBatchItems.length === 0) {
@@ -1667,6 +2106,32 @@ export function Skills() {
             {t("settings.projectBindings")}
           </button>
         );
+      case "export-skills":
+        // Primary action in batch mode: export selection if any, else all.
+        return (
+          <button
+            key={actionId}
+            type="button"
+            onClick={() => void handleExportSkills(selectedExportInstanceIds)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              padding: "8px 14px",
+              fontSize: "13px",
+              fontWeight: 500,
+              color: "var(--foreground)",
+              backgroundColor: "var(--secondary)",
+              border: "1px solid var(--border)",
+              borderRadius: "8px",
+              cursor: "pointer",
+            }}
+          >
+            {selectedExportInstanceIds && selectedExportInstanceIds.length > 0
+              ? t("skills.exportSelectedSkills")
+              : t("skills.exportAllSkills")}
+          </button>
+        );
       case "create-skill":
         return (
           <button
@@ -1712,9 +2177,11 @@ export function Skills() {
   }, [
     enterBatchManageMode,
     exitBatchManageMode,
+    handleExportSkills,
     handleOpenBatchToolDialog,
     isBatchManageMode,
     selectedBatchItems.length,
+    selectedExportInstanceIds,
     t,
   ]);
 
@@ -2051,6 +2518,11 @@ export function Skills() {
     [tools],
   );
 
+  const toolsById = useMemo(
+    () => new Map(tools.map((tool) => [tool.id, tool])),
+    [tools],
+  );
+
   const toolEditorSkill = useMemo(
     () => skills.find((skill) => skill.instance_id === toolEditorSkillId) ?? null,
     [skills, toolEditorSkillId],
@@ -2132,6 +2604,7 @@ export function Skills() {
       return [];
     }
 
+    const skillStats = usageStats[toolEditorSkill.id];
     return toolEditorFilteredToolIds.map((toolId) => {
       const isEnabled = toolEditorSkill.enabled[toolId] ?? false;
       const toggleKey = `${toolEditorSkill.instance_id}:${toolId}`;
@@ -2155,9 +2628,10 @@ export function Skills() {
             ? t("tools.skillsManageDisabled")
             : undefined,
         dimmed: !isDetected || !isToolEnabled,
+        callCount: skillStats?.by_tool[toolId] ?? 0,
       };
     });
-  }, [toolEditorFilteredToolIds, toolEditorIsBulkToggling, toolEditorSkill, togglingSkill, tools, t]);
+  }, [toolEditorFilteredToolIds, toolEditorIsBulkToggling, toolEditorSkill, togglingSkill, tools, t, usageStats]);
 
   const toolEditorTags = useMemo(
     () => (toolEditorSkill ? getSkillTagsForSkill(toolEditorSkill, skillMetadata) : []),
@@ -2520,6 +2994,340 @@ export function Skills() {
     );
   }
 
+  const renderSkillListRow = (
+    item: UnifiedSkillListItem,
+    parentGroup: UnifiedSkillListItem | null = null,
+  ) => {
+    if (item.kind !== "skill" || !item.skill) {
+      return null;
+    }
+
+    const skill = item.skill;
+    const translationKey = makeTranslationKey(skill.instance_id, language);
+    const translated = translation.getTranslation(translationKey);
+    const isTranslatedView = translation.getView(translationKey) === "translated" && translated != null;
+    const title = isTranslatedView && translated ? translated.name : item.title;
+    const description = isTranslatedView && translated
+      ? translated.description || t("skills.noDescription")
+      : item.description || t("skills.noDescription");
+    const isSelected = selectedBatchItemKeys.has(item.key);
+    const isExpanded = expandedCardKeys.has(item.key);
+    const isHighlighted = highlightKey === item.key;
+    const owningGroup = parentGroup ?? groupedSkillCollection.groupBySkillKey.get(item.key) ?? null;
+    const riskReport = riskReports[skill.instance_id];
+    const fileProgress = skillTranslationProgress[skill.instance_id];
+    const fileProgressText = fileProgress
+      ? t("editor.translateFilesCompact")
+          .replace("{current}", String(fileProgress.current))
+          .replace("{total}", String(fileProgress.total))
+          .replace("{path}", fileProgress.path)
+      : null;
+
+    return (
+      <div
+        key={item.key}
+        ref={isHighlighted ? highlightTargetRef : undefined}
+        className="skills-list-row-anchor"
+      >
+        <article
+          className={`skills-list-row${parentGroup ? " is-group-member" : ""}${isSelected ? " is-selected" : ""}${isHighlighted ? " is-highlighted" : ""}`}
+        >
+          <div className="skills-list-row-main">
+            {isBatchManageMode && (
+              <SelectionIndicator
+                checked={isSelected}
+                label={title}
+                onToggle={() => handleToggleBatchItemSelection(item.key)}
+              />
+            )}
+
+            <button
+              type="button"
+              className="skills-list-row-summary"
+              aria-expanded={isExpanded}
+              aria-label={t(isExpanded ? "skills.collapseSkillDetails" : "skills.expandSkillDetails")}
+              onClick={() => {
+                if (isBatchManageMode) {
+                  handleToggleBatchItemSelection(item.key);
+                  return;
+                }
+                handleToggleCardExpand(item.key);
+              }}
+            >
+              <span className="skills-list-row-icon" aria-hidden>
+                <Sparkles size={16} strokeWidth={1.8} />
+              </span>
+              <span className="skills-list-row-copy">
+                <span className="skills-list-row-title-line">
+                  <span className="skills-list-row-title">{title}</span>
+                  {skill.scope === "project" && (
+                    <span className="skills-scope-badge is-project">
+                      {selectedProjectName ?? t("skills.scopeProject")}
+                    </span>
+                  )}
+                  {!parentGroup && owningGroup && (
+                    <span className="skills-membership-label">{owningGroup.title}</span>
+                  )}
+                </span>
+                <span className="skills-list-row-description">{description}</span>
+                {item.tags.length > 0 && (
+                  <span className="skills-list-row-tags">
+                    {item.tags.slice(0, 2).map((tag) => <span key={tag}>#{tag}</span>)}
+                    {item.tags.length > 2 && <span>+{item.tags.length - 2}</span>}
+                  </span>
+                )}
+              </span>
+
+              <span className="skills-list-row-tools">
+                {item.toolSummary?.state === "none" && <span>{t("skills.noToolsEnabled")}</span>}
+                {item.toolSummary?.state === "all" && <span>{t("skills.allEnabled")}</span>}
+                {item.toolSummary?.state === "partial" && (
+                  <>
+                    <span className="skills-list-row-tool-icons">
+                      {item.toolSummary.visibleEnabledToolIds.map((toolId) => (
+                        <ToolIconChip
+                          key={toolId}
+                          toolId={toolId}
+                          tools={tools}
+                          size={14}
+                          enabled
+                          detected={toolsById.get(toolId)?.detected ?? false}
+                        />
+                      ))}
+                    </span>
+                    <span className="skills-list-row-tool-count">
+                      {item.toolSummary.enabledCount}/{item.toolSummary.totalCount}
+                    </span>
+                  </>
+                )}
+              </span>
+
+              <ChevronRight
+                className={`skills-row-chevron${isExpanded ? " is-expanded" : ""}`}
+                size={16}
+                strokeWidth={2}
+                aria-hidden
+              />
+            </button>
+
+            {!isBatchManageMode && (
+              <div className="skills-list-row-actions">
+                {riskReport && riskReport.level !== "safe" && (
+                  <button
+                    type="button"
+                    className={`skills-risk-button risk-${riskReport.level}`}
+                    title={riskReport.findings[0]?.message ?? riskReport.level}
+                    onClick={() => {
+                      setToolEditorSkillId(skill.instance_id);
+                      setSkillEditorTab("risk");
+                    }}
+                  >
+                    {t(`settings.riskLevel${riskReport.level.charAt(0).toUpperCase() + riskReport.level.slice(1)}` as TranslationPath)}
+                  </button>
+                )}
+                {fileProgressText && <span className="skills-file-progress" title={fileProgressText}>{fileProgress.current}/{fileProgress.total}</span>}
+                <FavoriteIconButton
+                  favorited={favorites.isSkillFavorite(skill.instance_id)}
+                  onClick={(event) => void handleToggleFavorite(skill.instance_id, title, event)}
+                  favoriteLabel={t("skills.favoriteAction")}
+                  unfavoriteLabel={t("skills.unfavoriteAction")}
+                  size={28}
+                />
+                {item.openPath && (
+                  <button
+                    type="button"
+                    className="skills-row-icon-button"
+                    title={t("skills.openEditor")}
+                    aria-label={t("skills.openEditor")}
+                    onClick={() => void handleOpenUnifiedItem(item)}
+                  >
+                    <ExternalLink size={14} strokeWidth={2} />
+                  </button>
+                )}
+                <TranslateIconButton
+                  hasTranslation={translated != null}
+                  showingTranslation={isTranslatedView}
+                  translating={translatingIds.has(skill.instance_id)}
+                  translateLabel={t("skills.translateAction")}
+                  showOriginalLabel={t("skills.showOriginal")}
+                  showTranslationLabel={t("skills.showTranslated")}
+                  translatingLabel={t("skills.translating")}
+                  retranslateLabel={t("skills.retranslate")}
+                  onClick={() => {
+                    if (translated) {
+                      translation.setView(translationKey, isTranslatedView ? "original" : "translated");
+                    } else {
+                      void handleTranslateSkill(skill);
+                    }
+                  }}
+                  onRetranslate={() => void handleTranslateSkill(skill, true)}
+                />
+                <SkillCardActionMenu
+                  deleting={deletingSkill === skill.instance_id}
+                  editLabel={t("skills.configureTools")}
+                  deleteLabel={t("skills.delete")}
+                  moreActionsLabel={t("skills.moreActions")}
+                  onEdit={() => openSkillEditor(skill.instance_id, "tools")}
+                  onDelete={() => void handleDelete(skill)}
+                />
+              </div>
+            )}
+          </div>
+
+          {isExpanded && !isBatchManageMode && (
+            <div className="skills-list-row-details">
+              <div>
+                <span className="skills-detail-label">{t("skills.skillDescription")}</span>
+                <p>{skill.description || t("skills.noDescription")}</p>
+              </div>
+              {item.openPath && (
+                <div>
+                  <span className="skills-detail-label">{t("skills.skillPath")}</span>
+                  <code>{item.openPath}</code>
+                </div>
+              )}
+              {toolIds.length > 0 && (
+                <div>
+                  <span className="skills-detail-label">{t("skills.configureToolsTitle")}</span>
+                  <div className="skills-detail-tools">
+                    {toolIds.map((toolId) => (
+                      <ToolIconChip
+                        key={toolId}
+                        toolId={toolId}
+                        tools={tools}
+                        size={18}
+                        enabled={skill.enabled[toolId] ?? false}
+                        detected={toolsById.get(toolId)?.detected ?? false}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </article>
+      </div>
+    );
+  };
+
+  const renderGroupSection = (section: GroupedSkillSection) => {
+    const groupItem = section.group;
+    const skillPackage = groupItem.skillPackage;
+    if (!skillPackage) {
+      return null;
+    }
+
+    const isExpanded = forceExpandFilteredGroups || expandedSkillGroups.has(groupItem.id);
+    const isSelected = selectedBatchItemKeys.has(groupItem.key);
+    const selectedMemberCount = section.allMembers.filter((member) => selectedBatchItemKeys.has(member.key)).length;
+    const isPartiallySelected = !isSelected && selectedMemberCount > 0;
+    const enabledGroupTools = Object.values(groupItem.groupToolStateById ?? {})
+      .filter((state) => state.anyEnabled)
+      .sort((left, right) => Number(right.fullyEnabled) - Number(left.fullyEnabled));
+
+    return (
+      <section key={groupItem.key} className={`skills-group-section${isSelected ? " is-selected" : ""}`}>
+        <div className="skills-group-header">
+          {isBatchManageMode && (
+            <SelectionIndicator
+              checked={isSelected}
+              indeterminate={isPartiallySelected}
+              label={groupItem.title}
+              onToggle={() => handleToggleBatchItemSelection(groupItem.key)}
+            />
+          )}
+
+          <button
+            type="button"
+            className="skills-group-summary"
+            aria-expanded={isExpanded}
+            aria-label={t(isExpanded ? "skills.collapseGroup" : "skills.expandGroup")}
+            onClick={() => {
+              if (isBatchManageMode) {
+                handleToggleBatchItemSelection(groupItem.key);
+                return;
+              }
+              handleToggleSkillGroup(groupItem.id);
+            }}
+          >
+            <ChevronRight
+              className={`skills-group-chevron${isExpanded ? " is-expanded" : ""}`}
+              size={17}
+              strokeWidth={2.2}
+              aria-hidden
+            />
+            <span className="skills-group-icon" aria-hidden><Layers3 size={17} strokeWidth={1.8} /></span>
+            <span className="skills-group-copy">
+              <span className="skills-group-title-line">
+                <span className="skills-group-title">{groupItem.title}</span>
+                <span className="skills-group-count">
+                  {t("skills.groupMembersCount").replace("{count}", String(skillPackage.installed_members.length))}
+                </span>
+              </span>
+              <span className="skills-group-subline">
+                <span>{skillPackage.package_id}</span>
+                {groupItem.tags.slice(0, 2).map((tag) => <span key={tag}>#{tag}</span>)}
+                {section.missingMemberIds.length > 0 && (
+                  <span className="is-warning">
+                    {t("skills.missingGroupMembers").replace("{count}", String(section.missingMemberIds.length))}
+                  </span>
+                )}
+              </span>
+            </span>
+          </button>
+
+          <div className="skills-group-tool-summary">
+            {enabledGroupTools.length === 0 ? (
+              <span className="skills-group-no-tools">{t("skills.noToolsEnabled")}</span>
+            ) : (
+              <>
+                {enabledGroupTools.slice(0, 3).map((state) => (
+                  <span
+                    key={state.toolId}
+                    className={`skills-group-tool-coverage${state.fullyEnabled ? " is-full" : " is-partial"}`}
+                    title={`${getToolDisplayName(state.toolId, tools)} ${state.enabledMemberCount}/${state.memberCount}`}
+                  >
+                    <ToolIconChip
+                      toolId={state.toolId}
+                      tools={tools}
+                      size={13}
+                      enabled={state.anyEnabled}
+                      detected={toolsById.get(state.toolId)?.detected ?? false}
+                    />
+                    <span>{state.enabledMemberCount}/{state.memberCount}</span>
+                  </span>
+                ))}
+                {enabledGroupTools.length > 3 && <span className="skills-group-more-tools">+{enabledGroupTools.length - 3}</span>}
+              </>
+            )}
+          </div>
+
+          {!isBatchManageMode && (
+            <SkillCardActionMenu
+              deleting={deletingGroupId === groupItem.id}
+              editLabel={t("skills.configureTools")}
+              deleteLabel={t("skills.delete")}
+              moreActionsLabel={t("skills.moreActions")}
+              onEdit={() => openGroupEditor(groupItem.id)}
+              onDelete={() => void handleDeleteGroup(groupItem)}
+            />
+          )}
+        </div>
+
+        {isExpanded && (
+          <div className="skills-group-members">
+            {section.members.map((member) => renderSkillListRow(member, groupItem))}
+            {section.members.length === 0 && section.missingMemberIds.length > 0 && (
+              <div className="skills-group-empty-members">
+                {t("skills.missingGroupMembers").replace("{count}", String(section.missingMemberIds.length))}
+              </div>
+            )}
+          </div>
+        )}
+      </section>
+    );
+  };
+
   return (
     <div style={{
       flex: 1,
@@ -2534,9 +3342,56 @@ export function Skills() {
         actions={
           <>
             <RefreshButton onClick={handleRefresh} loading={refreshing} iconOnly />
+            <button
+              type="button"
+              onClick={() => setFavoritesOnly((v) => !v)}
+              title={t("skills.favoritesOnly")}
+              aria-label={t("skills.favoritesOnly")}
+              aria-pressed={favoritesOnly}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 32,
+                height: 32,
+                padding: 0,
+                color: favoritesOnly ? 'var(--primary)' : 'var(--muted-foreground)',
+                backgroundColor: favoritesOnly ? 'var(--primary-tint)' : 'transparent',
+                border: favoritesOnly ? '1px solid var(--primary-tint-border)' : '1px solid transparent',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                transition: 'color 0.15s, background-color 0.15s, border-color 0.15s',
+                flexShrink: 0,
+              }}
+              onMouseEnter={(e) => {
+                if (!favoritesOnly) {
+                  e.currentTarget.style.color = 'var(--foreground)';
+                  e.currentTarget.style.backgroundColor = 'var(--secondary)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!favoritesOnly) {
+                  e.currentTarget.style.color = 'var(--muted-foreground)';
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                }
+              }}
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill={favoritesOnly ? 'currentColor' : 'none'}
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+              </svg>
+            </button>
 
             {showTagFilterControl && (
-              <div style={{ position: "relative" }}>
+              <div ref={tagFilterMenuRef} style={{ position: "relative" }}>
                 <button
                   type="button"
                   onClick={() => setShowTagFilterMenu((current) => !current)}
@@ -2599,30 +3454,21 @@ export function Skills() {
                 </button>
 
                 {showTagFilterMenu && (
-                  <>
-                    <div
-                      style={{
-                        position: "fixed",
-                        inset: 0,
-                        zIndex: MODAL_LAYER_Z_INDEX - 1,
-                      }}
-                      onClick={() => setShowTagFilterMenu(false)}
-                    />
-                    <div
-                      className="glass-elevated animate-popover"
-                      style={{
-                        position: "absolute",
-                        top: "calc(100% + 6px)",
-                        right: 0,
-                        width: "280px",
-                        maxHeight: "420px",
-                        overflow: "auto",
-                        padding: "8px",
-                        borderRadius: "var(--radius-lg)",
-                        zIndex: MODAL_LAYER_Z_INDEX,
-                        background: "var(--background)",
-                      }}
-                    >
+                  <div
+                    className="glass-elevated animate-popover"
+                    style={{
+                      position: "absolute",
+                      top: "calc(100% + 6px)",
+                      right: 0,
+                      width: "280px",
+                      maxHeight: "420px",
+                      overflow: "auto",
+                      padding: "8px",
+                      borderRadius: "var(--radius-lg)",
+                      zIndex: MODAL_LAYER_Z_INDEX,
+                      background: "var(--background)",
+                    }}
+                  >
                       <div style={{
                         display: "flex",
                         alignItems: "flex-start",
@@ -2640,7 +3486,7 @@ export function Skills() {
                             {t("skills.tagFilterHintCompact")}
                           </div>
                         </div>
-                        {(selectedTags.length > 0 || untaggedOnly || scopeFilter !== "all" || providerFilter !== "all" || bindingStateFilter !== "all" || sourceFilter !== "all") && (
+                        {(selectedTags.length > 0 || untaggedOnly || riskOnly || favoritesOnly || scopeFilter !== "all" || providerFilter !== "all" || bindingStateFilter !== "all" || sourceFilter !== "all") && (
                           <button
                             type="button"
                             onClick={handleResetTagFilters}
@@ -2838,6 +3684,41 @@ export function Skills() {
 
                         <button
                           type="button"
+                          onClick={handleToggleRiskOnly}
+                          onMouseEnter={(e) => {
+                            if (!riskOnly) {
+                              e.currentTarget.style.backgroundColor = "var(--surface-hover)";
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.backgroundColor = riskOnly ? "var(--primary-tint)" : "transparent";
+                          }}
+                          style={buildTagFilterMenuItemStyle(riskOnly)}
+                        >
+                          <TagFilterCheck active={riskOnly} />
+                          <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                            <span style={{
+                              width: 6,
+                              height: 6,
+                              borderRadius: "50%",
+                              backgroundColor: riskMarkedCount > 0 ? "#f59e0b" : "var(--muted-foreground)",
+                              flexShrink: 0,
+                            }} />
+                            {t("skills.riskMarked")}
+                          </span>
+                          <span style={{
+                            fontSize: "11px",
+                            fontWeight: 500,
+                            color: riskOnly ? "var(--primary)" : "var(--muted-foreground)",
+                            flexShrink: 0,
+                            fontVariantNumeric: "tabular-nums",
+                          }}>
+                            {riskMarkedCount}
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
                           onClick={handleToggleUntaggedOnly}
                           onMouseEnter={(e) => {
                             if (!untaggedOnly) {
@@ -2897,8 +3778,7 @@ export function Skills() {
                           );
                         })}
                       </div>
-                    </div>
-                  </>
+                  </div>
                 )}
               </div>
             )}
@@ -2933,6 +3813,18 @@ export function Skills() {
                         id: actionId,
                         label: t("welcome.importSkills"),
                         onClick: handleOpenImportSkillsDialog,
+                      };
+                    case "import-skills":
+                      return {
+                        id: actionId,
+                        label: t("skills.importSkillsMenu"),
+                        onClick: handleImportSkillsFromZip,
+                      };
+                    case "export-skills":
+                      return {
+                        id: actionId,
+                        label: t("skills.exportSkillsMenu"),
+                        onClick: () => void handleExportSkills(),
                       };
                     default:
                       return null;
@@ -3096,6 +3988,35 @@ export function Skills() {
               </div>
             )}
           </div>
+          <div className="skills-view-toolbar">
+            <div className="skills-view-switch" role="group" aria-label={t("skills.title")}>
+              <button
+                type="button"
+                className={skillListViewMode === "flat" ? "is-active" : undefined}
+                aria-pressed={skillListViewMode === "flat"}
+                disabled={isBatchManageMode}
+                onClick={() => setSkillListViewMode("flat")}
+              >
+                <List size={15} strokeWidth={2} />
+                <span>{t("skills.flatView")}</span>
+              </button>
+              <button
+                type="button"
+                className={skillListViewMode === "grouped" ? "is-active" : undefined}
+                aria-pressed={skillListViewMode === "grouped"}
+                disabled={isBatchManageMode}
+                onClick={() => setSkillListViewMode("grouped")}
+              >
+                <Layers3 size={14} strokeWidth={2} />
+                <span>{t("skills.groupedView")}</span>
+              </button>
+            </div>
+            <div className="skills-view-summary" aria-live="polite">
+              {skillListViewMode === "grouped"
+                ? `${groupedSkillCollection.groups.length} ${t("skills.skillGroupsSection")} · ${groupedSkillCollection.standaloneSkills.length} ${t("skills.standaloneSkillsSection")}`
+                : `${flatSkillItems.length} Skills`}
+            </div>
+          </div>
           {isBatchManageMode && (
             <div
               style={{
@@ -3199,7 +4120,7 @@ export function Skills() {
               </div>
             </div>
           )}
-          {sortedUnifiedItems.length === 0 ? (
+          {!hasVisibleSkillItems ? (
             <div style={{
               display: 'flex',
               flexDirection: 'column',
@@ -3214,9 +4135,35 @@ export function Skills() {
                 {hasActiveSkillFilters ? t("skills.noMatch") : t("skills.noSkills")}
               </div>
             </div>
+          ) : skillListViewMode === "grouped" ? (
+            <div className="skills-grouped-list">
+              {groupedSkillCollection.groups.length > 0 && (
+                <section className="skills-list-section">
+                  <div className="skills-list-section-heading">
+                    <span>{t("skills.skillGroupsSection")}</span>
+                    <span>{groupedSkillCollection.groups.length}</span>
+                  </div>
+                  <div className="skills-groups-stack">
+                    {groupedSkillCollection.groups.map(renderGroupSection)}
+                  </div>
+                </section>
+              )}
+
+              {groupedSkillCollection.standaloneSkills.length > 0 && (
+                <section className="skills-list-section">
+                  <div className="skills-list-section-heading">
+                    <span>{t("skills.standaloneSkillsSection")}</span>
+                    <span>{groupedSkillCollection.standaloneSkills.length}</span>
+                  </div>
+                  <div className="skills-standalone-list">
+                    {groupedSkillCollection.standaloneSkills.map((item) => renderSkillListRow(item))}
+                  </div>
+                </section>
+              )}
+            </div>
           ) : (
             <div className="card-grid">
-              {sortedUnifiedItems.map((item) => {
+              {flatSkillItems.map((item) => {
                 const color = getSkillColor(item.title);
                 const canOpen = Boolean(item.openPath);
                 const translationKey = item.kind === "skill" && item.skill
@@ -3407,6 +4354,51 @@ export function Skills() {
                               {item.badgeLabel}
                             </span>
                           )}
+                          {item.kind === "skill" && groupedSkillCollection.groupBySkillKey.get(item.key) && (
+                            <span className="skills-membership-label">
+                              {groupedSkillCollection.groupBySkillKey.get(item.key)?.title}
+                            </span>
+                          )}
+                          {(() => {
+                            const instanceId = item.skill?.instance_id;
+                            if (!instanceId) return null;
+                            const report = riskReports[instanceId];
+                            if (!report || report.level === "safe") return null;
+                            const levelColors: Record<string, { fg: string; bg: string }> = {
+                              low: { fg: "#2563eb", bg: "rgba(37,99,235,0.12)" },
+                              medium: { fg: "#ca8a04", bg: "rgba(202,138,4,0.12)" },
+                              high: { fg: "#ea580c", bg: "rgba(234,88,12,0.12)" },
+                              critical: { fg: "#dc2626", bg: "rgba(220,38,38,0.12)" },
+                            };
+                            const colors = levelColors[report.level] ?? levelColors.low;
+                            return (
+                              <span
+                                title={report.findings.length > 0 ? report.findings[0].message : ""}
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "4px",
+                                  height: "20px",
+                                  padding: "0 7px",
+                                  fontSize: "10px",
+                                  fontWeight: 700,
+                                  color: colors.fg,
+                                  backgroundColor: colors.bg,
+                                  border: "none",
+                                  borderRadius: "4px",
+                                  cursor: "pointer",
+                                }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setToolEditorSkillId(instanceId);
+                                  setSkillEditorTab("risk" as SkillEditorTab);
+                                }}
+                              >
+                                <span style={{ width: 6, height: 6, borderRadius: "50%", backgroundColor: colors.fg }} />
+                                {t(`settings.riskLevel${report.level.charAt(0).toUpperCase() + report.level.slice(1)}` as any)}
+                              </span>
+                            );
+                          })()}
                         </div>
                         <p style={{
                           fontSize: "13px",
@@ -3424,6 +4416,13 @@ export function Skills() {
 
                       {!isBatchManageMode && item.kind === "skill" && item.skill && (
                         <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, minWidth: 0 }}>
+                          <FavoriteIconButton
+                            favorited={favorites.isSkillFavorite(item.skill.instance_id)}
+                            onClick={(e) => void handleToggleFavorite(item.skill!.instance_id, cardTitle, e)}
+                            favoriteLabel={t("skills.favoriteAction")}
+                            unfavoriteLabel={t("skills.unfavoriteAction")}
+                            size={28}
+                          />
                           {fileProgressText && (
                             <div
                               role="status"
@@ -3566,8 +4565,33 @@ export function Skills() {
                         fontSize: "12px",
                         color: "var(--muted-foreground)",
                         lineHeight: 1.5,
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                        flexWrap: "wrap",
                       }}>
-                        {getUnifiedItemMetaLabel(item, t)}
+                        <span>{getUnifiedItemMetaLabel(item, t)}</span>
+                        {item.kind === "skill" && item.skill && (() => {
+                          const stats = usageStats[item.skill.id];
+                          if (!stats || stats.total === 0) return null;
+                          return (
+                            <span style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "3px",
+                              padding: "1px 7px",
+                              borderRadius: "6px",
+                              backgroundColor: "var(--background)",
+                              border: "1px solid var(--border)",
+                              color: "var(--muted-foreground)",
+                              fontSize: "11px",
+                              fontWeight: 500,
+                              whiteSpace: "nowrap",
+                            }}>
+                              {t("skills.callsCount").replace("{count}", String(stats.total))}
+                            </span>
+                          );
+                        })()}
                       </div>
                       {item.kind === "skill" && item.toolSummary?.state === "partial" && item.toolSummary.visibleEnabledToolIds.length > 0 && (
                         <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center" }}>
@@ -3808,6 +4832,11 @@ export function Skills() {
           skillName={toolEditorSkill.name}
           skillDescription={toolEditorSkill.description || t("skills.noDescription")}
           activeTab={skillEditorTab}
+          availableTabs={
+            riskReports[toolEditorSkill.instance_id]
+              ? (["tools", "tags", "risk"] as SkillEditorTab[])
+              : (["tools", "tags"] as SkillEditorTab[])
+          }
           onTabChange={setSkillEditorTab}
           onClose={closeSkillEditor}
           doneLabel={t("common.done")}
@@ -3839,6 +4868,7 @@ export function Skills() {
           savingTags={savingTagsSkillId === getSkillMetadataKey(toolEditorSkill)}
           initialComment={getSkillCommentForSkill(toolEditorSkill, config?.skill_metadata) || ""}
           onCommentChange={(comment) => persistMetadataComment(getSkillMetadataKey(toolEditorSkill), comment)}
+          riskReport={riskReports[toolEditorSkill.instance_id] ?? null}
           t={t}
         />
       )}
@@ -3938,6 +4968,15 @@ export function Skills() {
             .replace("{affected}", String(batchSelectionSummary.affectedSkillCount)),
         )}
         onClose={handleCloseBatchToolDialog}
+        t={t}
+      />
+
+      <ImportConflictDialog
+        open={importDialogOpen}
+        preview={importPreview}
+        isProcessing={importProcessing}
+        onCancel={handleCloseImportDialog}
+        onConfirm={(resolutions) => void handleConfirmImport(resolutions)}
         t={t}
       />
 
@@ -4211,6 +5250,7 @@ function SkillManageDialog({
   savingTags,
   initialComment = "",
   onCommentChange,
+  riskReport,
   t,
 }: {
   skillName: string;
@@ -4236,6 +5276,7 @@ function SkillManageDialog({
     disabled: boolean;
     tooltip?: string;
     dimmed?: boolean;
+    callCount?: number;
   }>;
   emptyLabel: string;
   onQueryChange: (query: string) => void;
@@ -4252,6 +5293,7 @@ function SkillManageDialog({
   savingTags: boolean;
   initialComment?: string;
   onCommentChange: (comment: string) => void;
+  riskReport?: SkillRiskReport | null;
   t: (key: TranslationPath) => string;
 }) {
   const [localComment, setLocalComment] = useState(initialComment);
@@ -4397,7 +5439,7 @@ function SkillManageDialog({
                     transition: "background-color 0.15s, color 0.15s",
                   }}
                 >
-                  {tab === "tools" ? t("skills.manageToolsTab") : t("skills.manageTagsTab")}
+                  {tab === "tools" ? t("skills.manageToolsTab") : tab === "tags" ? t("skills.manageTagsTab") : t("settings.riskScanTitle")}
                 </button>
               );
             })}
@@ -4653,6 +5695,21 @@ function SkillManageDialog({
                         >
                           {item.label}
                         </div>
+                        {item.callCount != null && item.callCount > 0 && (
+                          <span style={{
+                            fontSize: "11px",
+                            fontWeight: 500,
+                            padding: "1px 7px",
+                            borderRadius: "6px",
+                            backgroundColor: "var(--background)",
+                            border: "1px solid var(--border)",
+                            color: "var(--muted-foreground)",
+                            whiteSpace: "nowrap",
+                            flexShrink: 0,
+                          }}>
+                            {t("skills.callsCount").replace("{count}", String(item.callCount))}
+                          </span>
+                        )}
                       </div>
                       <div onClick={(e) => e.stopPropagation()}>
                         <Toggle
@@ -4666,7 +5723,7 @@ function SkillManageDialog({
                 )}
               </div>
             </>
-          ) : (
+          ) : activeTab === "tags" ? (
             <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
               <div style={{ fontSize: "12px", color: "var(--muted-foreground)", lineHeight: 1.5 }}>
                 {t("skills.tagEditorHint")}
@@ -4821,6 +5878,95 @@ function SkillManageDialog({
                 />
               </div>
             </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+              {(!riskReport || riskReport.findings.length === 0) ? (
+                <div style={{ fontSize: "13px", color: "var(--muted-foreground)", padding: "24px 0", textAlign: "center" }}>
+                  {t("settings.riskNoFindings")}
+                  {riskReport?.llm_reviewed && (
+                    <span style={{ display: "block", marginTop: 6, fontSize: 11, color: "var(--muted-foreground)" }}>
+                      {t("settings.riskBadgeLlmReviewed")}
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    {(() => {
+                      const levelColors: Record<string, { fg: string; bg: string }> = {
+                        low: { fg: "#2563eb", bg: "rgba(37,99,235,0.12)" },
+                        medium: { fg: "#ca8a04", bg: "rgba(202,138,4,0.12)" },
+                        high: { fg: "#ea580c", bg: "rgba(234,88,12,0.12)" },
+                        critical: { fg: "#dc2626", bg: "rgba(220,38,38,0.12)" },
+                      };
+                      const colors = levelColors[riskReport.level] ?? levelColors.low;
+                      return (
+                        <span style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "4px",
+                          height: "22px",
+                          padding: "0 8px",
+                          fontSize: "11px",
+                          fontWeight: 700,
+                          color: colors.fg,
+                          backgroundColor: colors.bg,
+                          borderRadius: "4px",
+                        }}>
+                          <span style={{ width: 6, height: 6, borderRadius: "50%", backgroundColor: colors.fg }} />
+                          {t(`settings.riskLevel${riskReport.level.charAt(0).toUpperCase() + riskReport.level.slice(1)}` as any)}
+                        </span>
+                      );
+                    })()}
+                    {riskReport.llm_reviewed && (
+                      <span style={{ fontSize: "11px", color: "var(--muted-foreground)" }}>
+                        {t("settings.riskBadgeLlmReviewed")}
+                      </span>
+                    )}
+                  </div>
+                  {riskReport.findings.map((finding, idx) => (
+                    <div
+                      key={idx}
+                      style={{
+                        padding: "10px 12px",
+                        backgroundColor: "var(--secondary)",
+                        border: "1px solid var(--border)",
+                        borderRadius: "8px",
+                        fontSize: "12px",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "6px" }}>
+                        <span style={{ fontWeight: 700, color: "var(--foreground)" }}>{finding.message}</span>
+                        <span style={{
+                          fontSize: "10px",
+                          padding: "1px 5px",
+                          borderRadius: "3px",
+                          backgroundColor: "var(--muted)",
+                          color: "var(--muted-foreground)",
+                        }}>
+                          {t(`settings.riskCategory${finding.category.charAt(0).toUpperCase() + finding.category.slice(1)}` as any)}
+                        </span>
+                        <span style={{
+                          fontSize: "10px",
+                          padding: "1px 5px",
+                          borderRadius: "3px",
+                          backgroundColor: finding.source === "llm" ? "var(--primary)" : "var(--muted)",
+                          color: finding.source === "llm" ? "var(--primary-foreground)" : "var(--muted-foreground)",
+                        }}>
+                          {finding.source === "llm" ? t("settings.riskSourceLlm") : t("settings.riskSourceRule")}
+                        </span>
+                      </div>
+                      <div style={{ fontFamily: "var(--font-mono)", fontSize: "11px", color: "var(--muted-foreground)", backgroundColor: "var(--background)", padding: "6px 8px", borderRadius: "4px", border: "1px solid var(--border)", overflow: "auto" }}>
+                        {finding.evidence}
+                      </div>
+                      <div style={{ fontSize: "10px", color: "var(--muted-foreground)", marginTop: "4px" }}>
+                        {t("settings.riskLocationLabel")}: {finding.location.file}:{finding.location.line}
+                      </div>
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
           )}
         </div>
 
@@ -4843,7 +5989,7 @@ function SkillManageDialog({
               letterSpacing: "0.02em",
             }}
           >
-            {activeTab === "tools" ? `${enabledCount}/${items.length}` : `${tags.length}`}
+            {activeTab === "tools" ? `${enabledCount}/${items.length}` : activeTab === "tags" ? `${tags.length}` : `${riskReport?.findings.length ?? 0}`}
           </div>
           <button
             onClick={handleClose}

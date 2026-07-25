@@ -8,7 +8,6 @@ import {
   UserPreferences,
   DetectedEditor,
   UpdateInfo,
-  MarketplaceSource,
   LlmProvider,
 } from "@/types";
 import { defaultPreferences } from "@/constants/preferences";
@@ -25,6 +24,7 @@ import { Toggle } from "@/components/ui/toggle";
 import { AuthButton } from "@/components/auth/AuthButton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { PageHeader } from "@/components/ui/page-header";
+import { usePageHeaderState } from "@/components/PageHeaderContext";
 import { ToastContainer, useToast } from "@/components/ui/toast";
 import { SunIcon, MoonIcon, MonitorIcon } from "@/components/icons/theme-icons";
 import { resolveActiveProjectId } from "./projectBindings";
@@ -42,15 +42,17 @@ export function Settings() {
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [resetting, setResetting] = useState(false);
+  const [usageHookLoading, setUsageHookLoading] = useState(false);
+  const { riskScanning, setRiskScanning } = usePageHeaderState();
   const { toasts, addToast, removeToast } = useToast();
 
   const SETTINGS_SECTIONS = [
     { id: "settings-general", label: t("settings.general") },
-    { id: "settings-marketplace", label: t("settings.marketplace") },
     { id: "settings-appearance", label: t("settings.appearance") },
     { id: "settings-llm", label: t("settings.llmTitle") },
     { id: "settings-account", label: t("settings.account") },
     { id: "settings-shortcuts", label: t("shortcuts.title") },
+    { id: "settings-risk", label: t("settings.riskScanTitle") },
     { id: "settings-advanced", label: t("settings.advanced") },
     { id: "settings-about", label: t("settings.about") },
     { id: "settings-support", label: t("settings.support") },
@@ -160,25 +162,6 @@ export function Settings() {
     void autoSaveConfig(newConfig);
   };
 
-  const updateMarketplaceSource = (
-    sourceId: string,
-    updates: Partial<MarketplaceSource>
-  ) => {
-    if (!config) return;
-    const sources = config.marketplace_sources || [];
-    const updatedSources = sources.map((source) =>
-      source.id === sourceId ? { ...source, ...updates } : source
-    );
-    const newConfig = {
-      ...config,
-      marketplace_sources: updatedSources,
-    };
-    setConfig(newConfig);
-
-    // Auto-save to disk (debounced)
-    void autoSaveConfig(newConfig);
-  };
-
   // Debounced auto-save function
   const autoSaveTimeoutRef = useRef<number | null>(null);
   const saveStatusTimeoutRef = useRef<number | null>(null);
@@ -230,6 +213,52 @@ export function Settings() {
       }
     }, 800);
   }, [addToast, t]);
+
+  const handleSkillUsageMonitorChange = async (enabled: boolean) => {
+    if (!config) return;
+    setUsageHookLoading(true);
+    const prev = config.preferences?.skill_usage_monitor ?? true;
+    // Optimistically update UI
+    updatePreference("skill_usage_monitor", enabled);
+    try {
+      if (enabled) {
+        await invoke("install_usage_hook");
+      } else {
+        await invoke("uninstall_usage_hook");
+      }
+      addToast(
+        enabled ? t("settings.skillUsageMonitorEnabled") : t("settings.skillUsageMonitorDisabled"),
+        "success",
+      );
+    } catch (err) {
+      // Revert on failure
+      updatePreference("skill_usage_monitor", prev);
+      addToast(err instanceof Error ? err.message : String(err), "error");
+    } finally {
+      setUsageHookLoading(false);
+    }
+  };
+
+  const handleRescanAllRisks = async () => {
+    setRiskScanning(true);
+    try {
+      await invoke("scan_all_risks");
+      addToast(t("settings.riskScanRescanDone"), "success");
+    } catch (err) {
+      addToast(err instanceof Error ? err.message : String(err), "error");
+    } finally {
+      setRiskScanning(false);
+    }
+  };
+
+  const handleClearRiskCache = async () => {
+    try {
+      await invoke("clear_risk_cache_command");
+      addToast(t("settings.riskScanCacheCleared"), "success");
+    } catch (err) {
+      addToast(err instanceof Error ? err.message : String(err), "error");
+    }
+  };
 
   const handleCheckUpdate = async () => {
     if (updateInfo) {
@@ -308,8 +337,6 @@ export function Settings() {
   const prefs = config.preferences || defaultPreferences;
   const selectedEditor = availableEditors.find(e => e.id === prefs.default_editor) || availableEditors[0];
   const FallbackEditorIcon = selectedEditor ? getEditorIcon(selectedEditor.id) : null;
-  const marketplaceSources = config.marketplace_sources || [];
-  const marketplaceRows = marketplaceSources;
 
   return (
     <div style={{
@@ -558,22 +585,30 @@ export function Settings() {
             <SettingsRow
               label={t("settings.syncNotifications")}
               description={t("settings.syncNotificationsDesc")}
-              isLast={true}
+              isLast={false}
             >
               <Toggle
                 checked={prefs.show_sync_notifications}
                 onChange={(v) => updatePreference("show_sync_notifications", v)}
               />
             </SettingsRow>
-          </SettingsCard>
 
-          {/* Marketplace Section */}
-          <SectionTitle id="settings-marketplace">{t("settings.marketplace")}</SectionTitle>
-          <SettingsCard>
+            <SettingsRow
+              label={t("settings.skillUsageMonitor")}
+              description={t("settings.skillUsageMonitorDesc")}
+              isLast={false}
+            >
+              <Toggle
+                checked={prefs.skill_usage_monitor}
+                disabled={usageHookLoading}
+                onChange={handleSkillUsageMonitorChange}
+              />
+            </SettingsRow>
+
             <SettingsRow
               label={t("settings.githubToken")}
               description={t("settings.githubTokenDesc")}
-              isLast={marketplaceRows.length === 0}
+              isLast={true}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                 <PasswordInput
@@ -595,36 +630,6 @@ export function Settings() {
                 </span>
               </div>
             </SettingsRow>
-
-            {marketplaceRows.length === 0 ? (
-              <div style={{
-                padding: '16px 0',
-                fontSize: '13px',
-                color: 'var(--muted-foreground)',
-              }}>
-                {t("settings.marketplaceEmpty")}
-              </div>
-            ) : (
-              marketplaceRows.map((source, index) => {
-                const isLast = index === marketplaceRows.length - 1;
-                const typeLabel = source.source_type === "github_repo"
-                  ? t("settings.marketplaceSourceTypeGithub")
-                  : t("settings.marketplaceSourceTypeApi");
-                return (
-                  <SettingsRow
-                    key={`${source.id}-source`}
-                    label={source.name}
-                    description={`${typeLabel} · ${source.url}`}
-                    isLast={isLast}
-                  >
-                    <Toggle
-                      checked={source.enabled}
-                      onChange={(v) => updateMarketplaceSource(source.id, { enabled: v })}
-                    />
-                  </SettingsRow>
-                );
-              })
-            )}
           </SettingsCard>
 
           {/* Appearance Section */}
@@ -742,6 +747,95 @@ export function Settings() {
               description={t("shortcuts.saveFile")}
               isLast={true}
             />
+          </SettingsCard>
+
+          {/* Risk Scan Section */}
+          <SectionTitle id="settings-risk">{t("settings.riskScanTitle")}</SectionTitle>
+          <SettingsCard>
+            <SettingsRow
+              label={t("settings.riskScanTitle")}
+              description={t("settings.riskScanDesc")}
+              isLast={false}
+            >
+              <div style={{ display: 'flex', gap: '4px', padding: '3px', backgroundColor: 'var(--muted)', borderRadius: '8px' }}>
+                {(["off", "basic", "deep"] as const).map((mode) => {
+                  const active = prefs.risk_scan_mode === mode;
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => updatePreference("risk_scan_mode", mode)}
+                      style={{
+                        padding: '6px 14px',
+                        fontSize: '13px',
+                        fontWeight: 500,
+                        color: active ? 'var(--background)' : 'var(--foreground)',
+                        backgroundColor: active ? 'var(--foreground)' : 'transparent',
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        transition: 'all 0.15s',
+                      }}
+                    >
+                      {t(`settings.riskScanMode${mode.charAt(0).toUpperCase() + mode.slice(1)}` as any)}
+                    </button>
+                  );
+                })}
+              </div>
+            </SettingsRow>
+
+            {prefs.risk_scan_mode === "deep" && !config?.llm_provider && (
+              <div style={{ padding: '0 16px 12px', fontSize: '12px', color: 'var(--warning, #e8a317)' }}>
+                {t("settings.riskScanDeepNoLlmHint")}
+              </div>
+            )}
+
+            {prefs.risk_scan_mode !== "off" && (
+              <SettingsRow
+                label={t("settings.riskScanRescanAll")}
+                description={t(`settings.riskScanMode${prefs.risk_scan_mode.charAt(0).toUpperCase() + prefs.risk_scan_mode.slice(1)}Desc` as any)}
+                isLast={true}
+              >
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    type="button"
+                    onClick={handleRescanAllRisks}
+                    disabled={riskScanning}
+                    style={{
+                      padding: '8px 14px',
+                      fontSize: '13px',
+                      fontWeight: 500,
+                      color: 'var(--foreground)',
+                      backgroundColor: 'var(--background)',
+                      border: '1px solid var(--border)',
+                      borderRadius: '8px',
+                      cursor: riskScanning ? 'not-allowed' : 'pointer',
+                      opacity: riskScanning ? 0.6 : 1,
+                      transition: 'all 0.15s',
+                    }}
+                  >
+                    {riskScanning ? t("settings.riskScanRescanning") : t("settings.riskScanRescanAll")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleClearRiskCache}
+                    style={{
+                      padding: '8px 14px',
+                      fontSize: '13px',
+                      fontWeight: 500,
+                      color: 'var(--foreground)',
+                      backgroundColor: 'var(--background)',
+                      border: '1px solid var(--border)',
+                      borderRadius: '8px',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s',
+                    }}
+                  >
+                    {t("settings.riskScanClearCache")}
+                  </button>
+                </div>
+              </SettingsRow>
+            )}
           </SettingsCard>
 
           {/* Advanced Section */}

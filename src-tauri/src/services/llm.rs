@@ -110,9 +110,9 @@ pub async fn chat(provider: &LlmProvider, req: ChatRequest) -> Result<String, Ll
     let url = format!("{base}/chat/completions");
 
     let mut builder = reqwest::Client::builder();
-    if let Some(secs) = provider.timeout_secs {
-        builder = builder.timeout(Duration::from_secs(secs as u64));
-    }
+    // 默认 60s 超时，防止流式响应不结束导致永久阻塞
+    let timeout_secs = provider.timeout_secs.unwrap_or(60);
+    builder = builder.timeout(Duration::from_secs(timeout_secs as u64));
     let client = builder
         .build()
         .map_err(|e| LlmError::NetworkError(e.to_string()))?;

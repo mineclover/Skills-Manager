@@ -241,46 +241,18 @@ impl ScannerService {
             .any(|root| target.starts_with(root))
     }
 
+    /// Maximum recursion depth when scanning for skills in nested directories.
+    /// Handles structures like skills/superpowers/skill-a/SKILL.md (depth 3).
+    const MAX_SCAN_DEPTH: usize = 5;
+
     fn scan_skills_in_root(skills_dir: &Path, config: &AppConfig) -> Result<Vec<Skill>, String> {
         if !skills_dir.exists() {
             return Ok(Vec::new());
         }
 
-        let entries: Vec<_> = fs::read_dir(skills_dir)
-            .map_err(|e| format!("Failed to read skills directory: {}", e))?
-            .flatten()
-            .collect();
+        let skills = Self::scan_dir_recursive(skills_dir, config, 0);
 
-        let mut skills: Vec<Skill> = entries
-            .par_iter()
-            .flat_map_iter(|entry| {
-                let path = entry.path();
-                if !path.is_dir() {
-                    return Vec::new();
-                }
-
-                if Self::is_skill_dir(&path) {
-                    return Self::load_skill_with_config(&path, config)
-                        .map(|skill| vec![skill])
-                        .unwrap_or_default();
-                }
-
-                fs::read_dir(&path)
-                    .ok()
-                    .into_iter()
-                    .flat_map(|children| children.filter_map(Result::ok))
-                    .filter_map(|child| {
-                        let child_path = child.path();
-                        if child_path.is_dir() && Self::is_skill_dir(&child_path) {
-                            Self::load_skill_with_config(&child_path, config).ok()
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-
+        let mut skills: Vec<Skill> = skills;
         skills.sort_by(|a, b| {
             a.id.cmp(&b.id)
                 .then_with(|| {
@@ -290,6 +262,50 @@ impl ScannerService {
                 .then_with(|| a.path.cmp(&b.path))
         });
         Self::dedupe_skill_ids_preferring_shallower_paths(skills, skills_dir)
+    }
+
+    /// Recursively scan a directory for skills.
+    /// - If the directory itself is a skill dir, load it and stop (no deeper recursion).
+    /// - Otherwise, recurse into child directories up to MAX_SCAN_DEPTH.
+    fn scan_dir_recursive(dir: &Path, config: &AppConfig, depth: usize) -> Vec<Skill> {
+        if depth >= Self::MAX_SCAN_DEPTH {
+            return Vec::new();
+        }
+
+        let entries: Vec<_> = match fs::read_dir(dir) {
+            Ok(rd) => rd.flatten().collect(),
+            Err(_) => return Vec::new(),
+        };
+
+        entries
+            .par_iter()
+            .flat_map_iter(|entry| {
+                let path = entry.path();
+                if !path.is_dir() {
+                    return Vec::new();
+                }
+
+                // Skip hidden directories (e.g. .git, .skill-studio)
+                if path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.starts_with('.'))
+                    .unwrap_or(false)
+                {
+                    return Vec::new();
+                }
+
+                if Self::is_skill_dir(&path) {
+                    // Found a skill — load it, do not recurse deeper
+                    return Self::load_skill_with_config(&path, config)
+                        .map(|skill| vec![skill])
+                        .unwrap_or_default();
+                }
+
+                // Not a skill dir — recurse into children
+                Self::scan_dir_recursive(&path, config, depth + 1)
+            })
+            .collect()
     }
 
     fn skill_depth(path: &Path, skills_dir: &Path) -> usize {
@@ -1514,6 +1530,42 @@ description: "Description from SKILL.md"
                 .find(|skill| skill.instance_id == "tool:codex:imagegen")
                 .expect("codex tool skill");
             assert_eq!(imagegen.enabled.get("codex").copied(), Some(false));
+        });
+    }
+
+    #[test]
+    fn scan_skills_with_config_discovers_deeply_nested_skills_superpowers_pattern() {
+        with_temp_home(|home| {
+            let config = AppConfig::default();
+            let skills_dir = home.join(".skills-manager").join("skills");
+            fs::create_dir_all(&skills_dir).expect("create skills root");
+
+            // Simulate superpowers repo: skills/superpowers/<skill-name>/SKILL.md
+            let brainstorming = skills_dir.join("superpowers").join("brainstorming");
+            fs::create_dir_all(&brainstorming).expect("create brainstorming dir");
+            fs::write(
+                brainstorming.join("SKILL.md"),
+                "---\nname: brainstorming\n---\n",
+            )
+            .expect("write brainstorming skill");
+
+            let debugging = skills_dir.join("superpowers").join("debugging");
+            fs::create_dir_all(&debugging).expect("create debugging dir");
+            fs::write(debugging.join("SKILL.md"), "---\nname: debugging\n---\n")
+                .expect("write debugging skill");
+
+            // Also a top-level skill to ensure mixed scanning works
+            let top_skill = skills_dir.join("my-top-skill");
+            fs::create_dir_all(&top_skill).expect("create top skill dir");
+            fs::write(top_skill.join("SKILL.md"), "---\nname: my-top-skill\n---\n")
+                .expect("write top skill");
+
+            let mut skills =
+                ScannerService::scan_skills_with_config(&skills_dir, &config).expect("scan skills");
+            skills.sort_by(|a, b| a.id.cmp(&b.id));
+
+            let ids: Vec<&str> = skills.iter().map(|s| s.id.as_str()).collect();
+            assert_eq!(ids, vec!["brainstorming", "debugging", "my-top-skill"]);
         });
     }
 }

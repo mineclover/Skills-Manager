@@ -3,7 +3,7 @@
 > **一款用于管理 AI 编程助手技能（Skills）的统一桌面应用。**
 > 无缝组织、同步和共享 **Claude Code、Codex、Opencode** 及其他 AI 工具的技能。
 
-![Version](https://img.shields.io/badge/version-2.1.0-blue) ![Downloads](https://img.shields.io/github/downloads/jiweiyeah/skills-manager/total?color=brightgreen&label=downloads) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey) ![Tech](https://img.shields.io/badge/built%20with-Tauri%202.0%20%2B%20React%2019-orange)
+![Version](https://img.shields.io/badge/version-2.1.7-blue) ![Downloads](https://img.shields.io/github/downloads/jiweiyeah/skills-manager/total?color=brightgreen&label=downloads) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey) ![Tech](https://img.shields.io/badge/built%20with-Tauri%202.0%20%2B%20React%2019-orange)
 
 [English README](./README.md)
 
@@ -11,27 +11,29 @@
 
 **Skills Manager** 是一款现代化的桌面应用程序，旨在解决 AI 助手的 Skills 配置碎片化的问题。它提供了一个中心化的枢纽，让您不再需要为不同的工具分别管理 Skills 技能。
 
-通过强大的**软链接同步机制（Symlink Synchronization）**，您只需编写一次技能，即可在 Claude Code、Codex、Opencode 等支持的 AI 工具中即时生效，实现"一处编写，多处使用"。
+通过强大的**软链接同步机制（Symlink Synchronization）**，您只需编写一次技能，即可在 30+ 款受支持的 AI 工具（包括 Claude Code、Codex、Cursor、Gemini CLI、Windsurf、Trae 等）中即时生效，实现"一处编写，多处使用"。
 
 ## ✨ 核心功能
 
 - **🎯 统一管理**：在一个安全的位置集中管理所有的 AI Skills。
 - **🔄 智能同步**：自动化的软链接管理，确保您的工具始终使用最新版本的技能，无需手动复制文件。
 - **🎛️ 灵活控制**：无需删除源文件，即可随时针对特定工具启用或禁用某个 Skill。
+- **🛒 技能市场**：应用内浏览、安装和分享社区贡献的 Skills。
+- **🌐 AI 翻译**：使用 LLM 将技能名称、描述和内容翻译为您偏好的语言。
+- **⌨️ 命令面板**：通过 `⌘K` / `Ctrl+K` 快速导航和执行操作。
+- **🌍 双语界面**：完整支持中英文界面。
 - **⚡ 极致性能**：基于 **Rust** 和 **Tauri 2.0** 构建，带来轻量级、秒开的极致体验。
 - **🛡️ 跨平台支持**：完美支持 macOS、Windows 和 Linux 系统。
-- **🔌 多工具支持**：开箱即用支持 **Claude Code、Codex、Opencode**等常用工具，并具备良好的扩展性。
+- **🔌 多工具支持**：开箱即用支持 30+ 款 AI 工具（Claude Code、Codex、Cursor、Gemini CLI、Windsurf、Trae、Cline、Augment、Goose 等），并支持自定义扩展。
 - **🧩 自定义工具**：支持用户添加自定义工具，配置路径与图标。
-- **🎨 现代 UI**：基于 React 19、Tailwind CSS v4 和 Radix UI 打造的精美界面。
+- **🎨 现代 UI**：基于 React 19、Tailwind CSS v4 和 Radix UI 打造的 Raycast 风格精美界面。
 
 ## 📸 应用截图
 
 <p align="center">
-  <img src="https://image.freeourdays.com/141.png" alt="应用截图 1" ">
-  <img src="https://image.freeourdays.com/142.png" alt="应用截图 2" ">
-  <img src="https://image.freeourdays.com/143.png" alt="应用截图 3" ">
-  <img src="https://image.freeourdays.com/144.png" alt="应用截图 4" ">
-  <img src="https://image.freeourdays.com/145.png" alt="应用截图 5" ">
+  <img src="https://image.freeourdays.com/sk1.png" alt="应用截图 1" ">
+  <img src="https://image.freeourdays.com/sk2.png" alt="应用截图 2" ">
+  <img src="https://image.freeourdays.com/sk3.png" alt="应用截图 3" ">
 </p>
 
 ## 📥 下载安装
@@ -61,7 +63,7 @@
 请尝试在终端中使用以下命令启动：
 
 ```bash
-WEBKIT_DISABLE_COMPOSITING_MODE=1 ./Skills-Manager_1.0.1_amd64.AppImage
+WEBKIT_DISABLE_COMPOSITING_MODE=1 ./Skills-Manager_<version>_amd64.AppImage
 ```
 
 ## 🛠️ 技术栈
@@ -79,8 +81,8 @@ WEBKIT_DISABLE_COMPOSITING_MODE=1 ./Skills-Manager_1.0.1_amd64.AppImage
 我们正在持续改进 Skills Manager，以下是我们未来的规划：
 
 - [x] 核心功能（软链接同步、多工具支持等）。
-- [ ] 社区中心（Community Hub）– 分享和下载社区贡献的 Skills 等。
-- [ ] 云端同步，更换设备后也可一键迁移原有的 Skills 等。
+- [x] 技能市场（Marketplace）– 浏览、安装和分享社区贡献的 Skills。
+- [x] 技能内容 AI 翻译。
 - [ ] 插件系统，支持更多 AI 工具扩展。
 - [ ] 集成 AI 对话界面，直接在应用内测试 Skills。
 

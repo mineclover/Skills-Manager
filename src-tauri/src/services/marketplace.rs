@@ -1,39 +1,42 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::future::Future;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::process::Command;
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use reqwest::header::{ACCEPT, ORIGIN, REFERER, USER_AGENT};
-use reqwest::{Client, StatusCode, Url};
-use serde::de::DeserializeOwned;
+use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::models::{
-    home_dir, GitHubContent, InstallResult, InstallStatus, MarketplaceSkill,
-    MarketplaceSkillsResponse, MarketplaceSource, SkillFileNode, SourceType,
+    home_dir, ClawhubSkillFilesResponse, GitHubContent, InstallResult, InstallStatus,
+    MarketplaceSkill, MarketplaceSkillsResponse, MarketplaceSource, SkillFileNode,
 };
 
 const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const PERSISTED_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const GITHUB_API_BASE: &str = "https://api.github.com";
-const MARKETPLACE_API_BASE: &str = "https://skills-market-api.guardssl.info/api/v1";
-const MARKETPLACE_SITE_ORIGIN: &str = "https://skills-market-api.guardssl.info";
-const MARKETPLACE_SITE_REFERER: &str = "https://skills-market-api.guardssl.info/";
-const MARKETPLACE_BROWSER_LIKE_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36";
-const MARKETPLACE_ACCEPT_HEADER: &str = "application/json, text/plain, */*";
-const MARKETPLACE_CURL_HTTP_STATUS_MARKER: &str = "__HTTP_STATUS__:";
-const MARKETPLACE_API_PAGE_SIZE: u32 = 20;
+const CLAWHUB_API_BASE: &str = "https://clawhub.ai/api/v1";
+const CLAWHUB_SITE_ORIGIN: &str = "https://clawhub.ai";
+/// clawhub 列表分页大小：首屏 50 条，与前端"加载更多"行为一致
+const CLAWHUB_LIST_PAGE_SIZE: u32 = 50;
+/// clawhub 详情缓存条目数上限，防止内存膨胀
+const CLAWHUB_DETAIL_CACHE_MAX_ENTRIES: usize = 500;
+/// clawhub 归档缓存：预览文件树/文件内容时复用已下载的 ZIP，避免重复下载
+const CLAWHUB_ARCHIVE_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
+const CLAWHUB_ARCHIVE_CACHE_MAX_ENTRIES: usize = 8;
 const MAX_MARKETPLACE_CACHED_PAGES: usize = 200;
 const GITHUB_TREE_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
 const SKILL_DESCRIPTION_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
 const PERSISTED_SKILL_DESCRIPTION_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 pub(crate) const DIRECT_GITHUB_SOURCE_ID: &str = "github_direct";
 pub(crate) const DIRECT_GITHUB_SOURCE_NAME: &str = "GitHub";
+// clawhub 默认源常量（在 commands 层用于判断分发）
+pub(crate) const CLAWHUB_SOURCE_ID: &str = "src_clawhub";
+pub(crate) const CLAWHUB_SOURCE_NAME: &str = "ClawHub";
 
 #[derive(Debug, Clone, Deserialize)]
 struct GitHubTreeEntry {
@@ -59,11 +62,6 @@ struct CachedGitHubTree {
 struct CachedSkillDescription {
     fetched_at: SystemTime,
     description: Option<String>,
-}
-
-struct RawHttpResponse {
-    status_code: u16,
-    body: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -402,50 +400,387 @@ fn remove_persisted_marketplace_cache_state() {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct MarketplaceApiEnvelope<T> {
-    data: T,
-}
+// ===== clawhub.ai API 响应结构 =====
+// clawhub 公开 API 无需认证，CORS 全开，Tauri 直连即可。
+// 列表端点 GET /api/v1/skills?limit=&cursor=&sort= 返回 items + nextCursor。
+// 注意：列表 item 不含 owner，需要用详情端点（?owner=）才能消歧 409。
 
+/// clawhub /api/v1/skills 列表端点的 item
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct MarketplaceApiSourceRecord {
-    id: String,
-    name: String,
-    #[serde(rename = "type")]
-    source_type: String,
-    base_url: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct MarketplaceApiSkillSource {
-    id: String,
-    name: String,
-    #[serde(rename = "type")]
-    source_type: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct MarketplaceApiSkillRecord {
-    id: String,
-    source_id: String,
+struct ClawhubListItem {
     slug: String,
-    name: String,
-    summary: String,
-    install_count: Option<u64>,
-    install_url: Option<String>,
-    created_at: u64,
-    source: MarketplaceApiSkillSource,
+    #[serde(rename = "displayName")]
+    display_name: Option<String>,
+    summary: Option<String>,
+    #[serde(rename = "latestVersion")]
+    latest_version: Option<ClawhubVersionRef>,
+    stats: Option<ClawhubStats>,
+    topics: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct MarketplaceApiSkillsPage {
-    items: Vec<MarketplaceApiSkillRecord>,
-    page: u32,
-    total_pages: u32,
+struct ClawhubVersionRef {
+    version: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClawhubStats {
+    installs: Option<u64>,
+    downloads: Option<u64>,
+    stars: Option<u64>,
+    comments: Option<u64>,
+    versions: Option<u64>,
+}
+
+/// clawhub /api/v1/skills 列表响应
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClawhubListResponse {
+    items: Vec<ClawhubListItem>,
+    /// nextCursor 为 null/缺失时表示无更多页；非空时是一个不透明字符串，需原样回传
+    #[serde(rename = "nextCursor", default)]
+    next_cursor: Option<String>,
+}
+
+/// clawhub /api/v1/search?q= 搜索端点的 item
+/// 字段比列表端点少：缺少 topics/stats.installs/latestVersion，
+/// 多出 score/version/downloads/ownerHandle/owner。
+/// 缺失字段在 map 时给默认值，必要时由前端拉详情补全。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClawhubSearchItem {
+    #[allow(dead_code)]
+    score: Option<f64>,
+    slug: String,
+    #[serde(rename = "displayName")]
+    display_name: Option<String>,
+    summary: Option<String>,
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    downloads: Option<u64>,
+    #[serde(rename = "ownerHandle", default)]
+    owner_handle: Option<String>,
+}
+
+/// clawhub /api/v1/search 响应：不支持 cursor 分页，只返回单页 results
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClawhubSearchResponse {
+    #[serde(default)]
+    results: Vec<ClawhubSearchItem>,
+}
+
+/// clawhub /api/v1/skills/{slug}?owner= 详情响应
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClawhubDetailResponse {
+    skill: ClawhubDetailSkill,
+    #[serde(rename = "latestVersion")]
+    latest_version: Option<ClawhubVersionInfo>,
+    owner: Option<ClawhubOwner>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClawhubDetailSkill {
+    slug: String,
+    #[serde(rename = "displayName")]
+    display_name: Option<String>,
+    /// 详情端点的 description 字段为完整 SKILL.md 内容
+    description: Option<String>,
+    summary: Option<String>,
+    topics: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClawhubVersionInfo {
+    version: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClawhubOwner {
+    handle: String,
+}
+
+/// 409 AMBIGUOUS_SKILL_SLUG 响应体，列出所有候选 owner
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClawhubAmbiguousResponse {
+    code: String,
+    #[serde(default)]
+    matches: Vec<ClawhubAmbiguousMatch>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClawhubAmbiguousMatch {
+    #[serde(rename = "ownerHandle")]
+    owner_handle: String,
+    slug: String,
+    /// ref 是 clawhub 内部版本引用（如 "pskoett/self-improving-agent/4.0.1"）
+    #[serde(rename = "ref", default)]
+    reference: Option<String>,
+    url: Option<String>,
+}
+
+/// 详情缓存条目（避免重复请求 clawhub 详情端点）
+#[derive(Debug, Clone)]
+struct CachedClawhubDetail {
+    fetched_at: SystemTime,
+    detail: ClawhubDetailResponse,
+}
+
+static CLAWHUB_DETAIL_CACHE: OnceLock<Mutex<HashMap<String, CachedClawhubDetail>>> =
+    OnceLock::new();
+
+fn clawhub_detail_cache() -> &'static Mutex<HashMap<String, CachedClawhubDetail>> {
+    CLAWHUB_DETAIL_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn clawhub_detail_cache_key(slug: &str, owner: Option<&str>) -> String {
+    format!("{}::{}", slug, owner.unwrap_or_default())
+}
+
+fn get_cached_clawhub_detail(slug: &str, owner: Option<&str>) -> Option<ClawhubDetailResponse> {
+    let mut guard = clawhub_detail_cache().lock().ok()?;
+    let key = clawhub_detail_cache_key(slug, owner);
+    let cached = guard.get(&key).cloned()?;
+    if cached.fetched_at.elapsed().ok()? > CACHE_TTL {
+        guard.remove(&key);
+        return None;
+    }
+    Some(cached.detail)
+}
+
+fn set_cached_clawhub_detail(slug: &str, owner: Option<&str>, detail: ClawhubDetailResponse) {
+    if let Ok(mut guard) = clawhub_detail_cache().lock() {
+        let key = clawhub_detail_cache_key(slug, owner);
+        if guard.len() >= CLAWHUB_DETAIL_CACHE_MAX_ENTRIES && !guard.contains_key(&key) {
+            // 简单淘汰：删掉最早插入的一个（不是严格 LRU，但够用）
+            if let Some(first_key) = guard.keys().next().cloned() {
+                guard.remove(&first_key);
+            }
+        }
+        guard.insert(
+            key,
+            CachedClawhubDetail {
+                fetched_at: SystemTime::now(),
+                detail,
+            },
+        );
+    }
+}
+
+/// clawhub 列表分页的 cursor 缓存：page N → nextCursor
+/// 因为 clawhub 用游标分页，前端用 page 翻页时需要逐页推进 cursor。
+#[derive(Debug, Clone, Default)]
+struct ClawhubCursorMap {
+    /// page N → nextCursor（page 1 的 cursor 为 None，从首页开始）
+    cursors: HashMap<u32, Option<String>>,
+}
+
+impl ClawhubCursorMap {
+    fn cursor_for_page(&self, page: u32) -> Option<&Option<String>> {
+        self.cursors.get(&page)
+    }
+
+    fn set_cursor(&mut self, page: u32, cursor: Option<String>) {
+        self.cursors.insert(page, cursor);
+    }
+}
+
+/// 全局 cursor 缓存（按 query 维度隔离）
+static CLAWHUB_CURSOR_CACHE: OnceLock<Mutex<HashMap<String, ClawhubCursorMap>>> = OnceLock::new();
+
+fn clawhub_cursor_cache() -> &'static Mutex<HashMap<String, ClawhubCursorMap>> {
+    CLAWHUB_CURSOR_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn clawhub_cursor_cache_key(query: Option<&str>, sort: Option<&str>) -> String {
+    format!(
+        "{}::{}",
+        query.unwrap_or_default(),
+        sort.unwrap_or_default()
+    )
+}
+
+/// clawhub 归档缓存条目
+struct CachedClawhubArchive {
+    files: Vec<(String, Vec<u8>)>,
+    fetched_at: Instant,
+}
+
+/// 全局 clawhub 归档缓存（预览文件树/文件内容时复用已下载的 ZIP）
+static CLAWHUB_ARCHIVE_CACHE: OnceLock<Mutex<HashMap<String, CachedClawhubArchive>>> =
+    OnceLock::new();
+
+fn clawhub_archive_cache() -> &'static Mutex<HashMap<String, CachedClawhubArchive>> {
+    CLAWHUB_ARCHIVE_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn clawhub_archive_cache_key(slug: &str, owner: Option<&str>, version: &str) -> String {
+    format!("{}::{}::{}", slug, owner.unwrap_or(""), version)
+}
+
+/// 从缓存中获取 clawhub 归档文件列表（未过期时返回克隆）
+fn get_cached_clawhub_archive(
+    slug: &str,
+    owner: Option<&str>,
+    version: &str,
+) -> Option<Vec<(String, Vec<u8>)>> {
+    let cache = clawhub_archive_cache().lock().ok()?;
+    let key = clawhub_archive_cache_key(slug, owner, version);
+    let entry = cache.get(&key)?;
+    if entry.fetched_at.elapsed() < CLAWHUB_ARCHIVE_CACHE_TTL {
+        Some(entry.files.clone())
+    } else {
+        None
+    }
+}
+
+/// 将 clawhub 归档文件列表写入缓存（简单 LRU：满时淘汰最老条目）
+fn set_cached_clawhub_archive(
+    slug: &str,
+    owner: Option<&str>,
+    version: &str,
+    files: Vec<(String, Vec<u8>)>,
+) {
+    let mut cache = match clawhub_archive_cache().lock() {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let key = clawhub_archive_cache_key(slug, owner, version);
+    if cache.len() >= CLAWHUB_ARCHIVE_CACHE_MAX_ENTRIES {
+        if let Some(oldest_key) = cache
+            .iter()
+            .min_by_key(|(_, v)| v.fetched_at)
+            .map(|(k, _)| k.clone())
+        {
+            cache.remove(&oldest_key);
+        }
+    }
+    cache.insert(
+        key,
+        CachedClawhubArchive {
+            files,
+            fetched_at: Instant::now(),
+        },
+    );
+}
+
+fn clawhub_client() -> Result<Client, String> {
+    Client::builder()
+        .user_agent("skills-manager")
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|e| format!("无法创建 HTTP 客户端: {}", e))
+}
+
+/// 将 clawhub 列表 item 转换为 MarketplaceSkill。
+/// 列表端点不返回 owner，因此 clawhub_owner 留空（在详情端点拉取时再填充）。
+fn map_clawhub_list_item_to_skill(item: ClawhubListItem) -> MarketplaceSkill {
+    let slug = item.slug;
+    let name = item
+        .display_name
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| slug.clone());
+    let description = item
+        .summary
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let install_count = item
+        .stats
+        .as_ref()
+        .and_then(|stats| stats.installs)
+        .or_else(|| item.stats.as_ref().and_then(|stats| stats.downloads));
+    let clawhub_version = item
+        .latest_version
+        .as_ref()
+        .and_then(|version| version.version.clone())
+        .filter(|value| !value.trim().is_empty());
+    let tags = item.topics.unwrap_or_default();
+
+    MarketplaceSkill {
+        id: format!("{}::{}", CLAWHUB_SOURCE_ID, slug),
+        slug: Some(slug.clone()),
+        name,
+        description,
+        author: None,
+        source_id: CLAWHUB_SOURCE_ID.to_string(),
+        source_name: CLAWHUB_SOURCE_NAME.to_string(),
+        install_count,
+        install_url: None,
+        created_at: None,
+        repo_url: None,
+        skill_path: Some(slug.clone()),
+        // 列表端点不返回 owner，无法构造正确的外部链接（需 {origin}/{owner}/skills/{slug}）。
+        // external_url 留空，待详情端点解析出 owner 后由前端补全。
+        external_url: None,
+        remote_revision: clawhub_version.clone(),
+        tags,
+        install_status: InstallStatus::NotInstalled,
+        clawhub_slug: Some(slug),
+        clawhub_owner: None,
+        clawhub_version,
+    }
+}
+
+/// 将 clawhub 搜索 item 转换为 MarketplaceSkill。
+/// 搜索端点不返回 topics/stats.installs/latestVersion，缺失字段给默认值。
+/// 返回 owner_handle（列表端点没有），可用于直接构造 external_url。
+fn map_clawhub_search_item_to_skill(item: ClawhubSearchItem) -> MarketplaceSkill {
+    let slug = item.slug.clone();
+    let name = item
+        .display_name
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| slug.clone());
+    let description = item
+        .summary
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let clawhub_owner = item.owner_handle.filter(|value| !value.trim().is_empty());
+    let clawhub_version = item.version.filter(|value| !value.trim().is_empty());
+    // 搜索端点的 downloads 近似为 install_count（端点不返回 installs）
+    let install_count = item.downloads;
+    // external_url 需要 owner；有 owner 时直接构造，避免前端再拉详情
+    let external_url = clawhub_owner
+        .as_ref()
+        .map(|owner| format!("{}/{}/skills/{}", CLAWHUB_SITE_ORIGIN, owner, slug));
+
+    MarketplaceSkill {
+        id: format!("{}::{}", CLAWHUB_SOURCE_ID, slug),
+        slug: Some(slug.clone()),
+        name,
+        description,
+        // 用 owner 作为 author 显示（搜索端点不单独返回 author）
+        author: clawhub_owner.clone(),
+        source_id: CLAWHUB_SOURCE_ID.to_string(),
+        source_name: CLAWHUB_SOURCE_NAME.to_string(),
+        install_count,
+        install_url: None,
+        created_at: None,
+        repo_url: None,
+        skill_path: Some(slug.clone()),
+        external_url,
+        remote_revision: clawhub_version.clone(),
+        // 搜索端点不返回 topics，tags 暂为空，详情端点可补全
+        tags: Vec::new(),
+        install_status: InstallStatus::NotInstalled,
+        clawhub_slug: Some(slug),
+        clawhub_owner,
+        clawhub_version,
+    }
 }
 
 pub struct MarketplaceService;
@@ -458,23 +793,43 @@ fn normalize_marketplace_query(query: Option<&str>) -> Option<String> {
 }
 
 fn marketplace_skill_matches_query(skill: &MarketplaceSkill, query: &str) -> bool {
-    skill.name.to_lowercase().contains(query)
+    // 分词 AND 匹配：query 按空白拆分为多个 token，每个 token 必须命中至少一个字段。
+    // 这样 "email gmail" 能匹配 name="Email" + description="...Gmail..."，
+    // 同时兼容单 token 场景（退化为原 OR 字段匹配）。
+    let tokens: Vec<&str> = query.split_whitespace().collect();
+    if tokens.is_empty() {
+        return true;
+    }
+    tokens.iter().all(|token| skill_matches_token(skill, token))
+}
+
+/// 单个 token 是否命中 skill 的任意字段（大小写不敏感的子串包含）。
+fn skill_matches_token(skill: &MarketplaceSkill, token: &str) -> bool {
+    let token = token.to_lowercase();
+    if token.is_empty() {
+        return true;
+    }
+    skill.name.to_lowercase().contains(&token)
         || skill
             .slug
             .as_ref()
-            .map(|slug| slug.to_lowercase().contains(query))
+            .map(|slug| slug.to_lowercase().contains(&token))
             .unwrap_or(false)
         || skill
             .description
             .as_ref()
-            .map(|d| d.to_lowercase().contains(query))
+            .map(|d| d.to_lowercase().contains(&token))
             .unwrap_or(false)
         || skill
             .author
             .as_ref()
-            .map(|a| a.to_lowercase().contains(query))
+            .map(|a| a.to_lowercase().contains(&token))
             .unwrap_or(false)
-        || skill.source_name.to_lowercase().contains(query)
+        || skill.source_name.to_lowercase().contains(&token)
+        || skill
+            .tags
+            .iter()
+            .any(|tag| tag.to_lowercase().contains(&token))
 }
 
 fn filter_marketplace_skills_by_query(
@@ -491,170 +846,6 @@ fn filter_marketplace_skills_by_query(
         .collect()
 }
 
-fn marketplace_api_default_headers() -> [(&'static str, &'static str); 4] {
-    [
-        (ACCEPT.as_str(), MARKETPLACE_ACCEPT_HEADER),
-        (ORIGIN.as_str(), MARKETPLACE_SITE_ORIGIN),
-        (REFERER.as_str(), MARKETPLACE_SITE_REFERER),
-        (USER_AGENT.as_str(), MARKETPLACE_BROWSER_LIKE_USER_AGENT),
-    ]
-}
-
-fn build_marketplace_api_effective_params(
-    endpoint: &str,
-    params: &[(&str, String)],
-) -> Vec<(String, String)> {
-    let mut effective_params: Vec<(String, String)> = params
-        .iter()
-        .map(|(name, value)| ((*name).to_string(), value.clone()))
-        .collect();
-    let normalized_endpoint = endpoint.trim_start_matches('/');
-
-    if normalized_endpoint == "skills" {
-        if !effective_params.iter().any(|(name, _)| name == "sortBy") {
-            effective_params.push(("sortBy".to_string(), "installCount".to_string()));
-        }
-        if !effective_params.iter().any(|(name, _)| name == "sortOrder") {
-            effective_params.push(("sortOrder".to_string(), "desc".to_string()));
-        }
-    }
-
-    effective_params
-}
-
-fn build_marketplace_api_get_request(
-    client: &Client,
-    endpoint: &str,
-    params: &[(&str, String)],
-) -> reqwest::RequestBuilder {
-    let endpoint = endpoint.trim_start_matches('/');
-    let mut request = client.get(format!("{}/{}", MARKETPLACE_API_BASE, endpoint));
-    for (name, value) in marketplace_api_default_headers() {
-        request = request.header(name, value);
-    }
-    request.query(&build_marketplace_api_effective_params(endpoint, params))
-}
-
-fn is_cloudflare_challenge_html(body: &str) -> bool {
-    body.contains("Just a moment...")
-        || body.contains("/cdn-cgi/challenge-platform/")
-        || body.contains("cf-browser-verification")
-}
-
-fn build_marketplace_api_url(endpoint: &str, params: &[(&str, String)]) -> Result<Url, String> {
-    let endpoint = endpoint.trim_start_matches('/');
-    let mut url = Url::parse(&format!("{}/{}", MARKETPLACE_API_BASE, endpoint))
-        .map_err(|e| format!("技能市场请求失败: {}", e))?;
-    {
-        let mut query_pairs = url.query_pairs_mut();
-        for (name, value) in build_marketplace_api_effective_params(endpoint, params) {
-            query_pairs.append_pair(&name, &value);
-        }
-    }
-    Ok(url)
-}
-
-fn try_send_marketplace_get_with_curl(
-    endpoint: &str,
-    params: &[(&str, String)],
-) -> Result<RawHttpResponse, String> {
-    let url = build_marketplace_api_url(endpoint, params)?;
-    let mut command = Command::new("curl");
-    command
-        .arg("-sS")
-        .arg("-L")
-        .arg("--http1.1")
-        .arg("-X")
-        .arg("GET")
-        .arg("-H")
-        .arg(format!("accept: {MARKETPLACE_ACCEPT_HEADER}"))
-        .arg("-H")
-        .arg(format!("origin: {MARKETPLACE_SITE_ORIGIN}"))
-        .arg("-H")
-        .arg(format!("referer: {MARKETPLACE_SITE_REFERER}"))
-        .arg("-H")
-        .arg(format!("user-agent: {MARKETPLACE_BROWSER_LIKE_USER_AGENT}"))
-        .arg("--write-out")
-        .arg(format!(
-            "\n{MARKETPLACE_CURL_HTTP_STATUS_MARKER}%{{http_code}}"
-        ))
-        .arg(url.as_str());
-
-    let output = command
-        .output()
-        .map_err(|e| format!("技能市场请求失败: {}", e))?;
-
-    if !output.status.success() {
-        return Err("技能市场请求失败: curl 请求失败".to_string());
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let marker = format!("\n{MARKETPLACE_CURL_HTTP_STATUS_MARKER}");
-    let marker_index = stdout
-        .rfind(&marker)
-        .ok_or_else(|| "技能市场响应解析失败: 缺少 HTTP 状态标记".to_string())?;
-
-    let body = stdout[..marker_index].to_string();
-    let status_code = stdout[marker_index + marker.len()..]
-        .trim()
-        .parse::<u16>()
-        .map_err(|_| "技能市场响应解析失败: 无效的 HTTP 状态码".to_string())?;
-
-    Ok(RawHttpResponse { status_code, body })
-}
-
-fn parse_marketplace_api_envelope<T: DeserializeOwned>(
-    body: &str,
-    parse_error_prefix: &str,
-) -> Result<MarketplaceApiEnvelope<T>, String> {
-    serde_json::from_str::<MarketplaceApiEnvelope<T>>(body)
-        .map_err(|e| format!("{parse_error_prefix}: {}", e))
-}
-
-async fn request_marketplace_api_envelope<T: DeserializeOwned>(
-    endpoint: &str,
-    params: &[(&str, String)],
-    request_error_prefix: &str,
-    parse_error_prefix: &str,
-) -> Result<MarketplaceApiEnvelope<T>, String> {
-    let client = Client::new();
-    let response = build_marketplace_api_get_request(&client, endpoint, params)
-        .send()
-        .await
-        .map_err(|e| format!("{request_error_prefix}: {}", e))?;
-
-    let status = response.status();
-    if status.is_success() {
-        return response
-            .json::<MarketplaceApiEnvelope<T>>()
-            .await
-            .map_err(|e| format!("{parse_error_prefix}: {}", e));
-    }
-
-    if status == StatusCode::FORBIDDEN {
-        let fallback_detail = match try_send_marketplace_get_with_curl(endpoint, params) {
-            Ok(raw) if (200..300).contains(&raw.status_code) => {
-                return parse_marketplace_api_envelope(&raw.body, parse_error_prefix);
-            }
-            Ok(raw) if raw.status_code == StatusCode::FORBIDDEN.as_u16() => {
-                if is_cloudflare_challenge_html(&raw.body) {
-                    return Err(format!("{request_error_prefix}: HTTP 403 Forbidden"));
-                }
-                "curl fallback returned HTTP 403".to_string()
-            }
-            Ok(raw) => {
-                format!("curl fallback returned HTTP {}", raw.status_code)
-            }
-            Err(err) => err,
-        };
-        return Err(format!(
-            "{request_error_prefix}: HTTP {status} ({fallback_detail})"
-        ));
-    }
-
-    Err(format!("{request_error_prefix}: HTTP {status}"))
-}
-
 impl MarketplaceService {
     pub(crate) fn filter_marketplace_skills_by_query(
         skills: Vec<MarketplaceSkill>,
@@ -663,193 +854,393 @@ impl MarketplaceService {
         filter_marketplace_skills_by_query(skills, query)
     }
 
-    #[allow(dead_code)]
-    pub async fn fetch_marketplace_skills(
-        sources: &[MarketplaceSource],
-        skills_dir: &Path,
-        query: Option<String>,
-        _github_token: Option<&str>,
-    ) -> Result<Vec<MarketplaceSkill>, String> {
-        let result =
-            Self::fetch_marketplace_skills_page(sources, skills_dir, query, None, 1, None).await?;
-        Ok(result.skills)
-    }
-
-    pub async fn fetch_marketplace_sources() -> Result<Vec<MarketplaceSource>, String> {
-        let payload = request_marketplace_api_envelope::<Vec<MarketplaceApiSourceRecord>>(
-            "/sources",
-            &[],
-            "技能市场来源请求失败",
-            "技能市场来源响应解析失败",
-        )
-        .await?;
-
-        Ok(payload
-            .data
-            .into_iter()
-            .map(|source| MarketplaceSource {
-                id: source.id,
-                name: source.name,
-                url: source
-                    .base_url
-                    .unwrap_or_else(|| "https://skills-market-api.guardssl.info".to_string()),
-                source_type: parse_marketplace_source_type(&source.source_type),
-                enabled: true,
-                builtin: true,
-                api_key: None,
-            })
-            .collect())
-    }
-
+    /// 拉取 clawhub 列表分页。clawhub 用游标分页，前端按 page 翻页时
+    /// 需要逐页推进 cursor，因此这里维护一个 cursor 缓存：page N → nextCursor。
+    /// 当请求的 page 在缓存中没有 cursor 时，会从最近已知的页开始向后逐页推进，
+    /// 直到拿到目标页的数据。
     pub async fn fetch_marketplace_skills_page(
-        sources: &[MarketplaceSource],
         skills_dir: &Path,
         query: Option<String>,
-        _github_token: Option<&str>,
         page: u32,
-        source_filter: Option<Vec<String>>,
     ) -> Result<MarketplaceSkillsResponse, String> {
         let page = page.max(1);
-        let enabled_source_ids: HashSet<String> = sources
-            .iter()
-            .filter(|source| source.enabled)
-            .map(|source| source.id.clone())
-            .collect();
+        let trimmed_query = query
+            .as_deref()
+            .map(str::trim)
+            .filter(|q| !q.is_empty())
+            .map(|q| q.to_string());
 
-        if enabled_source_ids.is_empty() {
-            return Ok(MarketplaceSkillsResponse {
-                skills: Vec::new(),
-                has_more: false,
-            });
+        // 有搜索词时走 /api/v1/search 真搜索（可搜全库，不受分页限制），
+        // 无搜索词时走 /api/v1/skills 列表分页（按 installs 排序）。
+        if let Some(q) = &trimmed_query {
+            return Self::fetch_clawhub_search_page(q, skills_dir).await;
         }
 
-        let requested_source_ids = source_filter.unwrap_or_default();
-        let has_explicit_source_filter = !requested_source_ids.is_empty();
-        let mut allowed_source_ids: Vec<String> = if has_explicit_source_filter {
-            requested_source_ids
-                .into_iter()
-                .filter(|source_id| enabled_source_ids.contains(source_id))
-                .collect()
-        } else {
-            enabled_source_ids.iter().cloned().collect()
-        };
-        allowed_source_ids.sort();
-        allowed_source_ids.dedup();
+        let sort = Some("installs");
 
-        if allowed_source_ids.is_empty() {
-            return Ok(MarketplaceSkillsResponse {
-                skills: Vec::new(),
-                has_more: false,
-            });
+        // 1. 拿到目标 page 的 cursor（必要时逐页推进）
+        let cursor = Self::resolve_clawhub_cursor_for_page(&trimmed_query, sort, page).await?;
+
+        // 2. 用 cursor 拉取目标页数据
+        let client = clawhub_client()?;
+        let mut req = client
+            .get(format!("{}/skills", CLAWHUB_API_BASE))
+            .query(&[("limit", CLAWHUB_LIST_PAGE_SIZE.to_string().as_str())]);
+        if let Some(s) = sort {
+            req = req.query(&[("sort", s)]);
         }
-
-        let all_sources_enabled = sources.iter().all(|source| source.enabled);
-        let mut response = if allowed_source_ids.len() == 1 {
-            Self::fetch_marketplace_api_skills_page(
-                query.as_deref(),
-                Some(allowed_source_ids[0].as_str()),
-                page,
-            )
-            .await?
-        } else if !has_explicit_source_filter && all_sources_enabled {
-            Self::fetch_marketplace_api_skills_page(query.as_deref(), None, page).await?
-        } else {
-            let allowed_source_set: HashSet<String> = allowed_source_ids.into_iter().collect();
-            Self::fetch_marketplace_api_skills_page_for_sources(
-                query.as_deref(),
-                &allowed_source_set,
-                page,
-            )
-            .await?
-        };
-
-        for skill in response.skills.iter_mut() {
-            skill.install_status = Self::check_install_status(skill, skills_dir);
+        if let Some(c) = cursor.as_deref() {
+            req = req.query(&[("cursor", c)]);
         }
-
-        Ok(response)
-    }
-
-    async fn fetch_marketplace_api_skills_page(
-        query: Option<&str>,
-        source_id: Option<&str>,
-        page: u32,
-    ) -> Result<MarketplaceSkillsResponse, String> {
-        let mut params: Vec<(&str, String)> = vec![
-            ("page", page.max(1).to_string()),
-            ("pageSize", MARKETPLACE_API_PAGE_SIZE.to_string()),
-        ];
-
-        if let Some(value) = query.map(str::trim).filter(|value| !value.is_empty()) {
-            params.push(("search", value.to_string()));
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| format!("技能市场请求失败: {}", e))?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(format!("技能市场请求失败: HTTP {status}"));
         }
-        if let Some(value) = source_id.map(str::trim).filter(|value| !value.is_empty()) {
-            params.push(("sourceId", value.to_string()));
-        }
+        let body: ClawhubListResponse = resp
+            .json()
+            .await
+            .map_err(|e| format!("技能市场响应解析失败: {}", e))?;
 
-        let payload = request_marketplace_api_envelope::<MarketplaceApiSkillsPage>(
-            "/skills",
-            &params,
-            "技能市场请求失败",
-            "技能市场响应解析失败",
-        )
-        .await?;
+        // 3. 记录本页返回的 nextCursor，供 page+1 使用
+        let has_more = body.next_cursor.is_some();
+        Self::record_clawhub_cursor(&trimmed_query, sort, page, body.next_cursor.clone());
 
-        let has_more = payload.data.page < payload.data.total_pages;
-        let skills = payload
-            .data
+        // 4. 映射为 MarketplaceSkill
+        let skills = body
             .items
             .into_iter()
-            .map(map_marketplace_api_skill_record)
-            .collect();
+            .map(map_clawhub_list_item_to_skill)
+            .collect::<Vec<_>>();
+
+        // 5. 标记安装状态
+        let mut skills = skills;
+        for skill in skills.iter_mut() {
+            skill.install_status = Self::check_install_status(skill, skills_dir);
+        }
 
         Ok(MarketplaceSkillsResponse { skills, has_more })
     }
 
-    async fn fetch_marketplace_api_skills_page_for_sources(
-        query: Option<&str>,
-        allowed_source_ids: &HashSet<String>,
-        page: u32,
+    /// 通过 Clawhub /api/v1/search?q= 端点搜索全库。
+    /// 该端点不支持 cursor 分页，单次返回所有命中结果（按 score 排序），
+    /// 因此 has_more 永远为 false，前端不应在搜索模式下显示"加载更多"。
+    async fn fetch_clawhub_search_page(
+        query: &str,
+        skills_dir: &Path,
     ) -> Result<MarketplaceSkillsResponse, String> {
-        let page_size = MARKETPLACE_API_PAGE_SIZE as usize;
-        let target_page = page.max(1) as usize;
-        let target_start = (target_page - 1) * page_size;
-        let target_end = target_start + page_size;
+        let client = clawhub_client()?;
+        let resp = client
+            .get(format!("{}/search", CLAWHUB_API_BASE))
+            .query(&[("q", query)])
+            .send()
+            .await
+            .map_err(|e| format!("技能市场搜索请求失败: {}", e))?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(format!("技能市场搜索请求失败: HTTP {status}"));
+        }
+        let body: ClawhubSearchResponse = resp
+            .json()
+            .await
+            .map_err(|e| format!("技能市场搜索响应解析失败: {}", e))?;
 
-        let mut filtered_seen: usize = 0;
-        let mut logical_page_items: Vec<MarketplaceSkill> = Vec::with_capacity(page_size);
-        let mut remote_page = 1u32;
-        let mut has_more = false;
+        let mut skills: Vec<MarketplaceSkill> = body
+            .results
+            .into_iter()
+            .map(map_clawhub_search_item_to_skill)
+            .collect();
 
+        for skill in skills.iter_mut() {
+            skill.install_status = Self::check_install_status(skill, skills_dir);
+        }
+
+        // 搜索端点不分页，无更多页
+        Ok(MarketplaceSkillsResponse {
+            skills,
+            has_more: false,
+        })
+    }
+
+    /// 解析 page N 对应的 cursor。如果缓存中没有，从最近已知的 page 开始向后逐页推进，
+    /// 直到拿到目标 page 的 cursor（或耗尽 has_more）。
+    async fn resolve_clawhub_cursor_for_page(
+        query: &Option<String>,
+        sort: Option<&str>,
+        target_page: u32,
+    ) -> Result<Option<String>, String> {
+        if target_page <= 1 {
+            return Ok(None);
+        }
+
+        let cache_key = clawhub_cursor_cache_key(query.as_deref(), sort);
+        let client = clawhub_client()?;
+
+        // 在缓存中查找 target_page 的 cursor
+        let cached_cursor = {
+            let guard = clawhub_cursor_cache().lock().ok();
+            if let Some(guard) = guard {
+                if let Some(map) = guard.get(&cache_key) {
+                    if let Some(cursor) = map.cursor_for_page(target_page) {
+                        return Ok(cursor.clone());
+                    }
+                    // 找到最大已知 page
+                    let max_known = map.cursors.keys().copied().max().unwrap_or(1);
+                    if max_known >= target_page {
+                        // 已知但 cursor 为 None，说明没有下一页
+                        return Ok(None);
+                    }
+                    Some((max_known, map.cursor_for_page(max_known).cloned().flatten()))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        let (start_page, start_cursor) = cached_cursor.unwrap_or((1, None));
+
+        // 从 start_page+1 开始拉取，直到拿到 target_page 的 cursor
+        let mut current_cursor = start_cursor;
+        let mut current_page = start_page;
         loop {
-            let remote_response =
-                Self::fetch_marketplace_api_skills_page(query, None, remote_page).await?;
-            remote_page += 1;
-
-            for skill in remote_response
-                .skills
-                .into_iter()
-                .filter(|skill| allowed_source_ids.contains(&skill.source_id))
-            {
-                if filtered_seen >= target_start && logical_page_items.len() < page_size {
-                    logical_page_items.push(skill);
+            if current_page >= target_page {
+                // 已经拿到目标页 cursor（在 record_clawhub_cursor 中已记录）
+                let guard = clawhub_cursor_cache().lock().ok();
+                if let Some(guard) = guard {
+                    if let Some(map) = guard.get(&cache_key) {
+                        if let Some(cursor) = map.cursor_for_page(target_page) {
+                            return Ok(cursor.clone());
+                        }
+                    }
                 }
-
-                filtered_seen += 1;
-                if filtered_seen > target_end {
-                    has_more = true;
-                    break;
-                }
+                return Ok(None);
             }
 
-            if has_more || !remote_response.has_more {
-                break;
+            let next_page = current_page + 1;
+            let mut req = client
+                .get(format!("{}/skills", CLAWHUB_API_BASE))
+                .query(&[("limit", CLAWHUB_LIST_PAGE_SIZE.to_string().as_str())]);
+            if let Some(s) = sort {
+                req = req.query(&[("sort", s)]);
+            }
+            if let Some(c) = current_cursor.as_deref() {
+                req = req.query(&[("cursor", c)]);
+            }
+            let resp = req
+                .send()
+                .await
+                .map_err(|e| format!("技能市场请求失败: {}", e))?;
+            let status = resp.status();
+            if !status.is_success() {
+                return Err(format!("技能市场请求失败: HTTP {status}"));
+            }
+            let body: ClawhubListResponse = resp
+                .json()
+                .await
+                .map_err(|e| format!("技能市场响应解析失败: {}", e))?;
+
+            Self::record_clawhub_cursor(query, sort, next_page, body.next_cursor.clone());
+
+            if body.next_cursor.is_none() {
+                // 没有更多页了
+                return Ok(None);
+            }
+            current_cursor = body.next_cursor;
+            current_page = next_page;
+        }
+    }
+
+    fn record_clawhub_cursor(
+        query: &Option<String>,
+        sort: Option<&str>,
+        page: u32,
+        cursor: Option<String>,
+    ) {
+        if let Ok(mut guard) = clawhub_cursor_cache().lock() {
+            let key = clawhub_cursor_cache_key(query.as_deref(), sort);
+            let map = guard.entry(key).or_default();
+            map.set_cursor(page, cursor);
+        }
+    }
+
+    /// 拉取 clawhub skill 详情。如果 slug 冲突（409），自动选择 downloads 最高的 owner 重试。
+    /// 结果会缓存 24 小时，避免重复请求。
+    pub async fn fetch_clawhub_skill_detail(
+        slug: &str,
+        owner: Option<&str>,
+    ) -> Result<ClawhubDetailResponse, String> {
+        if let Some(cached) = get_cached_clawhub_detail(slug, owner) {
+            return Ok(cached);
+        }
+
+        let client = clawhub_client()?;
+        let mut current_owner = owner.map(|o| o.to_string());
+
+        loop {
+            if let Some(cached) = get_cached_clawhub_detail(slug, current_owner.as_deref()) {
+                return Ok(cached);
+            }
+
+            let mut req = client.get(format!("{}/skills/{}", CLAWHUB_API_BASE, slug));
+            if let Some(o) = current_owner.as_deref() {
+                req = req.query(&[("owner", o)]);
+            }
+            let resp = req
+                .send()
+                .await
+                .map_err(|e| format!("技能市场详情请求失败: {}", e))?;
+            let status = resp.status();
+
+            if status == StatusCode::CONFLICT {
+                // 409 AMBIGUOUS_SKILL_SLUG：自动消歧
+                let body = resp
+                    .text()
+                    .await
+                    .map_err(|e| format!("读取 409 响应失败: {}", e))?;
+                let ambiguous: ClawhubAmbiguousResponse =
+                    serde_json::from_str(&body).map_err(|e| format!("解析 409 响应失败: {}", e))?;
+                if ambiguous.matches.is_empty() {
+                    return Err(format!("skill '{}' 存在多个作者但未返回候选列表", slug));
+                }
+                // 选择第一个候选（clawhub 通常按热度排序返回候选）
+                let best_owner = ambiguous.matches[0].owner_handle.clone();
+                current_owner = Some(best_owner);
+                continue;
+            }
+
+            if !status.is_success() {
+                return Err(format!("技能市场详情请求失败: HTTP {status}"));
+            }
+
+            let detail: ClawhubDetailResponse = resp
+                .json()
+                .await
+                .map_err(|e| format!("技能市场详情响应解析失败: {}", e))?;
+
+            // 用实际返回的 owner 作为缓存 key（避免缓存 key 不一致）
+            let effective_owner = detail
+                .owner
+                .as_ref()
+                .map(|o| o.handle.as_str())
+                .or(current_owner.as_deref());
+            set_cached_clawhub_detail(slug, effective_owner, detail.clone());
+
+            return Ok(detail);
+        }
+    }
+
+    /// 下载并解压 clawhub skill 归档（ZIP）。
+    /// 返回 (相对路径, 文件字节) 列表，已过滤掉 clawhub 元数据文件（_meta.json, skill-card.md）。
+    pub async fn download_clawhub_skill_archive(
+        slug: &str,
+        owner: Option<&str>,
+        version: &str,
+    ) -> Result<Vec<(String, Vec<u8>)>, String> {
+        let client = clawhub_client()?;
+        let mut req = client.get(format!("{}/download", CLAWHUB_API_BASE));
+        req = req.query(&[("slug", slug), ("version", version)]);
+        if let Some(o) = owner {
+            req = req.query(&[("ownerHandle", o)]);
+        }
+
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| format!("下载 skill 归档失败: {}", e))?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(format!("下载 skill 归档失败: HTTP {status}"));
+        }
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| format!("读取 skill 归档失败: {}", e))?;
+
+        // 解压 ZIP
+        let cursor = std::io::Cursor::new(&bytes[..]);
+        let mut zip = zip::ZipArchive::new(cursor).map_err(|e| format!("解压归档失败: {}", e))?;
+
+        let mut files = Vec::new();
+        for i in 0..zip.len() {
+            let mut entry = zip
+                .by_index(i)
+                .map_err(|e| format!("读取归档条目失败: {}", e))?;
+            let name = entry.name().to_string();
+            if entry.is_dir() {
+                continue;
+            }
+            // 过滤 clawhub 元数据文件
+            if name == "_meta.json" || name == "skill-card.md" {
+                continue;
+            }
+            let mut buf = Vec::new();
+            entry
+                .read_to_end(&mut buf)
+                .map_err(|e| format!("读取归档文件失败: {}", e))?;
+            files.push((name, buf));
+        }
+
+        if files.is_empty() {
+            return Err(format!("skill '{}' 归档为空", slug));
+        }
+
+        Ok(files)
+    }
+
+    /// 下载 clawhub 技能归档并构建文件树，用于详情弹窗预览。
+    /// 若 owner/version 缺失，会先拉取详情端点补全。
+    /// 归档会缓存 10 分钟，供后续文件内容请求复用。
+    /// 返回的 ClawhubSkillFilesResponse 携带解析出的 owner/version，
+    /// 供前端补全 skill 元数据并构造正确的外部链接。
+    pub async fn fetch_clawhub_skill_files(
+        slug: &str,
+        owner: Option<&str>,
+        version: Option<&str>,
+    ) -> Result<ClawhubSkillFilesResponse, String> {
+        let mut resolved_owner = owner.map(|o| o.to_string());
+        let mut resolved_version = version.map(|v| v.to_string());
+
+        if resolved_owner.is_none() || resolved_version.is_none() {
+            let detail = Self::fetch_clawhub_skill_detail(slug, resolved_owner.as_deref()).await?;
+            if resolved_owner.is_none() {
+                resolved_owner = detail.owner.map(|o| o.handle);
+            }
+            if resolved_version.is_none() {
+                resolved_version = detail.latest_version.map(|v| v.version);
             }
         }
 
-        Ok(MarketplaceSkillsResponse {
-            skills: logical_page_items,
-            has_more,
+        let version_str =
+            resolved_version.ok_or_else(|| format!("clawhub skill '{}' 未返回版本号", slug))?;
+
+        let files = if let Some(cached) =
+            get_cached_clawhub_archive(slug, resolved_owner.as_deref(), &version_str)
+        {
+            cached
+        } else {
+            let downloaded =
+                Self::download_clawhub_skill_archive(slug, resolved_owner.as_deref(), &version_str)
+                    .await?;
+            set_cached_clawhub_archive(
+                slug,
+                resolved_owner.as_deref(),
+                &version_str,
+                downloaded.clone(),
+            );
+            downloaded
+        };
+
+        let tree = build_clawhub_skill_tree(&files, slug, resolved_owner.as_deref(), &version_str);
+
+        Ok(ClawhubSkillFilesResponse {
+            tree,
+            resolved_owner,
+            resolved_version: Some(version_str),
         })
     }
 
@@ -916,6 +1307,9 @@ impl MarketplaceService {
                 remote_revision,
                 tags: Vec::new(),
                 install_status: InstallStatus::NotInstalled,
+                clawhub_slug: None,
+                clawhub_owner: None,
+                clawhub_version: None,
             });
         }
 
@@ -1008,6 +1402,9 @@ impl MarketplaceService {
     }
 
     pub async fn fetch_skill_file_content(download_url: &str) -> Result<String, String> {
+        if download_url.starts_with("clawhub:") {
+            return Self::fetch_clawhub_skill_file_content(download_url).await;
+        }
         let client = Client::new();
         let response = client
             .get(download_url)
@@ -1023,6 +1420,44 @@ impl MarketplaceService {
             .text()
             .await
             .map_err(|e| format!("文件读取失败: {}", e))
+    }
+
+    /// 从 clawhub 归档中获取单个文件内容。
+    /// download_url 格式: `clawhub:{slug}|{owner}|{version}|{path}`
+    async fn fetch_clawhub_skill_file_content(download_url: &str) -> Result<String, String> {
+        let rest = download_url
+            .strip_prefix("clawhub:")
+            .ok_or("无效的 clawhub URL")?;
+        let parts: Vec<&str> = rest.splitn(4, '|').collect();
+        if parts.len() != 4 {
+            return Err("无效的 clawhub 文件 URL".to_string());
+        }
+        let slug = parts[0];
+        let owner = if parts[1].is_empty() {
+            None
+        } else {
+            Some(parts[1])
+        };
+        let version = parts[2];
+        let file_path = parts[3];
+
+        let files = if let Some(cached) = get_cached_clawhub_archive(slug, owner, version) {
+            cached
+        } else {
+            let downloaded = Self::download_clawhub_skill_archive(slug, owner, version).await?;
+            set_cached_clawhub_archive(slug, owner, version, downloaded.clone());
+            downloaded
+        };
+
+        for (path, bytes) in &files {
+            let stripped = strip_archive_top_level_prefix(path, slug);
+            if stripped == file_path {
+                return String::from_utf8(bytes.clone())
+                    .map_err(|e| format!("文件不是有效的 UTF-8 文本: {}", e));
+            }
+        }
+
+        Err(format!("在归档中未找到文件: {}", file_path))
     }
 
     pub async fn fetch_skill_description(
@@ -1086,6 +1521,110 @@ impl MarketplaceService {
     }
 
     pub async fn install_skill(
+        skill: &MarketplaceSkill,
+        skills_dir: &Path,
+        github_token: Option<&str>,
+    ) -> Result<InstallResult, String> {
+        // 按 source_id 分发：clawhub 源走归档下载，其他源走原 GitHub 逻辑
+        if skill.source_id == CLAWHUB_SOURCE_ID {
+            Self::install_clawhub_skill(skill, skills_dir).await
+        } else {
+            Self::install_github_skill(skill, skills_dir, github_token).await
+        }
+    }
+
+    /// 从 clawhub 下载 ZIP 归档并解压到本地 skills 目录。
+    /// 如果 skill 的 owner/version 缺失，会先拉取详情端点补全。
+    async fn install_clawhub_skill(
+        skill: &MarketplaceSkill,
+        skills_dir: &Path,
+    ) -> Result<InstallResult, String> {
+        let slug = skill
+            .clawhub_slug
+            .as_deref()
+            .or(skill.slug.as_deref())
+            .ok_or_else(|| "clawhub skill 缺少 slug，无法安装".to_string())?;
+
+        // 补全 owner / version（详情端点会消歧 409）
+        let owner = match skill.clawhub_owner.as_deref() {
+            Some(value) if !value.trim().is_empty() => Some(value.to_string()),
+            _ => {
+                let detail = Self::fetch_clawhub_skill_detail(slug, None).await?;
+                detail
+                    .owner
+                    .as_ref()
+                    .map(|owner| owner.handle.clone())
+                    .filter(|value| !value.trim().is_empty())
+            }
+        };
+
+        let version = match skill.clawhub_version.as_deref() {
+            Some(value) if !value.trim().is_empty() => value.to_string(),
+            _ => {
+                let detail = Self::fetch_clawhub_skill_detail(slug, owner.as_deref()).await?;
+                detail
+                    .latest_version
+                    .as_ref()
+                    .map(|version| version.version.clone())
+                    .ok_or_else(|| format!("clawhub skill '{}' 未返回版本号", slug))?
+            }
+        };
+
+        let install_dir = preferred_marketplace_install_dir(skills_dir, skill);
+        let legacy_install_dir = legacy_marketplace_install_dir(skills_dir, skill);
+
+        if install_dir.exists() {
+            if !is_same_marketplace_skill(&install_dir, skill)? {
+                return Err("本地已存在同名 Skill（非市场来源），请重命名".to_string());
+            }
+            fs::remove_dir_all(&install_dir).map_err(|e| format!("无法覆盖已有 Skill: {}", e))?;
+        }
+        if let Some(legacy_dir) = legacy_install_dir {
+            if legacy_dir.exists() && is_same_marketplace_skill(&legacy_dir, skill)? {
+                fs::remove_dir_all(&legacy_dir)
+                    .map_err(|e| format!("无法迁移旧版 Skill 目录: {}", e))?;
+            }
+        }
+
+        if !skills_dir.exists() {
+            fs::create_dir_all(skills_dir).map_err(|e| format!("无法创建 Skills 目录: {}", e))?;
+        }
+        fs::create_dir_all(&install_dir).map_err(|e| format!("无法创建 Skill 目录: {}", e))?;
+
+        let files = Self::download_clawhub_skill_archive(slug, owner.as_deref(), &version).await?;
+        for (relative_path, bytes) in files {
+            let relative_path = relative_path.trim_start_matches("./");
+            // 如果归档内文件带顶层目录（如 "skill-name/SKILL.md"），剥离到 SKILL.md
+            let stripped = strip_archive_top_level_prefix(relative_path, slug);
+            if stripped.is_empty() || stripped == "." {
+                continue;
+            }
+            let target_path = install_dir.join(&stripped);
+            if let Some(parent) = target_path.parent() {
+                fs::create_dir_all(parent).map_err(|e| format!("无法创建目录: {}", e))?;
+            }
+            fs::write(&target_path, &bytes).map_err(|e| format!("写入文件失败: {}", e))?;
+        }
+
+        let remote_revision = skill
+            .remote_revision
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string())
+            .or_else(|| Some(version.clone()));
+
+        write_marketplace_meta(&install_dir, skill, remote_revision.as_deref())?;
+
+        Ok(InstallResult {
+            success: true,
+            skill_id: skill.id.clone(),
+            message: None,
+            installed_path: Some(install_dir.to_string_lossy().to_string()),
+        })
+    }
+
+    async fn install_github_skill(
         skill: &MarketplaceSkill,
         skills_dir: &Path,
         github_token: Option<&str>,
@@ -2348,99 +2887,6 @@ fn with_github_auth(
     }
 }
 
-fn parse_marketplace_source_type(value: &str) -> SourceType {
-    match value.trim().to_lowercase().as_str() {
-        "github_repo" => SourceType::GithubRepo,
-        "api" => SourceType::Api,
-        "crawler" => SourceType::Crawler,
-        "manual" => SourceType::Manual,
-        _ => SourceType::Unknown,
-    }
-}
-
-fn map_marketplace_api_skill_record(record: MarketplaceApiSkillRecord) -> MarketplaceSkill {
-    let install_url = record
-        .install_url
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_string());
-
-    let (repo_url, skill_path) =
-        derive_github_repo_and_skill_path(install_url.as_deref(), &record.slug);
-    let external_url = build_marketplace_external_url(
-        install_url.as_deref(),
-        repo_url.as_deref(),
-        skill_path.as_deref(),
-    );
-    let source_id = if record.source.id.trim().is_empty() {
-        record.source_id.clone()
-    } else {
-        record.source.id.clone()
-    };
-    let source_name = if record.source.name.trim().is_empty() {
-        source_id.clone()
-    } else {
-        record.source.name.clone()
-    };
-    let description = record.summary.trim();
-    let author = record
-        .slug
-        .split('/')
-        .next()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_string());
-    let _source_type = parse_marketplace_source_type(&record.source.source_type);
-
-    MarketplaceSkill {
-        id: record.id,
-        slug: Some(record.slug.clone()),
-        name: record.name,
-        description: if description.is_empty() {
-            None
-        } else {
-            Some(description.to_string())
-        },
-        author,
-        source_id,
-        source_name,
-        install_count: record.install_count,
-        install_url: install_url.clone(),
-        created_at: Some(record.created_at),
-        repo_url,
-        skill_path,
-        external_url,
-        remote_revision: Some(build_marketplace_api_revision(
-            record.created_at,
-            install_url.as_deref(),
-            &record.slug,
-        )),
-        tags: Vec::new(),
-        install_status: InstallStatus::NotInstalled,
-    }
-}
-
-fn build_marketplace_api_revision(
-    created_at: u64,
-    install_url: Option<&str>,
-    slug: &str,
-) -> String {
-    let fingerprint = format!(
-        "{}|{}|{}",
-        created_at,
-        slug.trim(),
-        install_url.map(str::trim).unwrap_or_default()
-    );
-
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for byte in fingerprint.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    format!("market-api-fnv64:{hash:016x}")
-}
-
 pub(crate) fn derive_github_repo_and_skill_path(
     install_url: Option<&str>,
     slug: &str,
@@ -2708,6 +3154,135 @@ fn normalize_local_path(path: &str, skill_path: &str) -> String {
     path.to_string()
 }
 
+/// clawhub ZIP 归档内的文件可能带顶层目录（如 "my-skill/SKILL.md"），
+/// 也可能直接是文件（如 "SKILL.md"）。如果路径以 "<slug>/" 开头则剥离该前缀，
+/// 否则原样返回。slug 中的 '/' 不会被作为目录分隔符处理。
+/// 重复前缀（如 "my-skill/my-skill/SKILL.md"）会被全部剥离。
+fn strip_archive_top_level_prefix(path: &str, slug: &str) -> String {
+    let path = path.trim_start_matches("./");
+    let slug = slug.trim_end_matches('/');
+    if slug.is_empty() {
+        return path.to_string();
+    }
+    let prefix = format!("{}/", slug);
+    let mut result = path;
+    while let Some(stripped) = result.strip_prefix(&prefix) {
+        result = stripped;
+    }
+    result.to_string()
+}
+
+/// 递归地将文件路径插入到 SkillFileNode 树中。
+fn insert_into_clawhub_tree(
+    children: &mut Vec<SkillFileNode>,
+    segments: &[&str],
+    accumulated_path: &str,
+    download_url: String,
+) {
+    if segments.is_empty() {
+        return;
+    }
+    let (first, rest) = segments.split_first().unwrap();
+    let current_path = if accumulated_path.is_empty() {
+        first.to_string()
+    } else {
+        format!("{}/{}", accumulated_path, first)
+    };
+    let is_leaf = rest.is_empty();
+
+    if is_leaf {
+        children.push(SkillFileNode {
+            name: first.to_string(),
+            path: current_path,
+            is_dir: false,
+            download_url: Some(download_url),
+            sha: None,
+            children: None,
+        });
+    } else {
+        let pos = children.iter().position(|c| c.is_dir && c.name == *first);
+        match pos {
+            Some(idx) => {
+                let child = &mut children[idx];
+                if let Some(grandchildren) = child.children.as_mut() {
+                    insert_into_clawhub_tree(grandchildren, rest, &current_path, download_url);
+                }
+            }
+            None => {
+                children.push(SkillFileNode {
+                    name: first.to_string(),
+                    path: current_path.clone(),
+                    is_dir: true,
+                    download_url: None,
+                    sha: None,
+                    children: Some(Vec::new()),
+                });
+                let last_idx = children.len() - 1;
+                let child = &mut children[last_idx];
+                if let Some(grandchildren) = child.children.as_mut() {
+                    insert_into_clawhub_tree(grandchildren, rest, &current_path, download_url);
+                }
+            }
+        }
+    }
+}
+
+/// 对 SkillFileNode 的子节点排序：目录在前，文件在后，各自按名称排序。
+fn sort_skill_file_nodes(node: &mut SkillFileNode) {
+    if let Some(children) = node.children.as_mut() {
+        children.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.name.cmp(&b.name),
+        });
+        for child in children.iter_mut() {
+            sort_skill_file_nodes(child);
+        }
+    }
+}
+
+/// 从 clawhub ZIP 归档的扁平文件列表构建 SkillFileNode 树。
+/// download_url 格式: `clawhub:{slug}|{owner}|{version}|{path}`
+fn build_clawhub_skill_tree(
+    files: &[(String, Vec<u8>)],
+    slug: &str,
+    owner: Option<&str>,
+    version: &str,
+) -> SkillFileNode {
+    let mut root = SkillFileNode {
+        name: slug.to_string(),
+        path: String::new(),
+        is_dir: true,
+        download_url: None,
+        sha: None,
+        children: Some(Vec::new()),
+    };
+
+    for (raw_path, _) in files {
+        let path = strip_archive_top_level_prefix(raw_path, slug);
+        if path.is_empty() || path == "." {
+            continue;
+        }
+        let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        if segments.is_empty() {
+            continue;
+        }
+        let download_url = format!(
+            "clawhub:{}|{}|{}|{}",
+            slug,
+            owner.unwrap_or(""),
+            version,
+            path,
+        );
+        if let Some(children) = root.children.as_mut() {
+            insert_into_clawhub_tree(children, &segments, "", download_url);
+        }
+    }
+
+    sort_skill_file_nodes(&mut root);
+    root
+}
+
 fn write_marketplace_meta(
     dir: &Path,
     skill: &MarketplaceSkill,
@@ -2894,13 +3469,12 @@ mod tests {
     use super::{
         build_marketplace_external_url, build_skill_tree_from_tree_entries, collect_file_nodes,
         extract_root_skill_dirs_from_tree_entries, extract_skill_description_from_markdown,
-        get_cached_github_tree, github_tree_cache, github_tree_cache_key,
-        map_marketplace_api_skill_record, normalize_github_token,
+        get_cached_github_tree, github_tree_cache, github_tree_cache_key, normalize_github_token,
         preferred_marketplace_install_dir, set_cached_github_tree, should_include_github_root_dir,
-        CachedGitHubTree, GitHubContent, GitHubTreeEntry, InstallStatus, MarketplaceApiSkillRecord,
-        MarketplaceApiSkillSource, MarketplaceCache, MarketplaceSkill, MarketplaceSkillsResponse,
-        PersistedMarketplaceCacheEntry, PersistedMarketplaceState, PersistedSkillDescriptionEntry,
-        GITHUB_TREE_CACHE_TTL, PERSISTED_CACHE_TTL, PERSISTED_SKILL_DESCRIPTION_CACHE_TTL,
+        CachedGitHubTree, GitHubContent, GitHubTreeEntry, InstallStatus, MarketplaceCache,
+        MarketplaceSkill, MarketplaceSkillsResponse, PersistedMarketplaceCacheEntry,
+        PersistedMarketplaceState, PersistedSkillDescriptionEntry, GITHUB_TREE_CACHE_TTL,
+        PERSISTED_CACHE_TTL, PERSISTED_SKILL_DESCRIPTION_CACHE_TTL,
     };
     use std::collections::HashSet;
     use std::fs;
@@ -2921,85 +3495,6 @@ mod tests {
             normalize_github_token(Some("  ghp_example_token  ")),
             Some("ghp_example_token".to_string())
         );
-    }
-
-    #[test]
-    fn is_cloudflare_challenge_html_detects_known_markers() {
-        let html = "<html><title>Just a moment...</title><script src=\"/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1\"></script></html>";
-        assert!(super::is_cloudflare_challenge_html(html));
-    }
-
-    #[test]
-    fn is_cloudflare_challenge_html_ignores_normal_api_json() {
-        let body = r#"{"data":{"items":[],"page":1}}"#;
-        assert!(!super::is_cloudflare_challenge_html(body));
-    }
-
-    #[test]
-    fn marketplace_api_default_headers_include_browser_like_metadata() {
-        let headers = super::marketplace_api_default_headers();
-
-        assert!(
-            headers
-                .iter()
-                .any(|(name, value)| *name == "accept"
-                    && *value == "application/json, text/plain, */*"),
-            "marketplace api requests should explicitly accept json payload"
-        );
-        assert!(
-            headers.iter().any(|(name, value)| *name == "origin"
-                && *value == "https://skills-market-api.guardssl.info"),
-            "marketplace api requests should include expected origin"
-        );
-        assert!(
-            headers.iter().any(|(name, value)| *name == "referer"
-                && *value == "https://skills-market-api.guardssl.info/"),
-            "marketplace api requests should include expected referer"
-        );
-        assert!(
-            headers
-                .iter()
-                .any(|(name, value)| *name == "user-agent" && !value.trim().is_empty()),
-            "marketplace api requests should always provide user agent"
-        );
-    }
-
-    #[test]
-    fn build_marketplace_api_url_adds_install_count_desc_sorting_for_skills_endpoint() {
-        let url = super::build_marketplace_api_url(
-            "/skills",
-            &[("page", "1".to_string()), ("pageSize", "20".to_string())],
-        )
-        .expect("skills api url should be constructed");
-
-        let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
-
-        assert_eq!(
-            query.get("sortBy").map(String::as_str),
-            Some("installCount")
-        );
-        assert_eq!(query.get("sortOrder").map(String::as_str), Some("desc"));
-    }
-
-    #[test]
-    fn map_marketplace_api_skill_record_preserves_install_count() {
-        let skill = map_marketplace_api_skill_record(MarketplaceApiSkillRecord {
-            id: "skill-1".to_string(),
-            source_id: "source-a".to_string(),
-            slug: "owner/repo/skill".to_string(),
-            name: "Skill One".to_string(),
-            summary: "summary".to_string(),
-            install_count: Some(12_500),
-            install_url: Some("https://github.com/owner/repo/tree/main/skill".to_string()),
-            created_at: 1_771_234_567,
-            source: MarketplaceApiSkillSource {
-                id: "source-a".to_string(),
-                name: "Source A".to_string(),
-                source_type: "api".to_string(),
-            },
-        });
-
-        assert_eq!(skill.install_count, Some(12_500));
     }
 
     #[test]
@@ -3717,6 +4212,68 @@ description: "来自 frontmatter 的描述"
         assert_eq!(filtered_none.len(), skills.len());
     }
 
+    #[test]
+    fn filter_marketplace_skills_by_query_matches_tags() {
+        let mut alpha = sample_marketplace_skill("source-a", "alpha-skill");
+        alpha.tags = vec!["email".to_string(), "gmail".to_string()];
+        let mut beta = sample_marketplace_skill("source-b", "beta-tool");
+        beta.tags = vec!["calendar".to_string()];
+
+        let skills = vec![alpha.clone(), beta];
+
+        let by_tag = super::filter_marketplace_skills_by_query(skills, Some("email"));
+        assert_eq!(by_tag.len(), 1);
+        assert_eq!(by_tag[0].id, alpha.id);
+    }
+
+    #[test]
+    fn filter_marketplace_skills_by_query_supports_token_and_matching() {
+        // 分词 AND：两个 token 都要命中（可在不同字段）
+        let mut alpha = sample_marketplace_skill("source-a", "alpha-skill");
+        alpha.name = "Email Manager".to_string();
+        alpha.description = Some("Gmail integration".to_string());
+
+        let mut beta = sample_marketplace_skill("source-b", "beta-tool");
+        beta.name = "Email Tool".to_string();
+        beta.description = Some("Calendar integration".to_string());
+
+        let skills = vec![alpha.clone(), beta];
+
+        // "email gmail" → alpha 命中（name 有 email，description 有 gmail）
+        // beta 只有 email 没有 gmail → 不命中
+        let filtered = super::filter_marketplace_skills_by_query(skills, Some("email gmail"));
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, alpha.id);
+    }
+
+    #[test]
+    fn map_clawhub_search_item_to_skill_maps_fields_and_owner() {
+        let item = super::ClawhubSearchItem {
+            score: Some(2.5),
+            slug: "email-skill".to_string(),
+            display_name: Some("Email".to_string()),
+            summary: Some("  Email management  ".to_string()),
+            version: Some("1.2.0".to_string()),
+            downloads: Some(8905),
+            owner_handle: Some("porteden".to_string()),
+        };
+        let skill = super::map_clawhub_search_item_to_skill(item);
+        assert_eq!(skill.slug.as_deref(), Some("email-skill"));
+        assert_eq!(skill.name, "Email");
+        assert_eq!(skill.description.as_deref(), Some("Email management"));
+        assert_eq!(skill.author.as_deref(), Some("porteden"));
+        assert_eq!(skill.clawhub_owner.as_deref(), Some("porteden"));
+        assert_eq!(skill.clawhub_version.as_deref(), Some("1.2.0"));
+        assert_eq!(skill.install_count, Some(8905));
+        assert!(skill.external_url.as_deref().unwrap().contains("porteden"));
+        assert!(skill
+            .external_url
+            .as_deref()
+            .unwrap()
+            .contains("email-skill"));
+        assert!(skill.tags.is_empty(), "tags should default to empty");
+    }
+
     fn sample_marketplace_skill(source_id: &str, slug: &str) -> MarketplaceSkill {
         MarketplaceSkill {
             id: format!("{}::{}", source_id, slug),
@@ -3737,6 +4294,9 @@ description: "来自 frontmatter 的描述"
             remote_revision: None,
             tags: vec!["test".to_string()],
             install_status: InstallStatus::NotInstalled,
+            clawhub_slug: None,
+            clawhub_owner: None,
+            clawhub_version: None,
         }
     }
 
@@ -3748,5 +4308,36 @@ description: "来自 frontmatter 的描述"
             .as_ref()
             .map(|children| children.iter().map(count_files).sum())
             .unwrap_or(0)
+    }
+
+    #[test]
+    fn strip_archive_top_level_prefix_removes_repeated_slug_prefixes() {
+        use super::strip_archive_top_level_prefix;
+
+        // Single prefix
+        assert_eq!(
+            strip_archive_top_level_prefix("my-skill/SKILL.md", "my-skill"),
+            "SKILL.md"
+        );
+        // Repeated prefix (the #49 bug)
+        assert_eq!(
+            strip_archive_top_level_prefix("my-skill/my-skill/SKILL.md", "my-skill"),
+            "SKILL.md"
+        );
+        // Triple prefix
+        assert_eq!(
+            strip_archive_top_level_prefix("a/a/a/file.txt", "a"),
+            "file.txt"
+        );
+        // No prefix match — unchanged
+        assert_eq!(
+            strip_archive_top_level_prefix("other/SKILL.md", "my-skill"),
+            "other/SKILL.md"
+        );
+        // Leading ./ is trimmed first
+        assert_eq!(
+            strip_archive_top_level_prefix("./my-skill/SKILL.md", "my-skill"),
+            "SKILL.md"
+        );
     }
 }

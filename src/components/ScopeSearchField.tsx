@@ -32,7 +32,7 @@ export function ScopeSearchField({ onOpenPalette }: ScopeSearchFieldProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
-  const { pageSearchQuery, setPageSearchQuery, pageSearchPlaceholder } = usePageHeaderState();
+  const { pageSearchQuery, setPageSearchQuery, pageSearchPlaceholder, riskScanning } = usePageHeaderState();
   // switcherQuery only filters the page-switcher dropdown (State B). The
   // page-level search query lives in context so the active page can read it.
   const [switcherQuery, setSwitcherQuery] = useState("");
@@ -77,6 +77,19 @@ export function ScopeSearchField({ onOpenPalette }: ScopeSearchFieldProps) {
     setSwitcherOpen(false);
     setSwitcherQuery("");
     inputRef.current?.blur();
+  }
+
+  function handleBlur() {
+    // 延迟检查，让点击下拉框选项或清除按钮的 click 事件先触发并可能
+    // 重新聚焦 input。若焦点移到了搜索框之外（例如点击了 TopBar
+    // 拖拽区域或页面其他位置），则关闭下拉框。这补充了 mousedown
+    // handler，后者无法捕获 Tauri 拖拽区域上的点击。
+    setTimeout(() => {
+      if (dropdownRef.current && !dropdownRef.current.contains(document.activeElement)) {
+        setSwitcherOpen(false);
+        setSwitcherQuery("");
+      }
+    }, 0);
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
@@ -147,6 +160,21 @@ export function ScopeSearchField({ onOpenPalette }: ScopeSearchFieldProps) {
           transition: "border-color 0.15s",
         }}
       >
+        {/* 全局风险扫描进度指示：扫描中在 chip 左侧显示脉冲圆点。
+            与 chip 同步隐藏（switcherOpen 时不显示），避免干扰页面切换输入。 */}
+        {riskScanning && !switcherOpen && (
+          <span
+            title={t("settings.riskScanRescanning")}
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: "50%",
+              background: "var(--primary)",
+              animation: "riskScanPulse 1.2s ease-in-out infinite",
+              flexShrink: 0,
+            }}
+          />
+        )}
         {/* Current-page chip — click to open the page switcher.
             When the switcher is open the chip hides so typed text is the
             only content in the field (no decorative "/" to double up). */}
@@ -183,6 +211,7 @@ export function ScopeSearchField({ onOpenPalette }: ScopeSearchFieldProps) {
           value={inputValue}
           onChange={handleInputChange}
           onKeyDown={handleKeyDown}
+          onBlur={handleBlur}
           placeholder={placeholder}
           style={{
             flex: 1,

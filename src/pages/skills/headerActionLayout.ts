@@ -3,7 +3,9 @@ export type SkillsHeaderActionId =
   | "batch-configure"
   | "project-bindings"
   | "create-skill"
-  | "scan-import";
+  | "scan-import"
+  | "import-skills"
+  | "export-skills";
 
 export interface SkillsHeaderActionLayout {
   primaryActionIds: SkillsHeaderActionId[];
@@ -16,14 +18,20 @@ export function buildSkillsHeaderActionLayout(
 ): SkillsHeaderActionLayout {
   if (isBatchManageMode) {
     return {
-      primaryActionIds: ["batch-manage", "batch-configure"],
+      primaryActionIds: ["batch-manage", "batch-configure", "export-skills"],
       moreActionIds: [],
       secondaryActionIds: [],
     };
   }
   return {
     primaryActionIds: [],
-    moreActionIds: ["batch-manage", "project-bindings", "scan-import"],
+    moreActionIds: [
+      "batch-manage",
+      "project-bindings",
+      "scan-import",
+      "import-skills",
+      "export-skills",
+    ],
     secondaryActionIds: ["create-skill"],
   };
 }

@@ -188,9 +188,19 @@ impl LinkerService {
         let link_path = tool_skills_dir.join(skill_id);
 
         if link_path.exists() || link_path.symlink_metadata().is_ok() {
-            fs::remove_file(&link_path)
-                .or_else(|_| fs::remove_dir_all(&link_path))
-                .map_err(|e| format!("Failed to remove existing link: {}", e))?;
+            // Safety: only replace symlinks/junctions or copy-mode managed dirs.
+            if is_symlink_or_junction(&link_path) {
+                remove_symlink_or_junction(&link_path)
+                    .map_err(|e| format!("Failed to remove existing link: {}", e))?;
+            } else if copy_mode_metadata_exists(&link_path) {
+                fs::remove_dir_all(&link_path)
+                    .map_err(|e| format!("Failed to remove existing copy-mode skill: {}", e))?;
+            } else {
+                return Err(format!(
+                    "Target path exists and is not managed by Skills-Manager: {}",
+                    link_path.display()
+                ));
+            }
         }
 
         #[cfg(unix)]
@@ -201,7 +211,18 @@ impl LinkerService {
 
         #[cfg(windows)]
         {
-            Self::create_windows_symlink(skill_source, &link_path)?;
+            if Self::create_windows_symlink(skill_source, &link_path).is_err() {
+                // Fallback: copy mode when symlink/junction creation is not permitted
+                // (e.g. no admin rights, developer mode disabled)
+                if !skill_source.is_dir() {
+                    return Err(format!(
+                        "Skill source is not a directory: {}",
+                        skill_source.display()
+                    ));
+                }
+                copy_dir_all_include_hidden(skill_source, &link_path)?;
+                write_copy_mode_metadata(&link_path, skill_id, skill_source)?;
+            }
         }
 
         Ok(())
@@ -282,9 +303,24 @@ impl LinkerService {
             return Ok(());
         }
 
-        fs::remove_file(&link_path)
-            .or_else(|_| fs::remove_dir_all(&link_path))
-            .map_err(|e| format!("Failed to remove link: {}", e))
+        // Safety: only remove symlinks/junctions or copy-mode managed directories.
+        // Never delete real user directories that we did not create.
+        if is_symlink_or_junction(&link_path) {
+            return remove_symlink_or_junction(&link_path)
+                .map_err(|e| format!("Failed to remove link: {}", e));
+        }
+
+        // Copy-mode managed directory (created by this app, identified by metadata file)
+        if copy_mode_metadata_exists(&link_path) {
+            return fs::remove_dir_all(&link_path)
+                .map_err(|e| format!("Failed to remove copy-mode skill: {}", e));
+        }
+
+        // Not a symlink and not managed by us — refuse to delete external content
+        Err(format!(
+            "Refusing to remove non-managed path (not a symlink): {}",
+            link_path.display()
+        ))
     }
 
     pub fn check_link(skill_source: &Path, tool_skills_dir: &Path, skill_id: &str) -> LinkStatus {
@@ -713,6 +749,45 @@ mod tests {
             "valid link should be treated as noop"
         );
         assert_eq!(report.failed.len(), 0, "noop should not produce failures");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn disable_skill_refuses_to_delete_real_directory_but_removes_symlink() {
+        let root = make_temp_dir("disable-safety");
+        let tool_skills_dir = root.join("tool").join("skills");
+        fs::create_dir_all(&tool_skills_dir).expect("tool skills dir");
+
+        // Case 1: real directory (user-placed, not managed by us) — must NOT be deleted
+        let real_dir = tool_skills_dir.join("user-skill");
+        fs::create_dir_all(&real_dir).expect("create real dir");
+        fs::write(real_dir.join("SKILL.md"), "# User skill\n").expect("write skill file");
+
+        let result = LinkerService::disable_skill(&tool_skills_dir, "user-skill");
+        assert!(
+            result.is_err(),
+            "disable_skill must refuse to delete a real directory"
+        );
+        assert!(
+            real_dir.exists(),
+            "real directory must still exist after refused delete"
+        );
+
+        // Case 2: symlink — should be removed successfully
+        let source = root.join("hub").join("linked-skill");
+        fs::create_dir_all(&source).expect("create source");
+        let link_path = tool_skills_dir.join("linked-skill");
+        std::os::unix::fs::symlink(&source, &link_path).expect("create symlink");
+
+        let result = LinkerService::disable_skill(&tool_skills_dir, "linked-skill");
+        assert!(result.is_ok(), "disable_skill should remove a symlink");
+        assert!(
+            !link_path.exists() && link_path.symlink_metadata().is_err(),
+            "symlink should be gone"
+        );
+        assert!(source.exists(), "symlink target must not be deleted");
+
         let _ = fs::remove_dir_all(root);
     }
 }
