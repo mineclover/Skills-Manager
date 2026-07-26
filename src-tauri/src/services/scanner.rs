@@ -1109,6 +1109,49 @@ description: "Description from SKILL.md"
     }
 
     #[test]
+    fn scan_project_scope_discovers_skill_added_after_initial_scan() {
+        with_temp_home(|home| {
+            let project_root = home.join("code").join("project-after-add");
+            let project_skills_dir = project_root.join("skills");
+            fs::create_dir_all(&project_skills_dir).expect("create project skills root");
+
+            let mut config = AppConfig::default();
+            config.skills_dir = home.join(".skills-manager").join("skills");
+            config.projects = vec![ProjectBinding {
+                id: "project-after-add".to_string(),
+                name: "Project After Add".to_string(),
+                skills_dir: project_skills_dir.clone(),
+                root_path: Some(project_root),
+            }];
+
+            let initial = ScannerService::scan_skills_for_scope(&config, Some("project-after-add"))
+                .expect("initial project scan");
+            assert!(
+                initial.is_empty(),
+                "new project should start without skills"
+            );
+
+            let added_skill_dir = project_skills_dir.join("added-after-scan");
+            fs::create_dir_all(&added_skill_dir).expect("create added skill");
+            fs::write(
+                added_skill_dir.join("SKILL.md"),
+                "---\nname: added-after-scan\n---\n",
+            )
+            .expect("write added skill");
+
+            let refreshed =
+                ScannerService::scan_skills_for_scope(&config, Some("project-after-add"))
+                    .expect("rescan project after adding skill");
+            assert_eq!(refreshed.len(), 1);
+            assert_eq!(refreshed[0].id, "added-after-scan");
+            assert_eq!(
+                refreshed[0].instance_id,
+                "project:project-after-add:added-after-scan"
+            );
+        });
+    }
+
+    #[test]
     fn scan_project_skills_discovers_vercel_workspace_roots_and_prefers_canonical_skills() {
         with_temp_home(|home| {
             let project_root = home.join("code").join("vercel-compatible");
