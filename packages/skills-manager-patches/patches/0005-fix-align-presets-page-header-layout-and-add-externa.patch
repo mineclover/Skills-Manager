@@ -1,0 +1,357 @@
+From ad9188f4b5b497a7937ced62e85629edb2b79c1f Mon Sep 17 00:00:00 2001
+From: mineclover <mineclover@naver.com>
+Date: Fri, 26 Jun 2026 19:12:59 +0900
+Subject: fix: align presets page header layout and add external skills import
+ action
+
+---
+ src/pages/Presets.tsx                  |  13 +-
+ src/pages/Skills.tsx                   | 258 +++++++++++++++++++++++++
+ src/pages/skills/headerActionLayout.ts |   5 +-
+ 3 files changed, 272 insertions(+), 4 deletions(-)
+
+diff --git a/src/pages/Presets.tsx b/src/pages/Presets.tsx
+index 79f6e00..5c4da55 100644
+--- a/src/pages/Presets.tsx
++++ b/src/pages/Presets.tsx
+@@ -335,10 +335,18 @@ export function Presets() {
+   }
+ 
+   return (
+-    <div className="flex h-full min-h-0 overflow-hidden bg-background">
++    <div style={{
++      flex: 1,
++      display: 'flex',
++      flexDirection: 'column',
++      height: '100%',
++      overflow: 'hidden',
++      backgroundColor: 'var(--background)',
++    }}>
+       <PageHeader title={t("presets.title")} />
+ 
+-      {/* Preset List Panel (Left) */}
++      <div className="flex flex-1 min-h-0 overflow-hidden">
++        {/* Preset List Panel (Left) */}
+       <div
+         className="w-60 flex-shrink-0 border-r border-border bg-card/30 flex flex-col h-full min-h-0"
+         style={{
+@@ -630,5 +638,6 @@ export function Presets() {
+         )}
+       </div>
+     </div>
++  </div>
+   );
+ }
+diff --git a/src/pages/Skills.tsx b/src/pages/Skills.tsx
+index 636cbf3..436a973 100644
+--- a/src/pages/Skills.tsx
++++ b/src/pages/Skills.tsx
+@@ -625,6 +625,11 @@ export function Skills() {
+   const [deletingGroupId, setDeletingGroupId] = useState<string | null>(null);
+   const [showCreateDialog, setShowCreateDialog] = useState(false);
+   const [showProjectBindingsDialog, setShowProjectBindingsDialog] = useState(false);
++  const [showImportDialog, setShowImportDialog] = useState(false);
++  const [scannedSkills, setScannedSkills] = useState<{ id: string; name: string; description?: string | null; path: string; }[]>([]);
++  const [selectedImportPaths, setSelectedImportPaths] = useState<Set<string>>(new Set());
++  const [scanningExternal, setScanningExternal] = useState(false);
++  const [importingExternal, setImportingExternal] = useState(false);
+   const [pendingProjectBinding, setPendingProjectBinding] = useState<ProjectBinding | null>(null);
+   const [creating, setCreating] = useState(false);
+   const [projectBindingsSaving, setProjectBindingsSaving] = useState(false);
+@@ -1588,6 +1593,50 @@ export function Skills() {
+     setShowProjectBindingsDialog(true);
+   }, [isBatchManageMode]);
+ 
++  const handleOpenImportSkillsDialog = useCallback(async () => {
++    if (isBatchManageMode) {
++      return;
++    }
++    setScanningExternal(true);
++    setShowImportDialog(true);
++    setSelectedImportPaths(new Set());
++    try {
++      const result = await invoke<{ id: string; name: string; description?: string | null; path: string; }[]>("scan_existing_skills");
++      const filtered = result.filter((s) => !s.name.startsWith('.'));
++      setScannedSkills(filtered);
++    } catch (err) {
++      console.error(err);
++      addToast(t("welcome.scanSkillsFailed") + ": " + String(err), "error");
++      setShowImportDialog(false);
++    } finally {
++      setScanningExternal(false);
++    }
++  }, [addToast, isBatchManageMode, t]);
++
++  const handleImportSkills = useCallback(async () => {
++    if (selectedImportPaths.size === 0) {
++      setShowImportDialog(false);
++      return;
++    }
++    setImportingExternal(true);
++    try {
++      await invoke("import_skills_to_hub", {
++        skillPaths: Array.from(selectedImportPaths),
++      });
++      addToast(
++        t("welcome.importedCount").replace("{count}", String(selectedImportPaths.size)),
++        "success"
++      );
++      setShowImportDialog(false);
++      void handleRefresh();
++    } catch (err) {
++      console.error(err);
++      addToast(t("welcome.importFailed") + ": " + String(err), "error");
++    } finally {
++      setImportingExternal(false);
++    }
++  }, [selectedImportPaths, addToast, t, handleRefresh]);
++
+   const saveProjectBindingsConfig = useCallback(async (nextConfig: AppConfig) => {
+     const previousConfig = config;
+     const previousSkills = skills;
+@@ -2652,6 +2701,12 @@ export function Skills() {
+                         label: t("settings.projectBindings"),
+                         onClick: handleOpenProjectBindingsDialog,
+                       };
++                    case "scan-import":
++                      return {
++                        id: actionId,
++                        label: t("welcome.importSkills"),
++                        onClick: handleOpenImportSkillsDialog,
++                      };
+                     default:
+                       return null;
+                   }
+@@ -3483,6 +3538,209 @@ export function Skills() {
+           t={t}
+         />
+       )}
++
++      {showImportDialog && (
++        <div
++          style={{
++            position: "fixed",
++            top: 0,
++            left: 0,
++            width: "100vw",
++            height: "100vh",
++            backgroundColor: "rgba(0, 0, 0, 0.65)",
++            backdropFilter: "blur(4px)",
++            display: "flex",
++            alignItems: "center",
++            justifyContent: "center",
++            zIndex: MODAL_LAYER_Z_INDEX,
++            padding: "24px",
++          }}
++          onClick={() => {
++            if (!importingExternal) setShowImportDialog(false);
++          }}
++        >
++          <div
++            className="animate-modal"
++            style={{
++              width: "100%",
++              maxWidth: "520px",
++              backgroundColor: "var(--card)",
++              border: "1px solid var(--border)",
++              borderRadius: "var(--radius-lg)",
++              boxShadow: "var(--shadow-lg)",
++              display: "flex",
++              flexDirection: "column",
++              maxHeight: "85vh",
++              overflow: "hidden",
++            }}
++            onClick={(e) => e.stopPropagation()}
++          >
++            {/* Header */}
++            <div style={{
++              padding: "18px 20px",
++              borderBottom: "1px solid var(--border)",
++              display: "flex",
++              alignItems: "center",
++              justifyContent: "space-between",
++            }}>
++              <div>
++                <h3 style={{ fontSize: "14px", fontWeight: 600, color: "var(--foreground)" }}>
++                  {t("welcome.importSkills")}
++                </h3>
++                <p style={{ fontSize: "11px", color: "var(--muted-foreground)", marginTop: "2px" }}>
++                  {t("welcome.importSkillsDesc")}
++                </p>
++              </div>
++              <button
++                type="button"
++                onClick={() => setShowImportDialog(false)}
++                disabled={importingExternal}
++                style={{
++                  color: "var(--muted-foreground)",
++                  background: "none",
++                  border: "none",
++                  cursor: "pointer",
++                  fontSize: "16px",
++                  padding: "4px",
++                }}
++              >
++                ✕
++              </button>
++            </div>
++
++            {/* Content */}
++            <div style={{ padding: "20px", overflowY: "auto", flex: 1 }} className="welcome-listbox">
++              {scanningExternal ? (
++                <div style={{ textAlign: "center", padding: "36px 0" }}>
++                  <div style={{
++                    width: "24px",
++                    height: "24px",
++                    border: "2px solid var(--border)",
++                    borderTopColor: "var(--primary)",
++                    borderRadius: "50%",
++                    display: "inline-block",
++                    animation: "spin 1s linear infinite"
++                  }} />
++                  <p style={{ fontSize: "12px", color: "var(--muted-foreground)", marginTop: "12px" }}>
++                    {t("welcome.scanning")}
++                  </p>
++                </div>
++              ) : scannedSkills.length === 0 ? (
++                <div style={{ textAlign: "center", padding: "36px 0" }}>
++                  <p style={{ fontSize: "13px", fontWeight: 500, color: "var(--foreground)" }}>
++                    {t("welcome.noSkillsFound")}
++                  </p>
++                  <p style={{ fontSize: "11px", color: "var(--muted-foreground)", marginTop: "4px" }}>
++                    {t("skills.noSkills")}
++                  </p>
++                </div>
++              ) : (
++                <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
++                  {scannedSkills.map((skill) => {
++                    const isSelected = selectedImportPaths.has(skill.path);
++                    return (
++                      <div
++                        key={skill.path}
++                        onClick={() => {
++                          const next = new Set(selectedImportPaths);
++                          if (next.has(skill.path)) {
++                            next.delete(skill.path);
++                          } else {
++                            next.add(skill.path);
++                          }
++                          setSelectedImportPaths(next);
++                        }}
++                        style={{
++                          display: "flex",
++                          alignItems: "flex-start",
++                          gap: "10px",
++                          padding: "10px 12px",
++                          borderRadius: "var(--radius-sm)",
++                          border: "1px solid var(--border)",
++                          backgroundColor: isSelected ? "var(--secondary)" : "transparent",
++                          cursor: "pointer",
++                          transition: "background-color 0.15s ease",
++                        }}
++                      >
++                        <input
++                          type="checkbox"
++                          checked={isSelected}
++                          readOnly
++                          style={{ marginTop: "3px", cursor: "pointer" }}
++                        />
++                        <div style={{ minWidth: 0, flex: 1 }}>
++                          <span style={{ fontSize: "12px", fontWeight: 500, color: "var(--foreground)", display: "block" }}>
++                            {skill.name}
++                          </span>
++                          {skill.description && (
++                            <span style={{ fontSize: "11px", color: "var(--muted-foreground)", display: "block", marginTop: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
++                              {skill.description}
++                            </span>
++                          )}
++                          <span style={{ fontSize: "10px", color: "var(--muted-foreground)", opacity: 0.7, display: "block", marginTop: "4px", fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
++                            {skill.path}
++                          </span>
++                        </div>
++                      </div>
++                    );
++                  })}
++                </div>
++              )}
++            </div>
++
++            {/* Footer */}
++            <div style={{
++              padding: "14px 20px",
++              borderTop: "1px solid var(--border)",
++              display: "flex",
++              alignItems: "center",
++              justifyContent: "space-between",
++              gap: "10px",
++            }}>
++              <span style={{ fontSize: "11px", color: "var(--muted-foreground)" }}>
++                {t("welcome.selectedCount")
++                  .replace("{selected}", String(selectedImportPaths.size))
++                  .replace("{total}", String(scannedSkills.length))}
++              </span>
++              <div style={{ display: "flex", gap: "8px" }}>
++                <button
++                  type="button"
++                  onClick={() => setShowImportDialog(false)}
++                  disabled={importingExternal}
++                  style={{
++                    padding: "6px 12px",
++                    fontSize: "12px",
++                    borderRadius: "6px",
++                    border: "1px solid var(--border)",
++                    backgroundColor: "transparent",
++                    color: "var(--foreground)",
++                    cursor: "pointer",
++                  }}
++                >
++                  {t("common.cancel")}
++                </button>
++                <button
++                  type="button"
++                  onClick={handleImportSkills}
++                  disabled={importingExternal || selectedImportPaths.size === 0 || scanningExternal}
++                  style={{
++                    padding: "6px 14px",
++                    fontSize: "12px",
++                    borderRadius: "6px",
++                    backgroundColor: "var(--primary)",
++                    color: "var(--primary-foreground)",
++                    border: "none",
++                    cursor: (importingExternal || selectedImportPaths.size === 0) ? "not-allowed" : "pointer",
++                    opacity: (importingExternal || selectedImportPaths.size === 0) ? 0.6 : 1,
++                  }}
++                >
++                  {importingExternal ? t("welcome.importing") : t("welcome.importSkills")}
++                </button>
++              </div>
++            </div>
++          </div>
++        </div>
++      )}
+     </div>
+   );
+ }
+diff --git a/src/pages/skills/headerActionLayout.ts b/src/pages/skills/headerActionLayout.ts
+index c01a73e..7e7b3c2 100644
+--- a/src/pages/skills/headerActionLayout.ts
++++ b/src/pages/skills/headerActionLayout.ts
+@@ -2,7 +2,8 @@ export type SkillsHeaderActionId =
+   | "batch-manage"
+   | "batch-configure"
+   | "project-bindings"
+-  | "create-skill";
++  | "create-skill"
++  | "scan-import";
+ 
+ export interface SkillsHeaderActionLayout {
+   primaryActionIds: SkillsHeaderActionId[];
+@@ -22,7 +23,7 @@ export function buildSkillsHeaderActionLayout(
+   }
+   return {
+     primaryActionIds: [],
+-    moreActionIds: ["batch-manage", "project-bindings"],
++    moreActionIds: ["batch-manage", "project-bindings", "scan-import"],
+     secondaryActionIds: ["create-skill"],
+   };
+ }

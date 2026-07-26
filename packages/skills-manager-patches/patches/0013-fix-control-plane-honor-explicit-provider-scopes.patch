@@ -1,0 +1,162 @@
+From 5d3cee2a4818186b4a4c9237b129b1322eb9b6a0 Mon Sep 17 00:00:00 2001
+From: mineclover <mineclover@naver.com>
+Date: Sun, 19 Jul 2026 15:15:26 +0900
+Subject: fix(control-plane): honor explicit provider scopes
+
+---
+ src-tauri/src/bin/skills-manager-inspect.rs  | 24 ++++++++++++--------
+ src-tauri/src/commands/providers.rs          |  4 ++--
+ src-tauri/src/services/provider_inventory.rs |  4 ++--
+ src/pages/Skills.tsx                         | 15 +++++++-----
+ 4 files changed, 28 insertions(+), 19 deletions(-)
+
+diff --git a/src-tauri/src/bin/skills-manager-inspect.rs b/src-tauri/src/bin/skills-manager-inspect.rs
+index 0fd0b52..1df7356 100644
+--- a/src-tauri/src/bin/skills-manager-inspect.rs
++++ b/src-tauri/src/bin/skills-manager-inspect.rs
+@@ -47,6 +47,7 @@ enum Command {
+         json: bool,
+     },
+     Providers {
++        project_id: Option<String>,
+         json: bool,
+     },
+     Bindings {
+@@ -191,7 +192,7 @@ fn usage() {
+          skills-manager-inspect project add --path <directory> [--name <name>] [--json]\n\
+          skills-manager-inspect project use --id <project-id> [--json]\n\
+          skills-manager-inspect project remove --id <project-id> [--json]\n\
+-         skills-manager-inspect providers [--json]\n\
++         skills-manager-inspect providers [--project <id>] [--json]\n\
+          skills-manager-inspect bindings [--project <id>] [--provider <id>] [--skill <instance-id>] [--json]\n\
+          skills-manager-inspect binding list [--project <id>] [--provider <id>] [--skill <instance-id>] [--json]\n\
+          skills-manager-inspect skill preview --id <instance-id> --tool <tool-id> --enable|--disable [--project <id>] [--json]\n\
+@@ -359,15 +360,20 @@ fn parse_command() -> Result<Command, String> {
+             } else {
+                 1
+             };
++            let mut project_id = None;
+             let mut json = false;
+-            for value in &args[offset..] {
+-                if value == "--json" {
+-                    json = true;
+-                } else {
+-                    return Err(format!("unknown provider option: {value}"));
++            let mut index = offset;
++            while index < args.len() {
++                match args[index].as_str() {
++                    "--project" => {
++                        project_id = Some(required_option(&args, &mut index, "--project")?)
++                    }
++                    "--json" => json = true,
++                    value => return Err(format!("unknown provider option: {value}")),
+                 }
++                index += 1;
+             }
+-            Ok(Command::Providers { json })
++            Ok(Command::Providers { project_id, json })
+         }
+         "bindings" | "binding" => {
+             let offset = if args[0] == "binding" {
+@@ -1377,10 +1383,10 @@ fn main() {
+             WorkspaceService::remove_project(&project_id)
+                 .and_then(|config| print_project_list(&config, json))
+         }
+-        Command::Providers { json } => {
++        Command::Providers { project_id, json } => {
+             let config = load_persisted_config();
+             let inventory = config.and_then(|config| {
+-                let skills = ScannerService::scan_scoped_skills(&config)?;
++                let skills = ScannerService::scan_skills_for_scope(&config, project_id.as_deref())?;
+                 Ok(ProviderInventoryService::list_with_skills(&config, &skills))
+             });
+             inventory.and_then(|inventory| {
+diff --git a/src-tauri/src/commands/providers.rs b/src-tauri/src/commands/providers.rs
+index c748884..1b209e4 100644
+--- a/src-tauri/src/commands/providers.rs
++++ b/src-tauri/src/commands/providers.rs
+@@ -2,8 +2,8 @@ use crate::models::{SkillBinding, SkillOperationPreview, SkillProviderInventory}
+ use crate::services::ProviderInventoryService;
+ 
+ #[tauri::command]
+-pub fn list_skill_providers() -> Result<SkillProviderInventory, String> {
+-    ProviderInventoryService::list()
++pub fn list_skill_providers(project_id: Option<String>) -> Result<SkillProviderInventory, String> {
++    ProviderInventoryService::list(project_id.as_deref())
+ }
+ 
+ #[tauri::command]
+diff --git a/src-tauri/src/services/provider_inventory.rs b/src-tauri/src/services/provider_inventory.rs
+index da454b8..724dc08 100644
+--- a/src-tauri/src/services/provider_inventory.rs
++++ b/src-tauri/src/services/provider_inventory.rs
+@@ -15,9 +15,9 @@ use crate::services::{
+ pub struct ProviderInventoryService;
+ 
+ impl ProviderInventoryService {
+-    pub fn list() -> Result<SkillProviderInventory, String> {
++    pub fn list(project_id: Option<&str>) -> Result<SkillProviderInventory, String> {
+         let config = ConfigManager::new().load()?;
+-        let skills = ScannerService::scan_scoped_skills(&config)?;
++        let skills = ScannerService::scan_skills_for_scope(&config, project_id)?;
+         Ok(Self::list_with_skills(&config, &skills))
+     }
+ 
+diff --git a/src/pages/Skills.tsx b/src/pages/Skills.tsx
+index 6a3a3e4..e6f8d3e 100644
+--- a/src/pages/Skills.tsx
++++ b/src/pages/Skills.tsx
+@@ -742,16 +742,18 @@ export function Skills() {
+     }
+   }, [addToast, selectedProjectId]);
+ 
+-  const loadProviderInventory = useCallback(async () => {
++  const loadProviderInventory = useCallback(async (projectId = selectedProjectId) => {
+     try {
+-      const inventory = await invoke<SkillProviderInventory>("list_skill_providers");
++      const inventory = await invoke<SkillProviderInventory>("list_skill_providers", {
++        projectId,
++      });
+       setProviderInventory(inventory);
+     } catch (err) {
+       // Provider inventory is supplementary; keep the skill list usable when
+       // an integration is unavailable or an older backend is running.
+       console.warn("Failed to load provider inventory", err);
+     }
+-  }, []);
++  }, [selectedProjectId]);
+ 
+   const loadProviderBindings = useCallback(async (projectId = selectedProjectId) => {
+     try {
+@@ -786,7 +788,7 @@ export function Skills() {
+       setSkillPackages(skillPackagesResult);
+       setConfig(configResult);
+       setTools(toolsResult);
+-      void loadProviderInventory();
++      void loadProviderInventory(selectedProjectId);
+       void loadProviderBindings(selectedProjectId);
+       addToast(t("common.refreshSuccess"), "success");
+     } catch (err) {
+@@ -808,11 +810,12 @@ export function Skills() {
+       setSkillPackages(skillPackagesResult);
+       setConfig(configResult);
+       setTools(toolsResult);
++      void loadProviderInventory(selectedProjectId);
+       void loadProviderBindings(selectedProjectId);
+     } catch (err) {
+       addToast(err instanceof Error ? err.message : String(err), "error");
+     }
+-  }, [addToast, loadProviderBindings, selectedProjectId]);
++  }, [addToast, loadProviderBindings, loadProviderInventory, selectedProjectId]);
+ 
+   const handleScopeChange = useCallback((projectId: string | null) => {
+     setSelectedProjectId(projectId);
+@@ -829,7 +832,7 @@ export function Skills() {
+   // skills installed outside the manager are not hidden until a manual click.
+   useEffect(() => {
+     loadData();
+-    void loadProviderInventory();
++    void loadProviderInventory(selectedProjectId);
+     void loadProviderBindings();
+   }, [loadData, loadProviderBindings, loadProviderInventory]);
+ 

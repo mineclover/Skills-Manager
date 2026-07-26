@@ -1,0 +1,351 @@
+From a4a725bb8163528894709d147a8198505822800c Mon Sep 17 00:00:00 2001
+From: mineclover <mineclover@naver.com>
+Date: Sun, 19 Jul 2026 15:16:01 +0900
+Subject: fix(ui): expose shared skill operation reports
+
+---
+ src/pages/Tools.tsx                           | 125 ++++++++++++++----
+ .../tools/mergeSkillOperationReports.test.ts  |  49 +++++++
+ src/pages/tools/mergeSkillOperationReports.ts |  39 ++++++
+ 3 files changed, 186 insertions(+), 27 deletions(-)
+ create mode 100644 src/pages/tools/mergeSkillOperationReports.test.ts
+ create mode 100644 src/pages/tools/mergeSkillOperationReports.ts
+
+diff --git a/src/pages/Tools.tsx b/src/pages/Tools.tsx
+index aa03939..e8a4f5a 100644
+--- a/src/pages/Tools.tsx
++++ b/src/pages/Tools.tsx
+@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
+ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+ import { confirm, open } from "@tauri-apps/plugin-dialog";
+ 
+-import { Skill, Tool } from "@/types";
++import { Skill, SkillOperationPreview, SkillOperationReport, Tool } from "@/types";
+ import { useTranslation } from "@/i18n";
+ import { usePageSearch } from "@/components/PageHeaderContext";
+ import { getToolIconUrl, GenericToolIcon } from "@/assets/tools";
+@@ -14,6 +14,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
+ import { PageHeader } from "@/components/ui/page-header";
+ import { ToastContainer, useToast } from "@/components/ui/toast";
+ import { Input } from "@/components/ui/input";
++import { OperationReportCard } from "@/components/skills/OperationReportCard";
+ 
+ import { PageLoader } from "@/components/ui/loading";
+ import { sortToolsByEnabled } from "./tools/sortTools";
+@@ -28,6 +29,7 @@ import {
+   getToolBulkToggleMode,
+   getToolBulkToggleTargets,
+ } from "./tools/bulkToggleToolSkills";
++import { mergeSkillOperationReports } from "./tools/mergeSkillOperationReports";
+ 
+ function getSkillDisplayName(skillIdentity: string, skills: Skill[]): string {
+   const skill = skills.find((item) => item.instance_id === skillIdentity) ?? skills.find((item) => item.id === skillIdentity);
+@@ -62,6 +64,7 @@ export function Tools() {
+   const [toolEditorEnabledOnly, setToolEditorEnabledOnly] = useState(false);
+   const [togglingSkill, setTogglingSkill] = useState<string | null>(null);
+   const [bulkTogglingToolId, setBulkTogglingToolId] = useState<string | null>(null);
++  const [lastOperationReport, setLastOperationReport] = useState<SkillOperationReport | null>(null);
+   const [iconFallbackStage, setIconFallbackStage] = useState<Record<string, "asset" | "file" | "none">>({});
+   const [form, setForm] = useState({
+     name: "",
+@@ -106,12 +109,14 @@ export function Tools() {
+ 
+   const fetchToolsAndSkills = useCallback(async (
+     toolsCommand: "detect_tools" | "refresh_tools",
+-    skillsCommand: "list_skills" | "refresh_skills",
+   ) => {
+     setError(null);
+     const [toolsResult, skillsResult] = await Promise.all([
+       invoke<Tool[]>(toolsCommand),
+-      invoke<Skill[]>(skillsCommand),
++      // Tools manages the global/direct agent view. Project-scoped reads are
++      // explicit on Skills and Presets, so this page must not follow the
++      // persisted active project implicitly.
++      invoke<Skill[]>("scan_skills_for_scope", { projectId: null }),
+     ]);
+     setTools(toolsResult);
+     setSkills(skillsResult);
+@@ -122,7 +127,7 @@ export function Tools() {
+   const loadTools = useCallback(async () => {
+     try {
+       // Directly installed skills may not exist in the manager cache yet.
+-      await fetchToolsAndSkills("detect_tools", "refresh_skills");
++      await fetchToolsAndSkills("detect_tools");
+     } catch (err) {
+       setError(err instanceof Error ? err.message : String(err));
+     } finally {
+@@ -134,7 +139,7 @@ export function Tools() {
+   const handleRefresh = useCallback(async () => {
+     setRefreshing(true);
+     try {
+-      await fetchToolsAndSkills("refresh_tools", "refresh_skills");
++      await fetchToolsAndSkills("refresh_tools");
+       addToast(t("common.refreshSuccess"), "success");
+     } catch (err) {
+       setError(err instanceof Error ? err.message : String(err));
+@@ -146,7 +151,7 @@ export function Tools() {
+   // Reload after operations - force re-detection to avoid stale cached list
+   const reloadTools = useCallback(async () => {
+     try {
+-      await fetchToolsAndSkills("refresh_tools", "list_skills");
++      await fetchToolsAndSkills("refresh_tools");
+     } catch (err) {
+       setError(err instanceof Error ? err.message : String(err));
+     }
+@@ -189,35 +194,57 @@ export function Tools() {
+     setToolEditorEnabledOnly(false);
+   }, []);
+ 
++  const confirmSharedPreviews = useCallback(async (previews: SkillOperationPreview[]) => {
++    const sharedPreviews = previews.filter((preview) => preview.requires_confirmation);
++    if (sharedPreviews.length === 0) {
++      return true;
++    }
++
++    const impactNames = Array.from(
++      new Set(sharedPreviews.flatMap((preview) => preview.impacts.map((impact) => impact.display_name))),
++    ).join(", ");
++    const warning = sharedPreviews.find((preview) => preview.warning)?.warning;
++    return confirm(
++      `${warning ?? t("skills.sharedImpactConfirm")}${impactNames ? `\n\n${impactNames}` : ""}`,
++      { title: t("skills.sharedImpactConfirmTitle"), kind: "warning" },
++    );
++  }, [t]);
++
+   const handleToggleSkillForTool = useCallback(async (tool: Tool, instanceId: string, enabled: boolean) => {
+     const toggleKey = `${tool.id}:${instanceId}`;
+     setTogglingSkill(toggleKey);
+ 
+     try {
+-      if (enabled) {
+-        await invoke("enable_skill", { instanceId, toolId: tool.id });
+-        addToast(
+-          t("skills.enableSuccess")
+-            .replace("{skill}", getSkillDisplayName(instanceId, skills))
+-            .replace("{tool}", tool.name),
+-          "success",
+-        );
+-      } else {
+-        await invoke("disable_skill", { instanceId, toolId: tool.id });
+-        addToast(
+-          t("skills.disableSuccess")
+-            .replace("{skill}", getSkillDisplayName(instanceId, skills))
+-            .replace("{tool}", tool.name),
+-          "success",
+-        );
++      const skill = skills.find((item) => item.instance_id === instanceId);
++      const preview = await invoke<SkillOperationPreview>("preview_skill_operation", {
++        projectId: skill?.project_id ?? null,
++        skillInstanceId: instanceId,
++        providerId: tool.id,
++        enabled,
++      });
++      if (!(await confirmSharedPreviews([preview]))) {
++        return;
+       }
++
++      const command = enabled ? "enable_skill" : "disable_skill";
++      const report = await invoke<SkillOperationReport>(command, { instanceId, toolId: tool.id });
++      setLastOperationReport(report);
++      if (report.failed_count > 0) {
++        throw new Error(report.failures[0]?.message || t("skills.toggleFailed"));
++      }
++      addToast(
++        (enabled ? t("skills.enableSuccess") : t("skills.disableSuccess"))
++          .replace("{skill}", getSkillDisplayName(instanceId, skills))
++          .replace("{tool}", tool.name),
++        "success",
++      );
+       await reloadTools();
+     } catch (err) {
+       addToast(err instanceof Error ? err.message : String(err), "error");
+     } finally {
+       setTogglingSkill(null);
+     }
+-  }, [addToast, reloadTools, skills, t]);
++  }, [addToast, confirmSharedPreviews, reloadTools, skills, t]);
+ 
+   const handleBulkToggleToolSkills = useCallback(async (tool: Tool, visibleSkillIds: string[]) => {
+     const enabledMap: Record<string, boolean> = {};
+@@ -244,6 +271,29 @@ export function Tools() {
+       return;
+     }
+ 
++    let previews: SkillOperationPreview[];
++    try {
++      previews = await Promise.all(
++        targetSkillIds.map((instanceId) => {
++          const skill = skills.find((item) => item.instance_id === instanceId);
++          return invoke<SkillOperationPreview>("preview_skill_operation", {
++            projectId: skill?.project_id ?? null,
++            skillInstanceId: instanceId,
++            providerId: tool.id,
++            enabled,
++          });
++        }),
++      );
++      if (!(await confirmSharedPreviews(previews))) {
++        return;
++      }
++    } catch (err) {
++      const message = err instanceof Error ? err.message : String(err);
++      addToast(message, "error");
++      setError(message);
++      return;
++    }
++
+     setBulkTogglingToolId(tool.id);
+     setError(null);
+ 
+@@ -266,11 +316,19 @@ export function Tools() {
+     try {
+       const command = enabled ? "enable_skill" : "disable_skill";
+       const results = await Promise.allSettled(
+-        targetSkillIds.map((instanceId) => invoke(command, { instanceId, toolId: tool.id })),
++        targetSkillIds.map((instanceId) => invoke<SkillOperationReport>(command, { instanceId, toolId: tool.id })),
+       );
++      const reports = results
++        .filter((result): result is PromiseFulfilledResult<SkillOperationReport> => result.status === "fulfilled")
++        .map((result) => result.value);
++      const mergedReport = mergeSkillOperationReports(reports);
++      if (mergedReport) {
++        setLastOperationReport(mergedReport);
++      }
+ 
+-      const failedCount = results.filter((result) => result.status === "rejected").length;
+-      const changedCount = targetSkillIds.length - failedCount;
++      const failedCount = results.filter((result) => result.status === "rejected").length
++        + (mergedReport?.failed_count ?? 0);
++      const changedCount = mergedReport?.applied_count ?? 0;
+ 
+       if (changedCount > 0) {
+         const successMessage = enabled
+@@ -294,7 +352,7 @@ export function Tools() {
+     } finally {
+       setBulkTogglingToolId(null);
+     }
+-  }, [addToast, reloadTools, skills, t]);
++  }, [addToast, confirmSharedPreviews, reloadTools, skills, t]);
+ 
+   const bulkToggleMode = useMemo(
+     () => getNextBulkToggleMode(tools),
+@@ -1290,6 +1348,19 @@ export function Tools() {
+             </div>
+           )}
+ 
++          {lastOperationReport && (
++            <OperationReportCard
++              report={lastOperationReport}
++              scopeLabel={t("skills.scopeGlobal")}
++              providerLabel={
++                lastOperationReport.provider_id
++                  ? tools.find((tool) => tool.id === lastOperationReport.provider_id)?.name
++                    ?? lastOperationReport.provider_id
++                  : t("tools.title")
++              }
++            />
++          )}
++
+           {/* Section: Detected Tools */}
+           <section>
+             <h2 style={{
+diff --git a/src/pages/tools/mergeSkillOperationReports.test.ts b/src/pages/tools/mergeSkillOperationReports.test.ts
+new file mode 100644
+index 0000000..8446e86
+--- /dev/null
++++ b/src/pages/tools/mergeSkillOperationReports.test.ts
+@@ -0,0 +1,49 @@
++import assert from "node:assert/strict";
++import { test } from "node:test";
++
++import { mergeSkillOperationReports } from "./mergeSkillOperationReports.ts";
++
++const report = (overrides: Partial<Parameters<typeof mergeSkillOperationReports>[0][number]> = {}) => ({
++  operation_id: "operation",
++  action: "enable" as const,
++  scope: "global" as const,
++  project_id: null,
++  provider_id: "codex",
++  requested_count: 1,
++  attempted_count: 1,
++  applied_count: 1,
++  skipped_count: 0,
++  failed_count: 0,
++  failures: [],
++  impacts: [],
++  completed_at: 1,
++  ...overrides,
++});
++
++test("mergeSkillOperationReports adds counts and preserves failures and impacts", () => {
++  const merged = mergeSkillOperationReports([
++    report({ operation_id: "one", applied_count: 1, completed_at: 2 }),
++    report({
++      operation_id: "two",
++      applied_count: 0,
++      skipped_count: 1,
++      failed_count: 1,
++      failures: [{ skill_instance_id: "global:broken", provider_id: "codex", message: "broken target" }],
++      impacts: [{ provider_id: "agents-directory", display_name: "Shared Agents", shared: true }],
++      completed_at: 3,
++    }),
++  ]);
++
++  assert.equal(merged?.operation_id, "one,two");
++  assert.equal(merged?.requested_count, 2);
++  assert.equal(merged?.applied_count, 1);
++  assert.equal(merged?.skipped_count, 1);
++  assert.equal(merged?.failed_count, 1);
++  assert.equal(merged?.failures[0]?.message, "broken target");
++  assert.equal(merged?.impacts[0]?.provider_id, "agents-directory");
++  assert.equal(merged?.completed_at, 3);
++});
++
++test("mergeSkillOperationReports returns null for an empty batch", () => {
++  assert.equal(mergeSkillOperationReports([]), null);
++});
+diff --git a/src/pages/tools/mergeSkillOperationReports.ts b/src/pages/tools/mergeSkillOperationReports.ts
+new file mode 100644
+index 0000000..f9b2731
+--- /dev/null
++++ b/src/pages/tools/mergeSkillOperationReports.ts
+@@ -0,0 +1,39 @@
++import type { SkillOperationReport } from "@/types";
++
++/** Combine per-skill reports into the same auditable shape returned by batch commands. */
++export function mergeSkillOperationReports(
++  reports: SkillOperationReport[],
++): SkillOperationReport | null {
++  if (reports.length === 0) {
++    return null;
++  }
++
++  const first = reports[0];
++  const same = <T,>(select: (report: SkillOperationReport) => T): T | null => {
++    const value = select(first);
++    return reports.every((report) => select(report) === value) ? value : null;
++  };
++  const impacts = Array.from(
++    new Map(
++      reports
++        .flatMap((report) => report.impacts)
++        .map((impact) => [`${impact.provider_id}:${impact.root_path ?? ""}`, impact]),
++    ).values(),
++  );
++
++  return {
++    operation_id: reports.map((report) => report.operation_id).join(","),
++    action: first.action,
++    scope: same((report) => report.scope),
++    project_id: same((report) => report.project_id),
++    provider_id: same((report) => report.provider_id),
++    requested_count: reports.reduce((total, report) => total + report.requested_count, 0),
++    attempted_count: reports.reduce((total, report) => total + report.attempted_count, 0),
++    applied_count: reports.reduce((total, report) => total + report.applied_count, 0),
++    skipped_count: reports.reduce((total, report) => total + report.skipped_count, 0),
++    failed_count: reports.reduce((total, report) => total + report.failed_count, 0),
++    failures: reports.flatMap((report) => report.failures),
++    impacts,
++    completed_at: Math.max(...reports.map((report) => report.completed_at)),
++  };
++}

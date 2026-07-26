@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "name": "skills-manager-local-patches",
+  "upstream": {
+    "repository": "https://github.com/jiweiyeah/skills-manager.git",
+    "remote": "upstream",
+    "branch": "main",
+    "lastReviewedCommit": "8a16ca83ad77694222ae8df3b115801f20e3bba0",
+    "integrationCommit": "20147c9ed13134efef4d08b36372ffd1d2b72c1e"
+  },
+  "patchStack": {
+    "branch": "patches/skills-manager-control-plane",
+    "baseCommit": "186f8db7e62246062af5f836303a230652682a30",
+    "commits": [
+      { "commit": "8b2b3bc7501aff9c6373b6f4c49ea87e6ac4ce37", "subject": "feat: add Korean translation and sidebar navigation" },
+      { "commit": "075bce7a7f6ff35d4bac0faaadc428b8bd00b2b3", "subject": "feat: implement tool activation preset management" },
+      { "commit": "26e1774b900423ef88e500e801862bc4e38b7ad9", "subject": "feat: add notes/comments for skills and support capturing current states into presets" },
+      { "commit": "975fa69c11a6de43cb0c880182a15e7f4093f795", "subject": "fix: fix test compile and improve presets skill list grid layout" },
+      { "commit": "ad9188f4b5b497a7937ced62e85629edb2b79c1f", "subject": "fix: align presets page header layout and add external skills import action" },
+      { "commit": "acdaeca58c75bbc84a37cdd48686a58feabda212", "subject": "fix: prevent presets page container overflow and card layout collapse" },
+      { "commit": "ee0f263229186e1fa75d2511677cbc9510095bed", "subject": "feat(control-plane): add provider-aware skill control" },
+      { "commit": "d0fa33b15052aaf546847c9972b6a017c7d1407f", "subject": "feat(cli): add read-only skills inspector" },
+      { "commit": "df7fa4326eb16dbe9159e94bbf6854d39212eb88", "subject": "feat(ui): align skill control surfaces with provider scopes" },
+      { "commit": "48ea832e288b7fe7f87ece6b8fbfca397d5108b5", "subject": "docs(skills): add repository skills and control-plane plan" },
+      { "commit": "c9fa82e310bd584ca49d59ca0224355bf3cc5c0a", "subject": "fix(feedback): accept underscore-prefixed contacts" },
+      { "commit": "c8f5ac5db9dd8017c98776dd425cef44d12c6986", "subject": "chore(test): remove obsolete cloud sync workflow test" },
+      { "commit": "5d3cee2a4818186b4a4c9237b129b1322eb9b6a0", "subject": "fix(control-plane): honor explicit provider scopes" },
+      { "commit": "a4a725bb8163528894709d147a8198505822800c", "subject": "fix(ui): expose shared skill operation reports" },
+      { "commit": "6d5343b53c3311cc31ff4809fe7f1ae8fee10be8", "subject": "chore(dev): document inspector and run full frontend tests" },
+      { "commit": "f0269660025da06ee6554e2c77374b855c5754b7", "subject": "docs(control-plane): organize implemented feature surfaces" }
+    ]
+  },
+  "preservedControlSurface": [
+    "global/project/tool scope instance IDs",
+    "direct CLI skill scanning and toggles",
+    "disabled-by-sm state visibility",
+    "provider-aware operation reports",
+    "canonical Skill artifact immutability"
+  ]
+}

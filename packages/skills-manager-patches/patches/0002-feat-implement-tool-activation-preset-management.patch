@@ -1,0 +1,1217 @@
+From 075bce7a7f6ff35d4bac0faaadc428b8bd00b2b3 Mon Sep 17 00:00:00 2001
+From: mineclover <mineclover@naver.com>
+Date: Fri, 26 Jun 2026 02:46:44 +0900
+Subject: feat: implement tool activation preset management
+
+---
+ src-tauri/src/commands/marketplace.rs       |   4 +-
+ src-tauri/src/commands/mod.rs               |   5 +-
+ src-tauri/src/commands/skills.rs            |  79 +++
+ src-tauri/src/lib.rs                        |   6 +-
+ src-tauri/src/models/config.rs              |  32 +-
+ src-tauri/src/models/mod.rs                 |   2 +-
+ src-tauri/src/services/config_manager.rs    |  14 +-
+ src-tauri/src/services/detector.rs          |   4 +-
+ src-tauri/src/services/editor_detector.rs   |   6 +-
+ src-tauri/src/services/marketplace.rs       |   9 +-
+ src-tauri/src/services/scanner.rs           |   4 +-
+ src-tauri/src/services/skill_packages.rs    |   4 +-
+ src-tauri/src/services/translation_cache.rs |   4 +-
+ src/App.tsx                                 |   2 +
+ src/components/layout/Sidebar.tsx           |   7 +-
+ src/i18n/locales/en.ts                      |  24 +
+ src/i18n/locales/ko.ts                      |  24 +
+ src/pages/Presets.tsx                       | 554 ++++++++++++++++++++
+ src/types/index.ts                          |  14 +
+ 19 files changed, 769 insertions(+), 29 deletions(-)
+ create mode 100644 src/pages/Presets.tsx
+
+diff --git a/src-tauri/src/commands/marketplace.rs b/src-tauri/src/commands/marketplace.rs
+index d534e6d..ae53a78 100644
+--- a/src-tauri/src/commands/marketplace.rs
++++ b/src-tauri/src/commands/marketplace.rs
+@@ -9,7 +9,7 @@ use tauri::State;
+ use crate::models::{
+     AppConfig, InstallResult, InstallStatus, MarketplaceSkill, MarketplaceSkillsResponse,
+     MarketplaceSource, MarketplaceSyncResult, MarketplaceUpdateCheckResult, Skill, SkillFileNode,
+-    SkillSource,
++    SkillSource, home_dir,
+ };
+ use crate::services::marketplace::{
+     derive_github_repo_and_skill_path, DIRECT_GITHUB_SOURCE_ID, DIRECT_GITHUB_SOURCE_NAME,
+@@ -497,7 +497,7 @@ async fn load_marketplace_sources_for_runtime(
+ 
+ fn marketplace_update_check_state_path() -> Option<PathBuf> {
+     Some(
+-        dirs::home_dir()?
++        home_dir()?
+             .join(".skills-manager")
+             .join("cache")
+             .join("marketplace-update-check.json"),
+diff --git a/src-tauri/src/commands/mod.rs b/src-tauri/src/commands/mod.rs
+index 57e8482..941cfba 100644
+--- a/src-tauri/src/commands/mod.rs
++++ b/src-tauri/src/commands/mod.rs
+@@ -40,8 +40,9 @@ pub use skill_packages::{
+     install_skill_package_from_path, list_skill_packages, remove_skill_package,
+ };
+ pub use skills::{
+-    batch_set_skill_tools, create_skill, delete_skill, disable_skill, enable_skill,
+-    import_skills_to_hub, list_skills, refresh_skills, scan_existing_skills,
++    apply_preset, batch_set_skill_tools, clear_active_preset, create_skill, delete_skill,
++    disable_skill, enable_skill, import_skills_to_hub, list_skills, refresh_skills,
++    scan_existing_skills,
+ };
+ pub use sync::{check_sync_status, fix_sync_issues};
+ pub use tools::{
+diff --git a/src-tauri/src/commands/skills.rs b/src-tauri/src/commands/skills.rs
+index a5b4fa7..2664ae2 100644
+--- a/src-tauri/src/commands/skills.rs
++++ b/src-tauri/src/commands/skills.rs
+@@ -598,6 +598,8 @@ mod tests {
+             llm_provider: None,
+             auth_session: None,
+             initialized: true,
++            presets: Vec::new(),
++            active_preset_id: None,
+         }
+     }
+ 
+@@ -635,6 +637,8 @@ mod tests {
+                 llm_provider: None,
+                 auth_session: None,
+                 initialized: true,
++                presets: Vec::new(),
++                active_preset_id: None,
+             };
+ 
+             apply_skill_tool_enabled(&config, "global:baoyu-translate", "claude", true, None)
+@@ -690,6 +694,8 @@ mod tests {
+                 llm_provider: None,
+                 auth_session: None,
+                 initialized: true,
++                presets: Vec::new(),
++                active_preset_id: None,
+             };
+ 
+             delete_skill_from_disk(&config, "global:baoyu-translate").expect("delete nested skill");
+@@ -1109,3 +1115,76 @@ pub fn refresh_skills(cache: State<AppCache>) -> Result<Vec<Skill>, String> {
+     cache.set_skills(skills.clone());
+     Ok(skills)
+ }
++
++#[tauri::command]
++pub fn apply_preset(
++    preset_id: String,
++    cache: State<AppCache>,
++) -> Result<(), String> {
++    let manager = ConfigManager::new();
++    let mut config = manager.load()?;
++
++    // 1. Find the preset
++    let preset = config
++        .presets
++        .iter()
++        .find(|p| p.id == preset_id)
++        .ok_or_else(|| format!("Preset not found: {}", preset_id))?
++        .clone();
++
++    // 2. Scan all skills
++    let skills = ScannerService::scan_scoped_skills(&config)?;
++
++    // 3. Collect active mappings of tool_id -> HashSet of active skill IDs or instance_ids
++    let mut active_mappings: HashMap<String, HashSet<String>> = HashMap::new();
++    for activation in &preset.activations {
++        let skill_set: HashSet<String> = activation.skill_ids.iter().cloned().collect();
++        active_mappings.insert(activation.tool_id.clone(), skill_set);
++    }
++
++    // 4. For each tool, disable/enable links
++    for (tool_id, tool_config) in config.collect_tool_configs() {
++        if !tool_config.enabled || !tool_config.detected {
++            continue;
++        }
++
++        let active_set = active_mappings.get(&tool_id);
++
++        for skill in &skills {
++            let should_be_enabled = match active_set {
++                Some(set) => set.contains(&skill.instance_id) || set.contains(&skill.id),
++                None => false,
++            };
++
++            if let Err(e) = apply_skill_tool_enabled(
++                &config,
++                &skill.instance_id,
++                &tool_id,
++                should_be_enabled,
++                Some(skill.path.as_path()),
++            ) {
++                return Err(format!(
++                    "Failed to set skill {} for tool {}: {}",
++                    skill.instance_id, tool_id, e
++                ));
++            }
++        }
++    }
++
++    // 5. Update active preset ID
++    config.active_preset_id = Some(preset_id);
++    manager.save(&config)?;
++
++    cache.invalidate_skills();
++    Ok(())
++}
++
++#[tauri::command]
++pub fn clear_active_preset(cache: State<AppCache>) -> Result<(), String> {
++    let manager = ConfigManager::new();
++    let mut config = manager.load()?;
++    config.active_preset_id = None;
++    manager.save(&config)?;
++    cache.invalidate_skills();
++    Ok(())
++}
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 9e58197..d545afb 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -5,9 +5,9 @@ mod services;
+ mod test_support;
+ 
+ use commands::{
+-    batch_set_skill_tools, check_marketplace_updates_if_stale,
++    apply_preset, batch_set_skill_tools, check_marketplace_updates_if_stale,
+     check_sync_status, check_update, clear_llm_provider, clear_translation_cache,
+-    create_custom_tool, create_directory, create_file, create_skill,
++    clear_active_preset, create_custom_tool, create_directory, create_file, create_skill,
+     delete_custom_tool, delete_path, delete_skill,
+     detect_available_editors, detect_tools, disable_skill, enable_skill, exchange_github_auth,
+     exchange_google_auth, fetch_marketplace_skill_descriptions, fetch_marketplace_skills,
+@@ -75,6 +75,8 @@ pub fn run() {
+             enable_skill,
+             disable_skill,
+             batch_set_skill_tools,
++            apply_preset,
++            clear_active_preset,
+             delete_skill,
+             create_skill,
+             install_skill_package_from_path,
+diff --git a/src-tauri/src/models/config.rs b/src-tauri/src/models/config.rs
+index 94a8129..399ed3d 100644
+--- a/src-tauri/src/models/config.rs
++++ b/src-tauri/src/models/config.rs
+@@ -47,6 +47,20 @@ pub struct SkillMetadata {
+     pub tags: Vec<String>,
+ }
+ 
++#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
++pub struct PresetActivation {
++    pub tool_id: String,
++    pub skill_ids: Vec<String>,
++}
++
++#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
++pub struct SkillActivationPreset {
++    pub id: String,
++    pub name: String,
++    pub description: Option<String>,
++    pub activations: Vec<PresetActivation>,
++}
++
+ fn default_theme() -> String {
+     "system".to_string()
+ }
+@@ -194,6 +208,10 @@ pub struct AppConfig {
+     pub auth_session: Option<AuthSession>,
+     #[serde(default)]
+     pub initialized: bool,
++    #[serde(default)]
++    pub presets: Vec<SkillActivationPreset>,
++    #[serde(default)]
++    pub active_preset_id: Option<String>,
+ }
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+@@ -230,6 +248,8 @@ impl Default for AppConfig {
+             llm_provider: None,
+             auth_session: None,
+             initialized: false,
++            presets: Vec::new(),
++            active_preset_id: None,
+         }
+     }
+ }
+@@ -246,9 +266,19 @@ impl ToolConfig {
+     }
+ }
+ 
++pub fn home_dir() -> Option<PathBuf> {
++    #[cfg(test)]
++    {
++        if let Ok(temp_home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
++            return Some(PathBuf::from(temp_home));
++        }
++    }
++    dirs::home_dir()
++}
++
+ impl AppConfig {
+     pub fn default_skills_dir() -> PathBuf {
+-        dirs::home_dir()
++        home_dir()
+             .unwrap_or_default()
+             .join(".skills-manager")
+             .join("skills")
+diff --git a/src-tauri/src/models/mod.rs b/src-tauri/src/models/mod.rs
+index b61f902..72a3642 100644
+--- a/src-tauri/src/models/mod.rs
++++ b/src-tauri/src/models/mod.rs
+@@ -9,7 +9,7 @@ pub mod update;
+ 
+ pub use auth::{AuthProfile, AuthSession};
+ pub use config::{
+-    AppConfig, CustomToolConfig, LlmProvider, ProjectBinding, SkillMetadata, ToolConfig,
++    AppConfig, CustomToolConfig, LlmProvider, ProjectBinding, SkillMetadata, ToolConfig, home_dir,
+ };
+ pub use editor::{DetectedEditor, EDITOR_DEFINITIONS};
+ pub use marketplace::{
+diff --git a/src-tauri/src/services/config_manager.rs b/src-tauri/src/services/config_manager.rs
+index be291bd..ae19e42 100644
+--- a/src-tauri/src/services/config_manager.rs
++++ b/src-tauri/src/services/config_manager.rs
+@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
+ use std::time::{SystemTime, UNIX_EPOCH};
+ 
+ use crate::models::{
+-    AppConfig, ProjectBinding, SkillMetadata, SourceType, ToolConfig, SUPPORTED_TOOLS,
++    AppConfig, ProjectBinding, SkillMetadata, SourceType, ToolConfig, SUPPORTED_TOOLS, home_dir,
+ };
+ #[cfg(windows)]
+ use crate::services::linker::LinkerService;
+@@ -258,18 +258,18 @@ impl ConfigManager {
+     }
+ 
+     fn get_config_path() -> PathBuf {
+-        dirs::home_dir()
++        home_dir()
+             .unwrap_or_default()
+             .join(".skills-manager")
+             .join("config.json")
+     }
+ 
+     fn get_old_config_dir() -> PathBuf {
+-        dirs::home_dir().unwrap_or_default().join(".skills-hub")
++        home_dir().unwrap_or_default().join(".skills-hub")
+     }
+ 
+     fn get_new_config_dir() -> PathBuf {
+-        dirs::home_dir().unwrap_or_default().join(".skills-manager")
++        home_dir().unwrap_or_default().join(".skills-manager")
+     }
+ 
+     /// 从旧目录 .skills-hub 迁移到新目录 .skills-manager
+@@ -327,7 +327,7 @@ impl ConfigManager {
+ 
+     /// 修复各工具目录中指向旧路径的软链接
+     fn fix_symlinks_after_migration(old_dir: &PathBuf, new_dir: &PathBuf) {
+-        let home_dir = dirs::home_dir().unwrap_or_default();
++        let home_dir = home_dir().unwrap_or_default();
+ 
+         // 已知的工具 skills 目录
+         let tool_skills_dirs = [
+@@ -510,7 +510,7 @@ impl ConfigManager {
+ 
+         // Migrate legacy default directories for newly supported tools.
+         // Only rewrite when paths still match the old defaults we generated earlier.
+-        let home_dir = dirs::home_dir().unwrap_or_default();
++        let home_dir = home_dir().unwrap_or_default();
+         for (tool_id, old_dir, new_dir) in [
+             ("droid", ".droid", ".factory"),
+             ("vercel-skills", ".vercel", ".agents"),
+@@ -574,7 +574,7 @@ impl ConfigManager {
+     }
+ 
+     pub fn init_default(&self) -> Result<AppConfig, String> {
+-        let home_dir = dirs::home_dir().unwrap_or_default();
++        let home_dir = home_dir().unwrap_or_default();
+         let mut config = AppConfig::default();
+ 
+         for tool_def in SUPPORTED_TOOLS {
+diff --git a/src-tauri/src/services/detector.rs b/src-tauri/src/services/detector.rs
+index 1f8c62f..49c743d 100644
+--- a/src-tauri/src/services/detector.rs
++++ b/src-tauri/src/services/detector.rs
+@@ -3,7 +3,7 @@ use std::env;
+ use std::process::Command; // Enable parallel processing
+ 
+ use crate::models::{
+-    CustomToolConfig, Tool, ToolConfig, ToolDefinition, ToolSource, SUPPORTED_TOOLS,
++    CustomToolConfig, Tool, ToolConfig, ToolDefinition, ToolSource, SUPPORTED_TOOLS, home_dir,
+ };
+ use crate::services::linker::normalize_path;
+ use crate::services::ConfigManager;
+@@ -48,7 +48,7 @@ impl DetectorService {
+         definition: &ToolDefinition,
+         saved_config: &Option<crate::models::AppConfig>,
+     ) -> Tool {
+-        let home_dir = dirs::home_dir().unwrap_or_default();
++        let home_dir = home_dir().unwrap_or_default();
+ 
+         // Prioritize saved custom paths, fallback to defaults
+         let (config_path, skills_path) = if let Some(saved) = saved_config
+diff --git a/src-tauri/src/services/editor_detector.rs b/src-tauri/src/services/editor_detector.rs
+index f9bf20b..b5acc8b 100644
+--- a/src-tauri/src/services/editor_detector.rs
++++ b/src-tauri/src/services/editor_detector.rs
+@@ -1,4 +1,4 @@
+-use crate::models::{DetectedEditor, EDITOR_DEFINITIONS};
++use crate::models::{DetectedEditor, EDITOR_DEFINITIONS, home_dir};
+ use std::env;
+ use std::fs;
+ use std::path::Path;
+@@ -219,7 +219,7 @@ fn find_app_path(app_name: &str) -> Option<String> {
+     }
+ 
+     // Check ~/Applications folder - exact match
+-    if let Some(home) = dirs::home_dir() {
++    if let Some(home) = home_dir() {
+         let user_app_path = home.join("Applications").join(format!("{}.app", app_name));
+         if user_app_path.exists() {
+             return Some(user_app_path.to_string_lossy().to_string());
+@@ -229,7 +229,7 @@ fn find_app_path(app_name: &str) -> Option<String> {
+     // Search for apps with prefix match (handles variants like "Trae CN", "PyCharm CE", "PyCharm Professional")
+     let search_dirs = vec![
+         "/Applications".to_string(),
+-        dirs::home_dir()
++        home_dir()
+             .map(|h| h.join("Applications").to_string_lossy().to_string())
+             .unwrap_or_default(),
+     ];
+diff --git a/src-tauri/src/services/marketplace.rs b/src-tauri/src/services/marketplace.rs
+index 519c9b9..50ab6d8 100644
+--- a/src-tauri/src/services/marketplace.rs
++++ b/src-tauri/src/services/marketplace.rs
+@@ -15,7 +15,7 @@ use serde_json::Value;
+ 
+ use crate::models::{
+     GitHubContent, InstallResult, InstallStatus, MarketplaceSkill, MarketplaceSkillsResponse,
+-    MarketplaceSource, SkillFileNode, SourceType,
++    MarketplaceSource, SkillFileNode, SourceType, home_dir,
+ };
+ 
+ const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+@@ -285,7 +285,7 @@ impl MarketplaceCache {
+ 
+ fn persisted_marketplace_cache_path() -> Option<PathBuf> {
+     Some(
+-        dirs::home_dir()?
++        home_dir()?
+             .join(".skills-manager")
+             .join("cache")
+             .join("marketplace-skills.json"),
+@@ -1315,7 +1315,7 @@ fn set_cached_skill_description(cache_key: &str, description: Option<String>) {
+ 
+ fn persisted_skill_description_cache_path() -> Option<PathBuf> {
+     Some(
+-        dirs::home_dir()?
++        home_dir()?
+             .join(".skills-manager")
+             .join("cache")
+             .join("marketplace-skill-descriptions.json"),
+@@ -2895,6 +2895,7 @@ mod tests {
+         build_marketplace_external_url, build_skill_tree_from_tree_entries, collect_file_nodes,
+         extract_root_skill_dirs_from_tree_entries, extract_skill_description_from_markdown,
+         get_cached_github_tree, github_tree_cache, github_tree_cache_key,
++        preferred_marketplace_install_dir,
+         map_marketplace_api_skill_record, normalize_github_token, set_cached_github_tree,
+         should_include_github_root_dir, CachedGitHubTree, GitHubContent, GitHubTreeEntry,
+         InstallStatus, MarketplaceApiSkillRecord, MarketplaceApiSkillSource, MarketplaceCache,
+@@ -3285,7 +3286,7 @@ mod tests {
+         with_temp_home(|home| {
+             let skills_dir = home.join(".skills-manager").join("skills");
+             let skill = sample_marketplace_skill("source-a", "alpha");
+-            let install_dir = skills_dir.join(&skill.id);
++            let install_dir = preferred_marketplace_install_dir(&skills_dir, &skill);
+             fs::create_dir_all(&install_dir).expect("create install dir");
+ 
+             let meta = serde_json::json!({
+diff --git a/src-tauri/src/services/scanner.rs b/src-tauri/src/services/scanner.rs
+index 2fba481..d1382fb 100644
+--- a/src-tauri/src/services/scanner.rs
++++ b/src-tauri/src/services/scanner.rs
+@@ -521,7 +521,7 @@ impl ScannerService {
+ 
+ #[cfg(test)]
+ mod tests {
+-    use super::ScannerService;
++    use super::{LinkerService, ScannerService};
+     use crate::models::{AppConfig, SkillSource};
+     use crate::test_support::with_temp_home;
+     use serde_json::json;
+@@ -895,7 +895,7 @@ description: "Description from SKILL.md"
+ 
+             let tool_skills_dir = home.join(".claude").join("skills");
+             fs::create_dir_all(&tool_skills_dir).expect("create tool skills dir");
+-            std::os::unix::fs::symlink(&project_skill_dir, tool_skills_dir.join("shared-skill"))
++            LinkerService::enable_skill(&project_skill_dir, &tool_skills_dir, "shared-skill")
+                 .expect("link project skill");
+ 
+             let config: AppConfig = serde_json::from_value(json!({
+diff --git a/src-tauri/src/services/skill_packages.rs b/src-tauri/src/services/skill_packages.rs
+index 01b8db8..a1bb815 100644
+--- a/src-tauri/src/services/skill_packages.rs
++++ b/src-tauri/src/services/skill_packages.rs
+@@ -6,11 +6,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
+ use crate::models::skill_package::{SkillPackageManifest, SkillPackageMember};
+ use crate::models::InstalledSkillPackage;
+ 
++use crate::models::home_dir;
++
+ pub struct SkillPackageService;
+ 
+ impl SkillPackageService {
+     pub fn packages_dir() -> PathBuf {
+-        dirs::home_dir()
++        home_dir()
+             .unwrap_or_default()
+             .join(".skills-manager")
+             .join("packages")
+diff --git a/src-tauri/src/services/translation_cache.rs b/src-tauri/src/services/translation_cache.rs
+index 872f216..b82bb03 100644
+--- a/src-tauri/src/services/translation_cache.rs
++++ b/src-tauri/src/services/translation_cache.rs
+@@ -3,6 +3,8 @@ use sha2::{Digest, Sha256};
+ use std::fs;
+ use std::path::PathBuf;
+ 
++use crate::models::home_dir;
++
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ pub struct CachedTranslation {
+     pub name: String,
+@@ -46,7 +48,7 @@ pub struct TranslationCache {
+ 
+ impl TranslationCache {
+     pub fn new() -> Self {
+-        let root = dirs::home_dir()
++        let root = home_dir()
+             .unwrap_or_default()
+             .join(".skills-manager")
+             .join("cache")
+diff --git a/src/App.tsx b/src/App.tsx
+index a605afa..44af543 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
+ import { Layout } from "@/components/layout/Layout";
+ import { Skills } from "@/pages/Skills";
+ import { Tools } from "@/pages/Tools";
++import { Presets } from "@/pages/Presets";
+ import { Marketplace } from "@/pages/Marketplace";
+ import { Settings } from "@/pages/Settings";
+ import { Feedback } from "@/pages/Feedback";
+@@ -148,6 +149,7 @@ function App() {
+                   <Route path="/" element={<Layout onOpenPalette={() => setPaletteOpen(true)} />}>
+                     <Route index element={<Skills />} />
+                     <Route path="tools" element={<Tools />} />
++                    <Route path="presets" element={<Presets />} />
+                     <Route path="marketplace" element={<Marketplace />} />
+                     <Route path="settings" element={<Settings />} />
+                     <Route path="feedback" element={<Feedback />} />
+diff --git a/src/components/layout/Sidebar.tsx b/src/components/layout/Sidebar.tsx
+index a179e6d..b32fad3 100644
+--- a/src/components/layout/Sidebar.tsx
++++ b/src/components/layout/Sidebar.tsx
+@@ -1,7 +1,7 @@
+ import { NavLink } from "react-router-dom";
+ import { useTranslation } from "@/i18n";
+ import { AuthButton } from "@/components/auth/AuthButton";
+-import { Sparkles, Wrench, ShoppingBag, Settings, MessageSquare } from "lucide-react";
++import { Sparkles, Wrench, Sliders, ShoppingBag, Settings, MessageSquare } from "lucide-react";
+ 
+ export function Sidebar() {
+   const { t } = useTranslation();
+@@ -17,6 +17,11 @@ export function Sidebar() {
+       label: t("nav.tools"),
+       icon: <Wrench size={16} />,
+     },
++    {
++      to: "/presets",
++      label: t("nav.presets"),
++      icon: <Sliders size={16} />,
++    },
+     {
+       to: "/marketplace",
+       label: t("nav.marketplace"),
+diff --git a/src/i18n/locales/en.ts b/src/i18n/locales/en.ts
+index 5b4d355..b46d421 100644
+--- a/src/i18n/locales/en.ts
++++ b/src/i18n/locales/en.ts
+@@ -29,6 +29,7 @@ export const en = {
+   nav: {
+     skills: "Skills",
+     tools: "Tools",
++    presets: "Presets",
+     marketplace: "Marketplace",
+     feedback: "Feedback",
+     polls: "Polls",
+@@ -748,6 +749,29 @@ export const en = {
+     confirm: "Confirm",
+     close: "Close",
+   },
++  presets: {
++    title: "Presets",
++    description: "Manage skill activation presets. Switch between configurations quickly by turning off all other skills and enabling only the selected ones.",
++    newPreset: "New Preset",
++    presetName: "Preset Name",
++    presetNamePlaceholder: "e.g. Frontend focus",
++    presetDesc: "Description (optional)",
++    presetDescPlaceholder: "Briefly describe what this preset configures",
++    apply: "Apply",
++    applied: "Applied",
++    applying: "Applying...",
++    create: "Create Preset",
++    createSuccess: "Created preset {name}",
++    applySuccess: "Applied preset {name}",
++    applyFailed: "Failed to apply preset",
++    deleteConfirm: "Are you sure you want to delete \"{name}\"? This action cannot be undone.",
++    deleteSuccess: "Deleted preset {name}",
++    noPresets: "No presets created yet.",
++    noPresetsDesc: "Create a preset to save your active skills configuration.",
++    activePreset: "Active Preset",
++    inactive: "Inactive",
++    skillsSelected: "{count} skill(s) selected",
++  },
+ } as const;
+ 
+ export type TranslationKeys = typeof en;
+diff --git a/src/i18n/locales/ko.ts b/src/i18n/locales/ko.ts
+index 230f7a7..5d0e0d1 100644
+--- a/src/i18n/locales/ko.ts
++++ b/src/i18n/locales/ko.ts
+@@ -29,6 +29,7 @@ export const ko = {
+   nav: {
+     skills: "스킬",
+     tools: "도구",
++    presets: "프리셋",
+     marketplace: "마켓플레이스",
+     feedback: "피드백",
+     polls: "설문조사",
+@@ -744,4 +745,27 @@ export const ko = {
+     confirm: "확인 및 실행",
+     close: "창 닫기",
+   },
++  presets: {
++    title: "프리셋",
++    description: "스킬 활성화 프리셋을 관리합니다. 기존 스킬을 전부 비활성화한 뒤 선택된 스킬만 활성화하여 환경을 빠르게 전환할 수 있습니다.",
++    newPreset: "새 프리셋",
++    presetName: "프리셋 이름",
++    presetNamePlaceholder: "예: 프론트엔드 집중",
++    presetDesc: "설명 (선택)",
++    presetDescPlaceholder: "이 프리셋에 대해 간단히 설명해 주세요",
++    apply: "적용",
++    applied: "적용됨",
++    applying: "적용 중...",
++    create: "프리셋 생성",
++    createSuccess: "\"{name}\" 프리셋이 생성되었습니다",
++    applySuccess: "\"{name}\" 프리셋이 적용되었습니다",
++    applyFailed: "프리셋 적용 실패",
++    deleteConfirm: "\"{name}\" 프리셋을 삭제하시겠습니까? 되돌릴 수 없습니다.",
++    deleteSuccess: "\"{name}\" 프리셋이 삭제되었습니다",
++    noPresets: "아직 생성된 프리셋이 없습니다.",
++    noPresetsDesc: "프리셋을 생성하여 활성화된 스킬 구성을 저장해 보세요.",
++    activePreset: "활성화된 프리셋",
++    inactive: "비활성화",
++    skillsSelected: "{count}개 스킬 선택됨",
++  },
+ } as const;
+diff --git a/src/pages/Presets.tsx b/src/pages/Presets.tsx
+new file mode 100644
+index 0000000..91237e6
+--- /dev/null
++++ b/src/pages/Presets.tsx
+@@ -0,0 +1,554 @@
++import { useState, useEffect } from "react";
++import { invoke } from "@tauri-apps/api/core";
++import { useTranslation } from "@/i18n";
++import { useToast } from "@/components/ui/toast";
++import { PageHeader } from "@/components/ui/page-header";
++import { Button } from "@/components/ui/button";
++import { Switch } from "@/components/ui/switch";
++import { Input } from "@/components/ui/input";
++import { ScrollArea } from "@/components/ui/scroll-area";
++import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
++import { AppConfig, Tool, Skill, SkillActivationPreset } from "@/types";
++import { Sliders, Plus, Trash2, Play, Check, AlertTriangle, Layers } from "lucide-react";
++
++export function Presets() {
++  const { t } = useTranslation();
++  const { addToast } = useToast();
++
++  const [config, setConfig] = useState<AppConfig | null>(null);
++  const [tools, setTools] = useState<Tool[]>([]);
++  const [skills, setSkills] = useState<Skill[]>([]);
++  const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
++  const [isNewPresetDialogOpen, setIsNewPresetDialogOpen] = useState(false);
++  const [newPresetName, setNewPresetName] = useState("");
++  const [newPresetDesc, setNewPresetDesc] = useState("");
++  const [applyingPresetId, setApplyingPresetId] = useState<string | null>(null);
++
++  // Load all data on mount
++  useEffect(() => {
++    fetchData();
++  }, []);
++
++  async function fetchData() {
++    try {
++      const cfg = await invoke<AppConfig>("get_config");
++      setConfig(cfg);
++
++      const tList = await invoke<Tool[]>("detect_tools");
++      setTools(tList.filter((t) => t.detected && t.config.enabled));
++
++      const sList = await invoke<Skill[]>("list_skills");
++      setSkills(sList);
++
++      // Select active preset or first preset by default
++      const savedPresets = cfg.presets || [];
++      if (cfg.active_preset_id) {
++        setSelectedPresetId(cfg.active_preset_id);
++      } else if (savedPresets.length > 0) {
++        setSelectedPresetId(savedPresets[0].id);
++      }
++    } catch (err) {
++      console.error("Failed to load data:", err);
++      addToast(t("skills.loadFailed"), "error");
++    }
++  }
++
++  const presetsList = config?.presets || [];
++  const selectedPreset = presetsList.find((p) => p.id === selectedPresetId);
++
++  // Create new preset
++  async function handleCreatePreset() {
++    if (!config) return;
++    if (!newPresetName.trim()) {
++      addToast(t("skills.nameRequired"), "error");
++      return;
++    }
++
++    const newId = `preset-${Date.now()}`;
++    const newPreset: SkillActivationPreset = {
++      id: newId,
++      name: newPresetName.trim(),
++      description: newPresetDesc.trim() || null,
++      activations: [], // starts empty (all explicitly deactivated)
++    };
++
++    const updatedConfig = {
++      ...config,
++      presets: [...presetsList, newPreset],
++    };
++
++    try {
++      await invoke("save_config", { config: updatedConfig });
++      setConfig(updatedConfig);
++      setSelectedPresetId(newId);
++      setIsNewPresetDialogOpen(false);
++      setNewPresetName("");
++      setNewPresetDesc("");
++      addToast(
++        t("presets.createSuccess").replace("{name}", newPreset.name),
++        "success"
++      );
++    } catch (err) {
++      addToast(err instanceof Error ? err.message : t("settings.saveFailed"), "error");
++    }
++  }
++
++  // Delete preset
++  async function handleDeletePreset(presetId: string) {
++    if (!config) return;
++    const target = presetsList.find((p) => p.id === presetId);
++    if (!target) return;
++
++    if (!confirm(t("presets.deleteConfirm").replace("{name}", target.name))) {
++      return;
++    }
++
++    const isActive = config.active_preset_id === presetId;
++    const updatedPresets = presetsList.filter((p) => p.id !== presetId);
++    const updatedConfig = {
++      ...config,
++      presets: updatedPresets,
++      active_preset_id: isActive ? null : config.active_preset_id,
++    };
++
++    try {
++      await invoke("save_config", { config: updatedConfig });
++      setConfig(updatedConfig);
++
++      if (isActive) {
++        await invoke("clear_active_preset");
++      }
++
++      // Switch selection
++      if (updatedPresets.length > 0) {
++        setSelectedPresetId(updatedPresets[0].id);
++      } else {
++        setSelectedPresetId(null);
++      }
++
++      addToast(
++        t("presets.deleteSuccess").replace("{name}", target.name),
++        "success"
++      );
++    } catch (err) {
++      addToast(err instanceof Error ? err.message : t("settings.saveFailed"), "error");
++    }
++  }
++
++  // Toggle skill in preset
++  async function handleToggleSkill(toolId: string, skillId: string, enabled: boolean) {
++    if (!config || !selectedPresetId) return;
++
++    const updatedPresets = presetsList.map((preset) => {
++      if (preset.id !== selectedPresetId) return preset;
++
++      const activations = [...preset.activations];
++      const toolActIndex = activations.findIndex((a) => a.tool_id === toolId);
++
++      if (toolActIndex > -1) {
++        const toolAct = activations[toolActIndex];
++        let skillIds = [...toolAct.skill_ids];
++
++        if (enabled) {
++          if (!skillIds.includes(skillId)) {
++            skillIds.push(skillId);
++          }
++        } else {
++          skillIds = skillIds.filter((id) => id !== skillId);
++        }
++
++        activations[toolActIndex] = {
++          ...toolAct,
++          skill_ids: skillIds,
++        };
++      } else {
++        // Create new tool activation
++        if (enabled) {
++          activations.push({
++            tool_id: toolId,
++            skill_ids: [skillId],
++          });
++        }
++      }
++
++      return {
++        ...preset,
++        activations,
++      };
++    });
++
++    const updatedConfig = {
++      ...config,
++      presets: updatedPresets,
++    };
++
++    try {
++      setConfig(updatedConfig);
++      // Auto-save changes to the preset mappings
++      await invoke("save_config", { config: updatedConfig });
++    } catch (err) {
++      addToast(err instanceof Error ? err.message : t("settings.saveFailed"), "error");
++    }
++  }
++
++  // Select all skills for a tool
++  async function handleSelectAllForTool(toolId: string, selectAll: boolean) {
++    if (!config || !selectedPresetId) return;
++
++    const updatedPresets = presetsList.map((preset) => {
++      if (preset.id !== selectedPresetId) return preset;
++
++      const activations = [...preset.activations];
++      const toolActIndex = activations.findIndex((a) => a.tool_id === toolId);
++      const allSkillIds = selectAll ? skills.map((s) => s.instance_id) : [];
++
++      if (toolActIndex > -1) {
++        activations[toolActIndex] = {
++          tool_id: toolId,
++          skill_ids: allSkillIds,
++        };
++      } else {
++        activations.push({
++          tool_id: toolId,
++          skill_ids: allSkillIds,
++        });
++      }
++
++      return {
++        ...preset,
++        activations,
++      };
++    });
++
++    const updatedConfig = {
++      ...config,
++      presets: updatedPresets,
++    };
++
++    try {
++      setConfig(updatedConfig);
++      await invoke("save_config", { config: updatedConfig });
++    } catch (err) {
++      addToast(err instanceof Error ? err.message : t("settings.saveFailed"), "error");
++    }
++  }
++
++  // Apply preset to system
++  async function handleApplyPreset(presetId: string) {
++    setApplyingPresetId(presetId);
++    try {
++      await invoke("apply_preset", { presetId });
++      
++      // Update config reference
++      if (config) {
++        const updatedConfig = {
++          ...config,
++          active_preset_id: presetId,
++        };
++        setConfig(updatedConfig);
++      }
++
++      addToast(
++        t("presets.applySuccess").replace("{name}", selectedPreset?.name || ""),
++        "success"
++      );
++    } catch (err) {
++      console.error(err);
++      addToast(t("presets.applyFailed"), "error");
++    } finally {
++      setApplyingPresetId(null);
++    }
++  }
++
++  // Helper: check if a skill is active in a preset
++  function isSkillActiveInPreset(toolId: string, skillId: string): boolean {
++    if (!selectedPreset) return false;
++    const toolAct = selectedPreset.activations.find((a) => a.tool_id === toolId);
++    return toolAct ? toolAct.skill_ids.includes(skillId) : false;
++  }
++
++  // Helper: count selected skills in preset for a tool
++  function getSelectedSkillsCountForTool(toolId: string): number {
++    if (!selectedPreset) return 0;
++    const toolAct = selectedPreset.activations.find((a) => a.tool_id === toolId);
++    return toolAct ? toolAct.skill_ids.length : 0;
++  }
++
++  return (
++    <div className="flex h-full min-h-0 overflow-hidden bg-background">
++      <PageHeader title={t("presets.title")} />
++
++      {/* Preset List Panel (Left) */}
++      <div
++        className="w-60 flex-shrink-0 border-r border-border bg-card/30 flex flex-col h-full min-h-0"
++        style={{
++          borderRight: "1px solid var(--border)",
++        }}
++      >
++        <div className="p-3 border-b border-border flex justify-between items-center">
++          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
++            {t("presets.title")}
++          </span>
++          <Button
++            size="sm"
++            variant="ghost"
++            className="h-7 w-7 p-0 rounded-md"
++            onClick={() => setIsNewPresetDialogOpen(true)}
++            title={t("presets.newPreset")}
++          >
++            <Plus size={16} />
++          </Button>
++        </div>
++
++        {isNewPresetDialogOpen && (
++          <div className="p-3 border-b border-border bg-muted/30 space-y-2 animate-slide-down">
++            <Input
++              value={newPresetName}
++              onChange={(e) => setNewPresetName(e.target.value)}
++              placeholder={t("presets.presetNamePlaceholder")}
++              className="text-xs h-8"
++            />
++            <Input
++              value={newPresetDesc}
++              onChange={(e) => setNewPresetDesc(e.target.value)}
++              placeholder={t("presets.presetDescPlaceholder")}
++              className="text-xs h-8"
++            />
++            <div className="flex justify-end gap-2">
++              <Button
++                size="sm"
++                variant="ghost"
++                className="h-7 text-xs px-2"
++                onClick={() => {
++                  setIsNewPresetDialogOpen(false);
++                  setNewPresetName("");
++                  setNewPresetDesc("");
++                }}
++              >
++                {t("common.cancel")}
++              </Button>
++              <Button
++                size="sm"
++                className="h-7 text-xs px-2"
++                onClick={handleCreatePreset}
++              >
++                {t("common.add")}
++              </Button>
++            </div>
++          </div>
++        )}
++
++        <ScrollArea className="flex-1 min-h-0">
++          <div className="p-2 space-y-1">
++            {presetsList.map((preset) => {
++              const isActive = config?.active_preset_id === preset.id;
++              const isSelected = selectedPresetId === preset.id;
++              return (
++                <button
++                  key={preset.id}
++                  onClick={() => setSelectedPresetId(preset.id)}
++                  className={`w-full text-left p-3 rounded-md transition-colors flex flex-col gap-1 ${
++                    isSelected
++                      ? "bg-secondary text-foreground"
++                      : "hover:bg-secondary/40 text-muted-foreground hover:text-foreground"
++                  }`}
++                >
++                  <div className="flex items-center justify-between w-full">
++                    <span className="font-semibold text-xs truncate flex items-center gap-1.5">
++                      {isActive && <span className="text-ember" style={{ color: "var(--ember)" }}>✦</span>}
++                      {preset.name}
++                    </span>
++                    {isActive && (
++                      <span className="text-[10px] bg-ember/20 text-ember px-1.5 py-0.5 rounded font-mono font-medium">
++                        ACTIVE
++                      </span>
++                    )}
++                  </div>
++                  {preset.description && (
++                    <span className="text-[10px] truncate opacity-70">
++                      {preset.description}
++                    </span>
++                  )}
++                </button>
++              );
++            })}
++
++            {presetsList.length === 0 && (
++              <div className="text-center p-6 space-y-2">
++                <Sliders size={24} className="mx-auto text-muted-foreground/50" />
++                <p className="text-[11px] text-muted-foreground">{t("presets.noPresets")}</p>
++              </div>
++            )}
++          </div>
++        </ScrollArea>
++      </div>
++
++      {/* Preset Detail Configuration Panel (Right) */}
++      <div className="flex-1 flex flex-col min-w-0 h-full min-h-0 bg-background/50">
++        {selectedPreset ? (
++          <div className="flex-1 flex flex-col min-h-0">
++            {/* Header info */}
++            <div className="p-6 border-b border-border flex justify-between items-start flex-shrink-0">
++              <div className="space-y-1 min-w-0">
++                <div className="flex items-center gap-2">
++                  <h2 className="text-lg font-bold text-foreground truncate">
++                    {selectedPreset.name}
++                  </h2>
++                  {config?.active_preset_id === selectedPreset.id && (
++                    <span className="text-xs bg-ember/15 text-ember border border-ember/30 px-2 py-0.5 rounded font-mono">
++                      {t("presets.activePreset")}
++                    </span>
++                  )}
++                </div>
++                <p className="text-xs text-muted-foreground truncate">
++                  {selectedPreset.description || t("skills.noDescription")}
++                </p>
++              </div>
++
++              <div className="flex items-center gap-2">
++                <Button
++                  size="sm"
++                  variant="outline"
++                  onClick={() => handleDeletePreset(selectedPreset.id)}
++                  className="h-8 text-xs border-destructive/25 text-destructive hover:bg-destructive/10 hover:text-destructive"
++                >
++                  <Trash2 size={14} />
++                  <span>{t("common.delete")}</span>
++                </Button>
++
++                <Button
++                  size="sm"
++                  disabled={applyingPresetId !== null}
++                  onClick={() => handleApplyPreset(selectedPreset.id)}
++                  className="h-8 text-xs bg-ash text-black hover:bg-ash/90 shadow-sm"
++                  style={{
++                    backgroundColor: "var(--ash)",
++                    color: "#2F3031",
++                  }}
++                >
++                  {applyingPresetId === selectedPreset.id ? (
++                    t("presets.applying")
++                  ) : config?.active_preset_id === selectedPreset.id ? (
++                    <>
++                      <Check size={14} />
++                      <span>{t("presets.applied")}</span>
++                    </>
++                  ) : (
++                    <>
++                      <Play size={14} />
++                      <span>{t("presets.apply")}</span>
++                    </>
++                  )}
++                </Button>
++              </div>
++            </div>
++
++            {/* Description & Explicit Deactivation note */}
++            <div className="px-6 py-3 bg-muted/20 border-b border-border flex items-center gap-2 text-[11px] text-muted-foreground">
++              <AlertTriangle size={13} className="text-amber" />
++              <span>{t("presets.description")}</span>
++            </div>
++
++            {/* Skills selection per tool */}
++            <ScrollArea className="flex-1 min-h-0">
++              <div className="p-6 space-y-6">
++                {tools.map((tool) => {
++                  const selectedCount = getSelectedSkillsCountForTool(tool.id);
++                  const isAllSelected = selectedCount === skills.length && skills.length > 0;
++                  return (
++                    <Card
++                      key={tool.id}
++                      className="border border-border bg-card/40"
++                    >
++                      <CardHeader className="p-4 pb-2 flex flex-row items-center justify-between space-y-0">
++                        <div>
++                          <CardTitle className="text-sm font-semibold flex items-center gap-2">
++                            {tool.name}
++                          </CardTitle>
++                          <CardDescription className="text-[10px]">
++                            {t("presets.skillsSelected").replace("{count}", String(selectedCount))}
++                          </CardDescription>
++                        </div>
++
++                        <div className="flex gap-2">
++                          <Button
++                            size="sm"
++                            variant="ghost"
++                            className="h-7 text-[10px] px-2"
++                            onClick={() => handleSelectAllForTool(tool.id, !isAllSelected)}
++                          >
++                            {isAllSelected ? t("welcome.selectNone") : t("welcome.selectAll")}
++                          </Button>
++                        </div>
++                      </CardHeader>
++                      <CardContent className="p-4 pt-0">
++                        {skills.length > 0 ? (
++                          <div className="mt-3 divide-y divide-border border border-border rounded-md bg-background/30 overflow-hidden">
++                            {skills.map((skill) => {
++                              const isActive = isSkillActiveInPreset(tool.id, skill.instance_id);
++                              return (
++                                <div
++                                  key={skill.instance_id}
++                                  className="flex items-center justify-between p-3 hover:bg-secondary/20 transition-colors"
++                                >
++                                  <div className="flex flex-col min-w-0 pr-4">
++                                    <span className="text-xs font-medium text-foreground truncate">
++                                      {skill.name}
++                                    </span>
++                                    {skill.description && (
++                                      <span className="text-[10px] text-muted-foreground truncate">
++                                        {skill.description}
++                                      </span>
++                                    )}
++                                  </div>
++                                  <Switch
++                                    checked={isActive}
++                                    onCheckedChange={(checked) =>
++                                      handleToggleSkill(tool.id, skill.instance_id, checked)
++                                    }
++                                  />
++                                </div>
++                              );
++                            })}
++                          </div>
++                        ) : (
++                          <div className="text-center py-6 text-xs text-muted-foreground">
++                            {t("skills.noSkills")}
++                          </div>
++                        )}
++                      </CardContent>
++                    </Card>
++                  );
++                })}
++
++                {tools.length === 0 && (
++                  <div className="text-center py-12 space-y-3">
++                    <Layers size={36} className="mx-auto text-muted-foreground/30" />
++                    <h3 className="text-sm font-semibold">{t("tools.noTools")}</h3>
++                    <p className="text-xs text-muted-foreground">{t("tools.noToolsDesc")}</p>
++                  </div>
++                )}
++              </div>
++            </ScrollArea>
++          </div>
++        ) : (
++          <div className="flex-1 flex flex-col items-center justify-center p-12 space-y-3 text-center">
++            <Sliders size={48} className="text-muted-foreground/30 animate-pulse" />
++            <h3 className="text-sm font-semibold text-foreground">{t("presets.noPresets")}</h3>
++            <p className="text-xs text-muted-foreground max-w-sm">
++              {t("presets.noPresetsDesc")}
++            </p>
++            <Button
++              size="sm"
++              onClick={() => setIsNewPresetDialogOpen(true)}
++              className="mt-2 text-xs"
++            >
++              <Plus size={14} />
++              <span>{t("presets.newPreset")}</span>
++            </Button>
++          </div>
++        )}
++      </div>
++    </div>
++  );
++}
+diff --git a/src/types/index.ts b/src/types/index.ts
+index 1760ea9..7ae1cd8 100644
+--- a/src/types/index.ts
++++ b/src/types/index.ts
+@@ -228,6 +228,8 @@ export interface AppConfig {
+   projects?: ProjectBinding[];
+   active_project_id?: string | null;
+   llm_provider?: LlmProvider | null;
++  presets?: SkillActivationPreset[];
++  active_preset_id?: string | null;
+ }
+ 
+ export interface LlmProvider {
+@@ -447,3 +449,15 @@ export interface PollClientState {
+   voterId: string | null;
+   votedOptions: Record<string, string>;
+ }
++
++export interface PresetActivation {
++  tool_id: string;
++  skill_ids: string[];
++}
++
++export interface SkillActivationPreset {
++  id: string;
++  name: string;
++  description?: string | null;
++  activations: PresetActivation[];
++}

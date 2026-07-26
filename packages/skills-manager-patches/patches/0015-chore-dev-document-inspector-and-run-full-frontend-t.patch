@@ -1,0 +1,53 @@
+From 6d5343b53c3311cc31ff4809fe7f1ae8fee10be8 Mon Sep 17 00:00:00 2001
+From: mineclover <mineclover@naver.com>
+Date: Sun, 19 Jul 2026 15:16:38 +0900
+Subject: chore(dev): document inspector and run full frontend tests
+
+---
+ README.md    | 18 ++++++++++++++++++
+ package.json |  3 ++-
+ 2 files changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/README.md b/README.md
+index f1694ee..0eee82d 100644
+--- a/README.md
++++ b/README.md
+@@ -54,6 +54,24 @@ If you encounter permission issues when syncing skills (symbolic link creation e
+ 2. **Setup**: On first launch, the app will guide you to select your skills storage directory.
+ 3. **Sync**: The app automatically detects installed AI tools (like Claude Code) and links your skills.
+ 
++## 🔎 Read-only Inspector
++
++The Rust inspector exposes the same control-plane inventory used by the UI, which is useful for checking global and project-specific state without opening the app:
++
++```bash
++# Global state (default)
++npm run inspect -- inspect --json
++npm run inspect -- providers --json
++npm run inspect -- bindings --json
++
++# Explicit project state
++npm run inspect -- inspect --project <project-id> --json
++npm run inspect -- providers --project <project-id> --json
++npm run inspect -- bindings --project <project-id> --json
++```
++
++Use `--help` for the complete read-only and mutation command list. Commands that can change skill state require the explicit `--confirm-shared` flag when a shared root would be affected.
++
+ ## ❗ Linux Troubleshooting
+ 
+ If you encounter a **blank white screen** when launching the `.AppImage` on Linux (especially in virtual machines like VMware/VirtualBox), it is likely a WebKitGTK hardware acceleration issue.
+diff --git a/package.json b/package.json
+index 5869367..438c0c4 100644
+--- a/package.json
++++ b/package.json
+@@ -8,7 +8,8 @@
+     "build": "tsc && vite build",
+     "preview": "vite preview",
+     "tauri": "tauri",
+-    "test": "node --test src/lib/fontFamily.test.ts"
++    "test": "node --test \"src/**/*.test.ts\"",
++    "inspect": "cargo run --manifest-path src-tauri/Cargo.toml --bin skills-manager-inspect --"
+   },
+   "dependencies": {
+     "@fontsource-variable/inter": "^5.2.8",

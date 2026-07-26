@@ -1,0 +1,575 @@
+From 26e1774b900423ef88e500e801862bc4e38b7ad9 Mon Sep 17 00:00:00 2001
+From: mineclover <mineclover@naver.com>
+Date: Fri, 26 Jun 2026 08:27:48 +0900
+Subject: feat: add notes/comments for skills and support capturing current
+ states into presets
+
+---
+ src-tauri/src/models/config.rs           |  3 +
+ src-tauri/src/services/config_manager.rs |  8 ++-
+ src/i18n/locales/en.ts                   |  6 ++
+ src/i18n/locales/ko.ts                   |  6 ++
+ src/i18n/locales/zh.ts                   | 29 ++++++++
+ src/pages/Presets.tsx                    | 85 ++++++++++++++++++++++-
+ src/pages/Skills.tsx                     | 86 +++++++++++++++++++++++-
+ src/pages/skills/skillTags.ts            | 63 ++++++++++++++++-
+ src/types/index.ts                       |  1 +
+ 9 files changed, 277 insertions(+), 10 deletions(-)
+
+diff --git a/src-tauri/src/models/config.rs b/src-tauri/src/models/config.rs
+index 399ed3d..778067a 100644
+--- a/src-tauri/src/models/config.rs
++++ b/src-tauri/src/models/config.rs
+@@ -45,6 +45,8 @@ pub struct LlmProvider {
+ pub struct SkillMetadata {
+     #[serde(default)]
+     pub tags: Vec<String>,
++    #[serde(default)]
++    pub comment: Option<String>,
+ }
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+@@ -385,6 +387,7 @@ mod tests {
+             "react-playground".to_string(),
+             SkillMetadata {
+                 tags: vec!["react".to_string(), "frontend".to_string()],
++                comment: None,
+             },
+         );
+         config.skill_metadata = metadata;
+diff --git a/src-tauri/src/services/config_manager.rs b/src-tauri/src/services/config_manager.rs
+index ae19e42..82e5f93 100644
+--- a/src-tauri/src/services/config_manager.rs
++++ b/src-tauri/src/services/config_manager.rs
+@@ -93,7 +93,8 @@ impl ConfigManager {
+             }
+ 
+             let tags = Self::normalize_skill_tags(&item.tags);
+-            if tags.is_empty() {
++            let has_comment = item.comment.as_ref().map(|c| !c.trim().is_empty()).unwrap_or(false);
++            if tags.is_empty() && !has_comment {
+                 changed = true;
+                 continue;
+             }
+@@ -108,8 +109,9 @@ impl ConfigManager {
+                 format!("global:{}", trimmed_id)
+             };
+ 
++            let comment = item.comment.as_ref().map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
+             if normalized
+-                .insert(normalized_id, SkillMetadata { tags })
++                .insert(normalized_id, SkillMetadata { tags, comment })
+                 .is_some()
+             {
+                 changed = true;
+@@ -743,6 +745,7 @@ mod tests {
+                 "shared-skill".to_string(),
+                 SkillMetadata {
+                     tags: vec!["legacy-tag".to_string()],
++                    comment: None,
+                 },
+             );
+ 
+@@ -753,6 +756,7 @@ mod tests {
+                 loaded.skill_metadata.get("global:shared-skill"),
+                 Some(&SkillMetadata {
+                     tags: vec!["legacy-tag".to_string()],
++                    comment: None,
+                 })
+             );
+             assert_eq!(loaded.skill_metadata.get("shared-skill"), None);
+diff --git a/src/i18n/locales/en.ts b/src/i18n/locales/en.ts
+index b46d421..7ea441d 100644
+--- a/src/i18n/locales/en.ts
++++ b/src/i18n/locales/en.ts
+@@ -137,6 +137,8 @@ export const en = {
+     enableFor: "Enable for",
+     noDescription: "No description",
+     noSkills: "No skills installed yet.",
++    notes: "Notes",
++    commentPlaceholder: "Add comments or notes for this skill...",
+     noMatch: "No skills match your search.",
+     delete: "Delete",
+     deleteConfirm: "Are you sure you want to delete \"{name}\"? This action cannot be undone.",
+@@ -771,6 +773,10 @@ export const en = {
+     activePreset: "Active Preset",
+     inactive: "Inactive",
+     skillsSelected: "{count} skill(s) selected",
++    captureCurrent: "Capture Current State",
++    captureConfirm: "Are you sure you want to capture the current active skill configuration for all tools and overwrite this preset?",
++    captureSuccess: "Captured current active states to preset.",
++    copyCurrentActive: "Copy current active skills configuration",
+   },
+ } as const;
+ 
+diff --git a/src/i18n/locales/ko.ts b/src/i18n/locales/ko.ts
+index 5d0e0d1..2df4ca8 100644
+--- a/src/i18n/locales/ko.ts
++++ b/src/i18n/locales/ko.ts
+@@ -137,6 +137,8 @@ export const ko = {
+     enableFor: "다음 도구에 활성화",
+     noDescription: "설명 없음",
+     noSkills: "아직 설치된 스킬이 없습니다.",
++    notes: "노트",
++    commentPlaceholder: "이 스킬에 대한 의견이나 노트를 추가하세요...",
+     noMatch: "검색 조건과 일치하는 스킬이 없습니다.",
+     delete: "삭제",
+     deleteConfirm: "\"{name}\" 스킬을 정말로 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.",
+@@ -767,5 +769,9 @@ export const ko = {
+     activePreset: "활성화된 프리셋",
+     inactive: "비활성화",
+     skillsSelected: "{count}개 스킬 선택됨",
++    captureCurrent: "현재 상태 가져오기",
++    captureConfirm: "현재 각 도구에 활성화된 스킬 구성을 이 프리셋으로 가져와 덮어쓰시겠습니까?",
++    captureSuccess: "현재 활성화 상태를 프리셋에 성공적으로 가져왔습니다.",
++    copyCurrentActive: "현재 각 도구에 활성화된 스킬 구성 복사",
+   },
+ } as const;
+diff --git a/src/i18n/locales/zh.ts b/src/i18n/locales/zh.ts
+index 3dff825..3cc65b9 100644
+--- a/src/i18n/locales/zh.ts
++++ b/src/i18n/locales/zh.ts
+@@ -138,6 +138,8 @@ export const zh = {
+     enableFor: "启用于",
+     noDescription: "暂无描述",
+     noSkills: "尚未安装任何 Skill",
++    notes: "备注",
++    commentPlaceholder: "为此技能添加备注或说明...",
+     noMatch: "没有匹配的 Skill",
+     delete: "删除",
+     deleteConfirm: '确定要删除 "{name}" 吗？此操作不可撤销。',
+@@ -748,4 +750,31 @@ export const zh = {
+     confirm: "确认",
+     close: "关闭",
+   },
++  presets: {
++    title: "预设",
++    description: "管理技能激活预设。通过关闭所有其他技能并仅启用选定的技能，快速在配置之间切换。",
++    newPreset: "新预设",
++    presetName: "预设名称",
++    presetNamePlaceholder: "例如：专注于前端",
++    presetDesc: "描述（可选）",
++    presetDescPlaceholder: "简要描述此预设的配置",
++    apply: "应用",
++    applied: "已应用",
++    applying: "应用中...",
++    create: "创建预设",
++    createSuccess: "已创建预设 \"{name}\"",
++    applySuccess: "已应用预设 \"{name}\"",
++    applyFailed: "应用预设失败",
++    deleteConfirm: "您确定要删除 \"{name}\" 吗？此操作无法撤销。",
++    deleteSuccess: "已删除预设 \"{name}\"",
++    noPresets: "尚未创建预设。",
++    noPresetsDesc: "创建一个预设以保存您当前处于活动状态的技能配置。",
++    activePreset: "活动预设",
++    inactive: "未激活",
++    skillsSelected: "已选择 {count} 个技能",
++    captureCurrent: "捕获当前状态",
++    captureConfirm: "您确定要捕获所有工具当前活动的技能配置并覆盖此预设吗？",
++    captureSuccess: "已将当前活动状态捕获到预设中。",
++    copyCurrentActive: "复制当前活动的技能配置",
++  },
+ };
+diff --git a/src/pages/Presets.tsx b/src/pages/Presets.tsx
+index 91237e6..b113d77 100644
+--- a/src/pages/Presets.tsx
++++ b/src/pages/Presets.tsx
+@@ -8,8 +8,8 @@ import { Switch } from "@/components/ui/switch";
+ import { Input } from "@/components/ui/input";
+ import { ScrollArea } from "@/components/ui/scroll-area";
+ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+-import { AppConfig, Tool, Skill, SkillActivationPreset } from "@/types";
+-import { Sliders, Plus, Trash2, Play, Check, AlertTriangle, Layers } from "lucide-react";
++import { AppConfig, Tool, Skill, SkillActivationPreset, PresetActivation } from "@/types";
++import { Sliders, Plus, Trash2, Play, Check, AlertTriangle, Layers, Download } from "lucide-react";
+ 
+ export function Presets() {
+   const { t } = useTranslation();
+@@ -22,6 +22,7 @@ export function Presets() {
+   const [isNewPresetDialogOpen, setIsNewPresetDialogOpen] = useState(false);
+   const [newPresetName, setNewPresetName] = useState("");
+   const [newPresetDesc, setNewPresetDesc] = useState("");
++  const [copyCurrentState, setCopyCurrentState] = useState(true);
+   const [applyingPresetId, setApplyingPresetId] = useState<string | null>(null);
+ 
+   // Load all data on mount
+@@ -65,11 +66,26 @@ export function Presets() {
+     }
+ 
+     const newId = `preset-${Date.now()}`;
++    const activations: PresetActivation[] = [];
++    if (copyCurrentState) {
++      tools.forEach((tool) => {
++        const activeSkillIds = skills
++          .filter((skill) => skill.enabled[tool.id] === true)
++          .map((skill) => skill.instance_id);
++        
++        // We push even if activeSkillIds is empty, to explicitly deactivate
++        activations.push({
++          tool_id: tool.id,
++          skill_ids: activeSkillIds,
++        });
++      });
++    }
++
+     const newPreset: SkillActivationPreset = {
+       id: newId,
+       name: newPresetName.trim(),
+       description: newPresetDesc.trim() || null,
+-      activations: [], // starts empty (all explicitly deactivated)
++      activations,
+     };
+ 
+     const updatedConfig = {
+@@ -135,6 +151,50 @@ export function Presets() {
+     }
+   }
+ 
++  // Capture current state to selected preset
++  async function handleCaptureCurrentToPreset(presetId: string) {
++    if (!config) return;
++    const target = presetsList.find((p) => p.id === presetId);
++    if (!target) return;
++
++    if (!confirm(t("presets.captureConfirm").replace("{name}", target.name))) {
++      return;
++    }
++
++    const activations: PresetActivation[] = tools.map((tool) => {
++      const activeSkillIds = skills
++        .filter((skill) => skill.enabled[tool.id] === true)
++        .map((skill) => skill.instance_id);
++      return {
++        tool_id: tool.id,
++        skill_ids: activeSkillIds,
++      };
++    });
++
++    const updatedPresets = presetsList.map((preset) => {
++      if (preset.id === presetId) {
++        return {
++          ...preset,
++          activations,
++        };
++      }
++      return preset;
++    });
++
++    const updatedConfig = {
++      ...config,
++      presets: updatedPresets,
++    };
++
++    try {
++      await invoke("save_config", { config: updatedConfig });
++      setConfig(updatedConfig);
++      addToast(t("presets.captureSuccess"), "success");
++    } catch (err) {
++      addToast(err instanceof Error ? err.message : t("settings.saveFailed"), "error");
++    }
++  }
++
+   // Toggle skill in preset
+   async function handleToggleSkill(toolId: string, skillId: string, enabled: boolean) {
+     if (!config || !selectedPresetId) return;
+@@ -314,6 +374,15 @@ export function Presets() {
+               placeholder={t("presets.presetDescPlaceholder")}
+               className="text-xs h-8"
+             />
++            <div className="flex items-center justify-between py-1 px-1">
++              <span className="text-[10px] text-muted-foreground font-medium">
++                {t("presets.copyCurrentActive")}
++              </span>
++              <Switch
++                checked={copyCurrentState}
++                onCheckedChange={setCopyCurrentState}
++              />
++            </div>
+             <div className="flex justify-end gap-2">
+               <Button
+                 size="sm"
+@@ -406,6 +475,16 @@ export function Presets() {
+               </div>
+ 
+               <div className="flex items-center gap-2">
++                <Button
++                  size="sm"
++                  variant="outline"
++                  onClick={() => handleCaptureCurrentToPreset(selectedPreset.id)}
++                  className="h-8 text-xs"
++                >
++                  <Download size={14} />
++                  <span>{t("presets.captureCurrent")}</span>
++                </Button>
++
+                 <Button
+                   size="sm"
+                   variant="outline"
+diff --git a/src/pages/Skills.tsx b/src/pages/Skills.tsx
+index a734151..636cbf3 100644
+--- a/src/pages/Skills.tsx
++++ b/src/pages/Skills.tsx
+@@ -37,11 +37,13 @@ import {
+   getTagFilterSelectionSummary,
+   getSkillMetadataKey,
+   getSkillTagsForSkill,
++  getSkillCommentForSkill,
+   getUntaggedSkillsCount,
+   hasSelectableTagFilters,
+   normalizeSkillTags,
+   updateMetadataTags,
+   updateSkillTagsForSkill,
++  updateMetadataComment,
+   hasSkillMetadataEntry,
+   removeSkillMetadataEntry,
+   migrateSkillMetadataToInstanceIds,
+@@ -804,6 +806,34 @@ export function Skills() {
+     }
+   }, [addToast, config]);
+ 
++  const persistMetadataComment = useCallback(async (metadataKey: string, nextComment: string) => {
++    if (!config) {
++      return;
++    }
++
++    const currentComment = config.skill_metadata?.[metadataKey]?.comment ?? "";
++    const trimmedNext = nextComment.trim();
++    if (currentComment === trimmedNext) {
++      return;
++    }
++
++    const previousConfig = config;
++    const nextSkillMetadata = updateMetadataComment(metadataKey, trimmedNext, config.skill_metadata);
++    const nextConfig: AppConfig = {
++      ...config,
++      skill_metadata: nextSkillMetadata,
++    };
++
++    setConfig(nextConfig);
++
++    try {
++      await invoke("save_config", { config: nextConfig });
++    } catch (err) {
++      setConfig(previousConfig);
++      addToast(err instanceof Error ? err.message : String(err), "error");
++    }
++  }, [addToast, config]);
++
+   const persistSkillTags = useCallback(async (skill: Skill, nextTags: string[]) => {
+     if (!config) {
+       return;
+@@ -3321,6 +3351,8 @@ export function Skills() {
+           tagSuggestions={toolEditorTagSuggestions}
+           onSelectTagSuggestion={(tag) => void persistSkillTags(toolEditorSkill, [...toolEditorTags, tag])}
+           savingTags={savingTagsSkillId === getSkillMetadataKey(toolEditorSkill)}
++          initialComment={getSkillCommentForSkill(toolEditorSkill, config?.skill_metadata) || ""}
++          onCommentChange={(comment) => persistMetadataComment(getSkillMetadataKey(toolEditorSkill), comment)}
+           t={t}
+         />
+       )}
+@@ -3386,6 +3418,12 @@ export function Skills() {
+             void persistMetadataTags(groupEditorMetadataKey, [...groupEditorTags, tag]);
+           }}
+           savingTags={savingTagsSkillId === groupEditorMetadataKey}
++          initialComment={groupEditorItem ? (config?.skill_metadata?.[getGroupMetadataKey(groupEditorItem.id)]?.comment || "") : ""}
++          onCommentChange={(comment) => {
++            if (groupEditorMetadataKey) {
++              void persistMetadataComment(groupEditorMetadataKey, comment);
++            }
++          }}
+           t={t}
+         />
+       )}
+@@ -3482,6 +3520,8 @@ function SkillManageDialog({
+   tagSuggestions,
+   onSelectTagSuggestion,
+   savingTags,
++  initialComment = "",
++  onCommentChange,
+   t,
+ }: {
+   skillName: string;
+@@ -3521,8 +3561,20 @@ function SkillManageDialog({
+   tagSuggestions: string[];
+   onSelectTagSuggestion: (tag: string) => void;
+   savingTags: boolean;
++  initialComment?: string;
++  onCommentChange: (comment: string) => void;
+   t: (key: TranslationPath) => string;
+ }) {
++  const [localComment, setLocalComment] = useState(initialComment);
++  useEffect(() => {
++    setLocalComment(initialComment);
++  }, [initialComment]);
++
++  const handleClose = () => {
++    onCommentChange(localComment);
++    onClose();
++  };
++
+   const canAddTag = normalizeSkillTags([tagDraft]).length > 0;
+   const enabledCount = items.filter((i) => i.enabled).length;
+ 
+@@ -3538,7 +3590,7 @@ function SkillManageDialog({
+         zIndex: MODAL_LAYER_Z_INDEX,
+         padding: "24px",
+       }}
+-      onClick={onClose}
++      onClick={handleClose}
+     >
+       <div
+         className="animate-modal"
+@@ -3590,7 +3642,7 @@ function SkillManageDialog({
+           </div>
+           <button
+             type="button"
+-            onClick={onClose}
++            onClick={handleClose}
+             aria-label={doneLabel}
+             style={{
+               width: "26px",
+@@ -4051,6 +4103,34 @@ function SkillManageDialog({
+                   ))}
+                 </div>
+               )}
++
++              <hr style={{ border: "none", borderTop: "1px solid var(--border)", margin: "8px 0" }} />
++
++              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
++                <label style={{ fontSize: "12px", fontWeight: 600, color: "var(--foreground)" }}>
++                  {t("skills.notes")}
++                </label>
++                <textarea
++                  value={localComment}
++                  onChange={(e) => setLocalComment(e.target.value)}
++                  onBlur={() => onCommentChange(localComment)}
++                  placeholder={t("skills.commentPlaceholder")}
++                  rows={4}
++                  style={{
++                    width: "100%",
++                    padding: "8px 10px",
++                    fontSize: "12px",
++                    color: "var(--foreground)",
++                    backgroundColor: "var(--background)",
++                    border: "1px solid var(--border)",
++                    borderRadius: "var(--radius-sm)",
++                    outline: "none",
++                    resize: "vertical",
++                    fontFamily: "inherit",
++                    lineHeight: 1.5,
++                  }}
++                />
++              </div>
+             </div>
+           )}
+         </div>
+@@ -4077,7 +4157,7 @@ function SkillManageDialog({
+             {activeTab === "tools" ? `${enabledCount}/${items.length}` : `${tags.length}`}
+           </div>
+           <button
+-            onClick={onClose}
++            onClick={handleClose}
+             style={{
+               fontSize: "12px",
+               fontWeight: 500,
+diff --git a/src/pages/skills/skillTags.ts b/src/pages/skills/skillTags.ts
+index 47f6f3d..74b6a6f 100644
+--- a/src/pages/skills/skillTags.ts
++++ b/src/pages/skills/skillTags.ts
+@@ -74,6 +74,24 @@ export function getSkillTagsForSkill(skill: Skill, skillMetadata?: SkillMetadata
+   return getSkillTags(legacyMetadataKey, skillMetadata);
+ }
+ 
++export function getSkillCommentForSkill(
++  skill: Pick<Skill, "id" | "scope" | "instance_id">,
++  skillMetadata?: SkillMetadataMap,
++): string | null {
++  const metadataKey = getSkillMetadataKey(skill);
++  const comment = skillMetadata?.[metadataKey]?.comment;
++  if (comment) {
++    return comment;
++  }
++
++  const legacyMetadataKey = getLegacyGlobalSkillMetadataKey(skill);
++  if (!legacyMetadataKey) {
++    return null;
++  }
++
++  return skillMetadata?.[legacyMetadataKey]?.comment ?? null;
++}
++
+ function hasLegacyGlobalMetadataEntry(
+   skill: Pick<Skill, "id" | "scope">,
+   skillMetadata?: SkillMetadataMap,
+@@ -164,16 +182,57 @@ export function updateMetadataTags(
+ ): SkillMetadataMap {
+   const normalizedTags = normalizeSkillTags(nextTags);
+   const nextMetadata = { ...(skillMetadata ?? {}) };
++  const currentEntry = nextMetadata[metadataKey];
++  const comment = currentEntry?.comment;
+ 
+-  if (normalizedTags.length === 0) {
++  if (normalizedTags.length === 0 && !comment) {
+     delete nextMetadata[metadataKey];
+   } else {
+-    nextMetadata[metadataKey] = { tags: normalizedTags };
++    nextMetadata[metadataKey] = {
++      ...currentEntry,
++      tags: normalizedTags,
++    };
++  }
++
++  return nextMetadata;
++}
++
++export function updateMetadataComment(
++  metadataKey: string,
++  comment: string | null | undefined,
++  skillMetadata?: SkillMetadataMap,
++): SkillMetadataMap {
++  const nextMetadata = { ...(skillMetadata ?? {}) };
++  const currentEntry = nextMetadata[metadataKey];
++  const trimmedComment = comment?.trim();
++
++  if (!trimmedComment) {
++    if (!currentEntry || !currentEntry.tags || currentEntry.tags.length === 0) {
++      delete nextMetadata[metadataKey];
++    } else {
++      nextMetadata[metadataKey] = {
++        tags: currentEntry.tags,
++      };
++    }
++  } else {
++    nextMetadata[metadataKey] = {
++      tags: currentEntry?.tags ?? [],
++      comment: trimmedComment,
++    };
+   }
+ 
+   return nextMetadata;
+ }
+ 
++export function updateSkillCommentForSkill(
++  skill: Pick<Skill, "id" | "scope" | "instance_id">,
++  comment: string | null | undefined,
++  skillMetadata?: SkillMetadataMap,
++): SkillMetadataMap {
++  const migratedMetadata = migrateSkillMetadataEntryToInstanceId(skill, skillMetadata);
++  return updateMetadataComment(getSkillMetadataKey(skill), comment, migratedMetadata);
++}
++
+ export function removeMetadataEntry(
+   metadataKey: string,
+   skillMetadata?: SkillMetadataMap,
+diff --git a/src/types/index.ts b/src/types/index.ts
+index 7ae1cd8..ad191c4 100644
+--- a/src/types/index.ts
++++ b/src/types/index.ts
+@@ -55,6 +55,7 @@ export interface InstalledSkillPackage {
+ 
+ export interface SkillMetadata {
+   tags: string[];
++  comment?: string | null;
+ }
+ 
+ export type SkillMetadataMap = Record<string, SkillMetadata>;

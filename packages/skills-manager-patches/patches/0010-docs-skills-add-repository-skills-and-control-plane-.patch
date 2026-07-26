@@ -1,0 +1,845 @@
+From 48ea832e288b7fe7f87ece6b8fbfca397d5108b5 Mon Sep 17 00:00:00 2001
+From: mineclover <mineclover@naver.com>
+Date: Sun, 19 Jul 2026 02:06:34 +0900
+Subject: docs(skills): add repository skills and control-plane plan
+
+---
+ .codex/config.toml                            |  14 +
+ .../skills-manager-architecture/SKILL.md      |  34 ++
+ .../agents/openai.yaml                        |   4 +
+ .codex/skills/skills-manager-orca/SKILL.md    |  25 ++
+ .../skills-manager-orca/agents/openai.yaml    |   4 +
+ .codex/skills/skills-manager-tauri/SKILL.md   |  28 ++
+ .../skills-manager-tauri/agents/openai.yaml   |   4 +
+ .codex/skills/skills-manager-testing/SKILL.md |  29 ++
+ .../skills-manager-testing/agents/openai.yaml |   4 +
+ .codex/skills/skills-manager-ui/SKILL.md      |  27 ++
+ .../skills-manager-ui/agents/openai.yaml      |   4 +
+ IMPLEMENTATION_PLAN.md                        | 321 ++++++++++++++++++
+ skills/skills-manager-architecture/SKILL.md   |  34 ++
+ .../agents/openai.yaml                        |   4 +
+ skills/skills-manager-orca/SKILL.md           |  25 ++
+ skills/skills-manager-orca/agents/openai.yaml |   4 +
+ skills/skills-manager-tauri/SKILL.md          |  28 ++
+ .../skills-manager-tauri/agents/openai.yaml   |   4 +
+ skills/skills-manager-testing/SKILL.md        |  29 ++
+ .../skills-manager-testing/agents/openai.yaml |   4 +
+ skills/skills-manager-ui/SKILL.md             |  27 ++
+ skills/skills-manager-ui/agents/openai.yaml   |   4 +
+ 22 files changed, 661 insertions(+)
+ create mode 100644 .codex/config.toml
+ create mode 100644 .codex/skills/skills-manager-architecture/SKILL.md
+ create mode 100644 .codex/skills/skills-manager-architecture/agents/openai.yaml
+ create mode 100644 .codex/skills/skills-manager-orca/SKILL.md
+ create mode 100644 .codex/skills/skills-manager-orca/agents/openai.yaml
+ create mode 100644 .codex/skills/skills-manager-tauri/SKILL.md
+ create mode 100644 .codex/skills/skills-manager-tauri/agents/openai.yaml
+ create mode 100644 .codex/skills/skills-manager-testing/SKILL.md
+ create mode 100644 .codex/skills/skills-manager-testing/agents/openai.yaml
+ create mode 100644 .codex/skills/skills-manager-ui/SKILL.md
+ create mode 100644 .codex/skills/skills-manager-ui/agents/openai.yaml
+ create mode 100644 IMPLEMENTATION_PLAN.md
+ create mode 100644 skills/skills-manager-architecture/SKILL.md
+ create mode 100644 skills/skills-manager-architecture/agents/openai.yaml
+ create mode 100644 skills/skills-manager-orca/SKILL.md
+ create mode 100644 skills/skills-manager-orca/agents/openai.yaml
+ create mode 100644 skills/skills-manager-tauri/SKILL.md
+ create mode 100644 skills/skills-manager-tauri/agents/openai.yaml
+ create mode 100644 skills/skills-manager-testing/SKILL.md
+ create mode 100644 skills/skills-manager-testing/agents/openai.yaml
+ create mode 100644 skills/skills-manager-ui/SKILL.md
+ create mode 100644 skills/skills-manager-ui/agents/openai.yaml
+
+diff --git a/.codex/config.toml b/.codex/config.toml
+new file mode 100644
+index 0000000..49d1bf6
+--- /dev/null
++++ b/.codex/config.toml
+@@ -0,0 +1,14 @@
++[plugins."skills-manager-architecture"]
++enabled = true
++
++[plugins."skills-manager-orca"]
++enabled = true
++
++[plugins."skills-manager-tauri"]
++enabled = true
++
++[plugins."skills-manager-testing"]
++enabled = true
++
++[plugins."skills-manager-ui"]
++enabled = true
+diff --git a/.codex/skills/skills-manager-architecture/SKILL.md b/.codex/skills/skills-manager-architecture/SKILL.md
+new file mode 100644
+index 0000000..fc8b286
+--- /dev/null
++++ b/.codex/skills/skills-manager-architecture/SKILL.md
+@@ -0,0 +1,34 @@
++---
++name: skills-manager-architecture
++description: Design and review Skills Manager provider inventory, skill bindings, scopes, presets, shared roots, and CLI/UI parity. Use when changing the control-plane model or evaluating whether a feature preserves canonical artifacts and provider isolation.
++---
++
++# Skills Manager Architecture
++
++Use the provider-aware model in `IMPLEMENTATION_PLAN.md` as the design authority.
++
++## Invariants
++
++- Keep `Skill` as the canonical artifact record and `SkillBinding` as the per-provider state record.
++- Preserve `global`, `project`, and `tool` instance IDs. Do not resolve a project or tool skill by the legacy artifact ID alone.
++- Treat a provider root, not a tool label, as the source of truth for filesystem visibility.
++- Never delete or mutate a canonical manager skill while enabling or disabling a binding.
++- Treat `~/.agents/skills` as a shared provider. Any operation there must identify all configured consumers.
++- Treat Orca topics as read-only runtime capabilities, not local installed skills.
++
++## Design workflow
++
++1. Read the relevant scanner, linker, config, command, and UI code before proposing a new abstraction.
++2. Add shared Rust service behavior first, then make Tauri and CLI adapters call that service.
++3. Represent unknown, missing, conflicting, and unavailable states explicitly; do not collapse them into `false`.
++4. Keep global scope as the default read scope. Require an explicit project ID for project-scoped reads and writes.
++5. Return an auditable operation report for mutations, including skipped and failed bindings and shared-root impacts.
++6. Add a focused fixture/test for every new state transition and verify both interfaces.
++
++## Review checklist
++
++- Does the change duplicate an artifact because a shared path is visible through multiple providers?
++- Can a disabled direct skill still be listed and toggled?
++- Does the selected provider and scope appear in every activation operation?
++- Does a provider capability prevent unsupported mutation before filesystem changes occur?
++- Does a refresh reconcile the on-disk state instead of trusting cached enabled maps?
+diff --git a/.codex/skills/skills-manager-architecture/agents/openai.yaml b/.codex/skills/skills-manager-architecture/agents/openai.yaml
+new file mode 100644
+index 0000000..bd1bb10
+--- /dev/null
++++ b/.codex/skills/skills-manager-architecture/agents/openai.yaml
+@@ -0,0 +1,4 @@
++interface:
++  display_name: "Skills Manager Architecture"
++  short_description: "Provider-aware architecture guidance"
++  default_prompt: "Use $skills-manager-architecture to reason about provider inventory, binding state, scopes, and shared-root safety."
+diff --git a/.codex/skills/skills-manager-orca/SKILL.md b/.codex/skills/skills-manager-orca/SKILL.md
+new file mode 100644
+index 0000000..057fbf1
+--- /dev/null
++++ b/.codex/skills/skills-manager-orca/SKILL.md
+@@ -0,0 +1,25 @@
++---
++name: skills-manager-orca
++description: Integrate Orca runtime health, topic discovery, shared agent skills, and workspace context into Skills Manager. Use when inspecting Orca, adding Orca provider behavior, or deciding whether a capability is read-only versus a local skill binding.
++---
++
++# Skills Manager Orca
++
++Keep Orca runtime capabilities separate from local filesystem skill bindings.
++
++## Read-only inspection
++
++- Run `orca status --json` for app and runtime health.
++- Run `orca skills list --json` for bundled topic metadata.
++- Apply a short timeout and terminate a hung child process.
++- Represent missing CLI, failed commands, malformed JSON, offline runtime, and empty topics as explicit unavailable/empty states.
++- Sanitize command errors before returning them to the UI or CLI.
++
++## Binding rules
++
++- Do not invent an `.orca/skills` directory or mutate undocumented Orca files.
++- A local skill enabled for a consuming tool is not automatically an Orca-native topic.
++- Treat `~/.agents/skills` as a shared root and report all configured consumers before changing it.
++- Keep Orca topic rows read-only until Orca exposes a stable activation contract.
++
++Verify both running and unavailable Orca states and confirm the provider inventory still lists local direct skills when Orca is offline.
+diff --git a/.codex/skills/skills-manager-orca/agents/openai.yaml b/.codex/skills/skills-manager-orca/agents/openai.yaml
+new file mode 100644
+index 0000000..b9cb722
+--- /dev/null
++++ b/.codex/skills/skills-manager-orca/agents/openai.yaml
+@@ -0,0 +1,4 @@
++interface:
++  display_name: "Skills Manager Orca"
++  short_description: "Safe Orca runtime integration"
++  default_prompt: "Use $skills-manager-orca to inspect or extend Orca integration, shared agents directories, and read-only runtime capabilities."
+diff --git a/.codex/skills/skills-manager-tauri/SKILL.md b/.codex/skills/skills-manager-tauri/SKILL.md
+new file mode 100644
+index 0000000..6d0d7a3
+--- /dev/null
++++ b/.codex/skills/skills-manager-tauri/SKILL.md
+@@ -0,0 +1,28 @@
++---
++name: skills-manager-tauri
++description: Implement and verify Skills Manager Rust/Tauri services, commands, scanners, linkers, Codex adapters, and provider operations. Use when changing backend skill activation, project scope, provider discovery, operation reports, or the inspect CLI.
++---
++
++# Skills Manager Tauri
++
++Implement backend behavior in the shared Rust services before editing interface adapters.
++
++## Workflow
++
++1. Read `IMPLEMENTATION_PLAN.md` and inspect the existing service, command, model, and test paths.
++2. Put reusable behavior in `src-tauri/src/services/skill_control.rs`, `tool_control.rs`, or the provider-specific service; keep Tauri commands thin.
++3. Reuse `ScannerService` for global/project/direct skill discovery and `LinkerService` for link, junction, and copy-mode state.
++4. Route Codex plugin state through `codex_config.rs`; preserve unrelated TOML sections and line endings.
++5. Gate activation through provider capabilities. Disabled or undetected providers may still expose direct skills, but read-only providers must reject mutation.
++6. Return operation reports with applied, skipped, failed, and impacted-provider details. Do not fail fast before recording partial results for batch or preset operations.
++
++## Safety rules
++
++- Never remove a canonical skill from the manager directory during a provider toggle.
++- Use `symlink_metadata` when a disabled suffix or broken link must remain observable.
++- Keep inspect/preview commands read-only and make them safe for a missing CLI or malformed JSON.
++- Preserve existing command payload compatibility unless a new response field is additive.
++
++## Verification
++
++Run `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`, `cargo check --manifest-path src-tauri/Cargo.toml --bins`, and `cargo test --manifest-path src-tauri/Cargo.toml`. Exercise `skills-manager-inspect providers`, `bindings`, and `skill preview` against a read-only configuration.
+diff --git a/.codex/skills/skills-manager-tauri/agents/openai.yaml b/.codex/skills/skills-manager-tauri/agents/openai.yaml
+new file mode 100644
+index 0000000..20e5953
+--- /dev/null
++++ b/.codex/skills/skills-manager-tauri/agents/openai.yaml
+@@ -0,0 +1,4 @@
++interface:
++  display_name: "Skills Manager Tauri"
++  short_description: "Rust and Tauri backend implementation"
++  default_prompt: "Use $skills-manager-tauri to implement backend changes with shared services, safe filesystem behavior, and Rust tests."
+diff --git a/.codex/skills/skills-manager-testing/SKILL.md b/.codex/skills/skills-manager-testing/SKILL.md
+new file mode 100644
+index 0000000..a4d17ac
+--- /dev/null
++++ b/.codex/skills/skills-manager-testing/SKILL.md
+@@ -0,0 +1,29 @@
++---
++name: skills-manager-testing
++description: Verify Skills Manager provider bindings, activation reports, project scopes, shared roots, Codex plugin state, and CLI/UI parity. Use when adding or reviewing behavior that can change skill visibility or activation.
++---
++
++# Skills Manager Testing
++
++Test the shared service and both interfaces against the same observable state.
++
++## Required matrix
++
++- Managed global skill: enabled, disabled, missing target, wrong target, and broken target.
++- Project-scoped skill: default global read versus explicit project read.
++- Direct tool skill: enabled, `.disabled-by-sm`, disabled tool, and Codex plugin state.
++- Shared `~/.agents/skills`: one consumer, multiple consumers, conflicting consumer states, and read-only inventory.
++- Orca: healthy, offline, missing CLI, malformed response, and empty topic list.
++- Operations: single toggle, batch, preset target, preset scope, skipped no-op, partial failure, and operation report.
++
++## Commands
++
++Run Rust unit tests, frontend tests/build, then read-only checks such as:
++
++```text
++skills-manager-inspect providers --json
++skills-manager-inspect bindings --json
++skills-manager-inspect skill preview --id <instance-id> --tool <provider-id> --enable --json
++```
++
++Assert JSON fields and actual filesystem/config state; a green build alone is not evidence that provider discovery or scope behavior is correct.
+diff --git a/.codex/skills/skills-manager-testing/agents/openai.yaml b/.codex/skills/skills-manager-testing/agents/openai.yaml
+new file mode 100644
+index 0000000..67d8ebc
+--- /dev/null
++++ b/.codex/skills/skills-manager-testing/agents/openai.yaml
+@@ -0,0 +1,4 @@
++interface:
++  display_name: "Skills Manager Testing"
++  short_description: "Provider binding and parity verification"
++  default_prompt: "Use $skills-manager-testing to design and run focused backend, frontend, fixture, and manual verification for Skills Manager."
+diff --git a/.codex/skills/skills-manager-ui/SKILL.md b/.codex/skills/skills-manager-ui/SKILL.md
+new file mode 100644
+index 0000000..8bdca48
+--- /dev/null
++++ b/.codex/skills/skills-manager-ui/SKILL.md
+@@ -0,0 +1,27 @@
++---
++name: skills-manager-ui
++description: Build and review the Skills Manager React UI for provider-aware skill inventory, binding states, presets, filters, scope selection, and operation feedback. Use when changing Skills or Presets while preserving CLI parity.
++---
++
++# Skills Manager UI
++
++Keep the UI a presentation and interaction layer over the shared Tauri services.
++
++## Workflow
++
++1. Read the relevant Rust command signature and `src/types/index.ts` before adding an invoke call.
++2. Keep provider identity, scope, and binding state visible near every activation control.
++3. Load global state by default; pass an explicit `projectId` when the user selected a project. Refresh skills, bindings, and provider inventory together after mutations.
++4. Keep direct skills from disabled tools visible and actionable. Do not hide a row because `enabled[provider]` is false.
++5. Show `enabled`, `disabled`, `missing`, `conflict`, and `unavailable` distinctly. Explain read-only or shared-root restrictions instead of silently disabling controls.
++6. Use the operation preview before a shared-root toggle and show operation-report failures after batch or preset actions.
++
++## Parity checklist
++
++- Provider filters use the same provider IDs as the CLI.
++- Project/global selectors map to the same scanner scope as `skills-manager-inspect`.
++- Presets target one selected agent and include manager-owned plus direct skills for that agent.
++- UI refreshes from disk after every activation, import, delete, or preset application.
++- Add focused pure-function tests for grouping, filtering, state labels, and selection behavior.
++
++Run `npm run build`, `npm test -- --run`, and the focused skill-list tests before handoff.
+diff --git a/.codex/skills/skills-manager-ui/agents/openai.yaml b/.codex/skills/skills-manager-ui/agents/openai.yaml
+new file mode 100644
+index 0000000..f475095
+--- /dev/null
++++ b/.codex/skills/skills-manager-ui/agents/openai.yaml
+@@ -0,0 +1,4 @@
++interface:
++  display_name: "Skills Manager UI"
++  short_description: "Provider-aware Skills Manager frontend"
++  default_prompt: "Use $skills-manager-ui to change the Skills Manager frontend while preserving UI and CLI parity."
+diff --git a/IMPLEMENTATION_PLAN.md b/IMPLEMENTATION_PLAN.md
+new file mode 100644
+index 0000000..e8dbb82
+--- /dev/null
++++ b/IMPLEMENTATION_PLAN.md
+@@ -0,0 +1,321 @@
++# Skills Manager — Skill Control Plane Implementation Plan
++
++> Status: provider inventory, capability-gated activation, operation reporting, local skill packages, and Vercel Skills workspace/repository registration complete
++> Last audited: 2026-07-18 (Asia/Seoul)
++> Scope: unified skill inventory, provider-aware activation/deactivation, and Orca integration
++
++## Current implementation slice
++
++- The global/project scope scanner is the read path for both the UI and the standalone inspector.
++- `SkillControlService` and `ToolControlService` are the shared mutation boundary for Tauri commands and `skills-manager-inspect`.
++- `ProviderInventoryService` and `OrcaService` expose filesystem/config-file/CLI providers, the shared `~/.agents/skills` directory, and Orca runtime/topics without treating Orca topics as local activatable skills.
++- Presets target one selected agent and include manager-owned skills plus direct skills owned by that agent.
++- Direct skills from disabled manager tools remain visible and actionable.
++- `skills-manager-inspect` reports managed skills, direct Tool skills, tool state, projects, Skill Groups, and presets without opening the UI or writing configuration.
++- Workspace/repository registration is shared by the UI and `skills-manager-inspect project ...`; repository roots discover `skills/`, `.agents/skills/`, `.claude/skills/`, `.codex/skills/`, and supported agent-specific skill roots.
++- Project scanning preserves the canonical `skills/` priority, deduplicates the same skill id across compatible roots, and retains the repository root so skills added later are discovered.
++- Project-scoped activation resolves each managed agent to the registered repository's local config/skills directory; legacy bindings without `root_path` retain their existing global targets.
++- Existing legacy project bindings continue to deserialize; new bindings persist `root_path` alongside `skills_dir` for workspace-aware discovery.
++- Legacy bindings that only persisted a standard `skills_dir` are upgraded on load by inferring and persisting the repository root; custom non-standard paths remain unchanged for safety.
++- `skills-manager-inspect providers --json` reports provider capabilities, detection/reachability, skill counts, shared-directory warnings, and Orca status/topics without writing configuration.
++- `list_skill_bindings` and `skills-manager-inspect bindings --json` report per-skill provider state, including direct tool paths, managed link/copy targets, shared-directory conflicts, and unavailable providers without writing configuration.
++- Single toggles expose `skill preview`/`preview_skill_operation`; shared-root changes identify affected consumers before UI confirmation, and read-only providers reject mutation through the shared capability boundary.
++- Single, batch, and preset activation paths return an auditable `SkillOperationReport` with requested, attempted, applied, skipped, failed, and impacted-provider fields.
++- Repo-local role skills live under `skills/skills-manager-{architecture,tauri,ui,orca,testing}/SKILL.md` with validated `agents/openai.yaml` metadata.
++- CLI parity covers skill/tool toggles, imports, deletes, batch actions, preset apply/list/clear, and preset create/delete/capture/member editing.
++- Orca-native topics remain read-only inventory entries; local skill bindings are reported separately and never inferred from an Orca topic name.
++- Final audit completed against the provider matrix: Orca reachable/unavailable handling, shared-root impact/guard behavior, Codex plugin state, duplicate IDs, project scope, and read-only providers are covered by runtime checks and tests.
++- Vercel Skills compatibility audit completed with repository preview, project registration, active-project switching, removal, Windows path normalization, empty Git repository registration, project-local activation, and multi-root scanner fixtures.
++
++## 1. Current baseline
++
++### Repository
++
++- Repository: `C:\Users\minec\Skills-Manager`
++- Branch: `main`
++- HEAD at audit: `acdaeca` (`fix: prevent presets page container overflow and card layout collapse`)
++- The working tree contains an existing, uncommitted WIP change set. It includes Codex plugin-state handling, scoped/tool skill scanning, package/group handling, preset work, and related UI changes. Do not reset or overwrite these changes while implementing this plan.
++- `DESIGN.md` is a visual/style reference, not an implementation plan. This document is the implementation source of truth for the skill control-plane work.
++
++### Verified build baseline
++
++- `npm run build`: passed.
++- `cargo test --manifest-path src-tauri\\Cargo.toml`: passed, 189 tests.
++- `cargo fmt --manifest-path src-tauri\\Cargo.toml -- --check`: passed.
++- `npm test -- --run`: passed, 3 tests; focused unified-skill tests passed, 174 tests.
++- Five repo-local skill packages passed `quick_validate.py` with generated `agents/openai.yaml` metadata.
++- `orca status --json` returned a running, ready, reachable runtime; `orca skills list --json` returned the installed topic inventory.
++- The previous Vite font-reference, large-chunk, stale Browserslist, and Rust `editor_detector` warnings were fixed. The final Vite build and `cargo check --bins` are warning-free.
++- `caniuse-lite` and `baseline-browser-mapping` were refreshed in `package-lock.json`; the generated route chunks stay below the Vite 500 kB warning threshold.
++
++### Existing application capabilities
++
++The current code already provides most of the first-generation control surface:
++
++- `SkillScope`: global, project, and tool scopes.
++- Skill scanning, metadata, package/group membership, marketplace sources, and project bindings.
++- Per-tool skill enable/disable through `scanner.rs`, `linker.rs`, and `commands/skills.rs`.
++- Tool-level and skill-level bulk actions.
++- Presets for capturing and applying activation states.
++- Codex plugin `config.toml` enable/disable handling in the current WIP (`src-tauri/src/services/codex_config.rs`).
++- React pages for unified skills and tool-oriented management: `src/pages/Skills.tsx` and `src/pages/Tools.tsx`.
++
++The existing `Tool` model is currently both an agent/tool detector and an activation target. That is sufficient for filesystem-backed integrations, but it is too narrow for Orca and shared skill registries.
++
++## 2. Audited local runtime configuration
++
++| Area | Current state | Meaning for the product |
++|---|---|---|
++| PowerShell | PowerShell 7.6.3 is active; Windows PowerShell 5.1 is also installed | CLI adapters must work from both shells on Windows |
++| Python | Anaconda `conda 25.7.0` is available | Do not model Orca as a Python/conda package |
++| Orca app | `orca status --json` returned `ok: true`, runtime `ready` and reachable | Orca health can be surfaced as an integration status |
++| Shared skill root | `C:\Users\minec\\.agents\\skills` | Contains `computer-use`, `find-skills`, `orca-cli`, and `orchestration` |
++| Codex skill root | `C:\Users\minec\\.codex\\skills` | Contains built-in/system skills and links; it is not the same root as `.agents\\skills` |
++| Orca data | `C:\Users\minec\\.orca\\agent-hooks` | Runtime hooks only; no `.orca\\skills` directory was found |
++| Orca bundled topics | `computer-use`, `linear-tickets`, `orca-cli`, `orca-emulator`, `orca-emulator-android`, `orca-linear`, `orca-per-workspace-env`, `orchestration` | Distinguish “available in Orca” from “installed in a local agent skill directory” |
++
++The current local installation therefore has two different concepts that must not be conflated:
++
++1. Skills installed into an agent-readable directory, such as `~/.agents/skills`.
++2. Orca's own runtime/CLI capabilities, queried through `orca status` and `orca skills`.
++
++Orca's current documentation says the CLI ships with the desktop app and is registered from `Settings → Experimental → CLI`. Its skill registry documents `orca-cli`, `orchestration`, `computer-use`, `orca-linear`, and `orca-emulator`; the CLI can list and retrieve bundled guides with `orca skills list/get`. See:
++
++- https://www.onorca.dev/docs/cli/overview
++- https://www.onorca.dev/docs/cli/skills
++
++## 3. Product goal
++
++Provide one UI that can answer:
++
++- Which skills exist locally, in a project, in a marketplace source, or in a shared registry?
++- Which agent/provider can currently see each skill?
++- Is the skill enabled, disabled, missing, conflicting, stale, or unavailable because its provider is offline?
++- What will change if the user toggles it?
++- Is Orca healthy and which Orca-native skill guides/capabilities are available?
++
++Activation must be explicit about its target. “Disable Orca” must not silently mean “delete or rename a skill in `.orca`”, because `.orca` is not the observed skill root.
++
++## 4. Target domain model
++
++Keep the existing `Tool`/`Skill` API compatible during migration, then introduce provider-aware concepts alongside it.
++
++### 4.1 Skill artifact
++
++Represents the canonical skill or package member.
++
++```text
++SkillArtifact
++- artifact_id / stable skill id
++- package_id and member_id, optional
++- name, description, version
++- source: local | imported | marketplace | vault | registry
++- canonical_path, optional
++```
++
++### 4.2 Skill provider
++
++Represents where a skill is discovered or how it is controlled.
++
++```text
++SkillProvider
++- provider_id: codex | claude-code | agents-directory | orca | custom
++- kind: filesystem | config_file | cli | marketplace
++- display_name
++- root_path, optional
++- detected
++- cli_available / reachable
++- capabilities: list, install, enable, disable, update, inspect
++```
++
++### 4.3 Skill binding
++
++Represents an artifact's state for a provider and scope.
++
++```text
++SkillBinding
++- artifact_id
++- provider_id
++- scope: global | project | tool
++- state: enabled | disabled | missing | conflict | unavailable
++- source_path, optional
++- target_path, optional
++- last_checked_at
++- reason, optional
++```
++
++This separates a skill's identity from the mechanism used to activate it. It also avoids using a single `HashMap<String, bool>` as the only representation of state when a provider can return richer statuses.
++
++## 5. Provider strategy
++
++### 5.1 Filesystem providers
++
++Reuse the current scanner/linker behavior for Claude Code, Codex, and other filesystem-backed tools.
++
++- Preserve instance IDs and scope semantics.
++- Keep canonical skill files immutable during enable/disable operations.
++- Make link/copy/rename behavior an explicit provider capability.
++- Continue to support Windows symlink restrictions and copy-mode providers.
++
++### 5.2 Codex provider
++
++Codex needs two state channels:
++
++1. Skill files under its configured skill directory.
++2. Plugin state in `config.toml`.
++
++The current WIP `codex_config.rs` should become the Codex provider adapter rather than remain embedded as a special case in the generic scanner. Preserve its section matching, line endings, comments, and unrelated TOML sections.
++
++### 5.3 Shared `agents-directory` provider
++
++Add a first-class provider for `~/.agents/skills` because the current global `npx skills add` flow installs the Orca skills there.
++
++- Detect the directory independently of Vercel Skills branding.
++- Show it as a shared registry/provider with an impact warning.
++- Track which agents consume the directory before changing a skill.
++- Avoid duplicate rows when the same skill is visible through a shared root and a tool-specific link.
++
++### 5.4 Orca provider
++
++Do not add Orca as a normal `.orca\\skills` filesystem tool. Add an Orca integration/provider with CLI capabilities:
++
++- `orca status --json`: health and reachability.
++- `orca skills list --json`: available bundled topics.
++- `orca skills get <name> --json` or `--full`: retrieve the guide/metadata for a topic.
++- Optional later adapters for worktrees, terminals, browser automation, orchestration, and emulator capabilities.
++
++For v1, Orca activation should mean enabling the underlying agent skill or shared registry binding. Orca-native topic availability should be displayed separately from filesystem activation. Do not expose an enable/disable switch for an Orca-native topic until a stable command or documented storage contract exists.
++
++### 5.5 Marketplace and registry providers
++
++Keep marketplace install/update separate from activation. A remote skill can be:
++
++- available remotely,
++- installed locally,
++- enabled for one or more providers,
++- or installed but inactive.
++
++The UI should not represent “installed” as “enabled”.
++
++## 6. Implementation phases
++
++### Phase 0 — Baseline protection
++
++- Preserve the current uncommitted WIP changes.
++- Add this plan and a provider/Orca integration design note.
++- Capture fixture snapshots for `.agents/skills`, `.codex/skills`, `.orca/agent-hooks`, and a Codex `config.toml` (see `src-tauri/tests/fixtures/provider-inventory`).
++- Keep build/test commands in the handoff checklist.
++
++### Phase 1 — Provider inventory API
++
++Current status: implemented for the local filesystem/config-file providers and the Orca CLI provider; `list_skill_bindings` is exposed to both Tauri and the standalone inspector.
++
++Add a read-only backend command, for example `list_skill_providers`, returning:
++
++- provider identity and kind,
++- paths and detection state,
++- CLI availability/reachability,
++- capability flags,
++- skill counts and warning messages.
++
++Add a separate `list_skill_bindings` or extend `list_skills` with provider binding records. Avoid breaking the current frontend response until the new UI consumes the new shape.
++
++### Phase 2 — Shared skill and Orca adapters
++
++Current status: read-only `agents-directory` scanning and Orca status/topic parsing are implemented with timeout and malformed-response handling. Shared activation is routed through consuming filesystem providers; Orca topics remain read-only.
++
++- Implement the `agents-directory` scanner.
++- Implement an Orca CLI service with timeouts, JSON parsing, unavailable/offline states, and sanitized error messages.
++- Add fixtures for successful Orca responses, empty topic lists, malformed JSON, missing CLI, and offline app.
++- Add the installable Orca topic catalog as metadata, not as hard-coded active files.
++
++### Phase 3 — Activation semantics
++
++Current status: capability checks, shared-root previews, and operation reports are implemented across single toggles, batches, and presets. Preset UI consumes failed-operation reports; shared-root confirmation is enforced for direct UI toggles and CLI mutations require `--confirm-shared`.
++
++- Route existing filesystem toggles through provider capabilities.
++- Route Codex plugin toggles through the Codex adapter.
++- Define shared-root behavior: preview impacted agents, confirm broad changes, and never delete canonical source files.
++- Return an operation report with applied, skipped, and failed bindings.
++- Keep the current batch/preset behavior by translating presets into binding operations.
++
++### Phase 4 — UI inventory and control surface
++
++Current status: provider inventory, provider/state/source filters, and expanded skill binding rows are visible on the Skills page. Provider filtering keeps disabled bindings visible and separates Orca topics from local skill artifacts.
++
++Refactor the existing Skills page incrementally:
++
++- Provider filter: Codex, Claude Code, shared agents directory, Orca, project, custom.
++- State filter: enabled, disabled, missing, conflict, unavailable.
++- Source filter: local, marketplace, registry, vault.
++- Separate cards/rows for skill artifacts and provider bindings.
++- Show the activation target and impact before a toggle.
++- Orca integration card: app running, CLI available, runtime reachable, topic count, last checked time.
++- Use disabled controls with reasons when a provider is read-only or unavailable.
++- Preserve current batch actions and presets through the new binding model.
++
++### Phase 5 — Local skill package organization
++
++Current status: five concise repo-local role skills and generated interface metadata are present and validated.
++
++Add repo-local skills using the standard top-level layout:
++
++```text
++skills/
++├─ skills-manager-architecture/SKILL.md
++├─ skills-manager-tauri/SKILL.md
++├─ skills-manager-ui/SKILL.md
++├─ skills-manager-orca/SKILL.md
++└─ skills-manager-testing/SKILL.md
++```
++
++The Orca documentation confirms that repositories with `skills/<name>/SKILL.md` can be installed through `npx skills add`. Each local skill should contain only the workflow needed for that role and link back to the provider model in this plan.
++
++### Phase 6 — Verification and release readiness
++
++Current status: complete. Backend, frontend, CLI, local skill metadata, and the provider matrix are green. The working tree remains intentionally dirty because it contains the user's existing WIP plus this implementation slice.
++
++- Rust unit tests for each provider adapter and state transition.
++- TypeScript tests for grouping, filtering, status labels, batch operations, and optimistic rollback.
++- Integration fixtures for Windows path normalization and symlink/copy behavior.
++- Provider matrix verification completed with:
++  - Orca running/reachable via the live CLI and missing/offline/malformed response tests;
++  - shared `~/.agents/skills` installed, including read-only preview and confirmation guard;
++  - Codex plugin enabled/disabled state tests;
++  - duplicate skill IDs across provider/scope fixtures;
++  - project-scoped scanner and activation tests;
++  - a provider without enable/disable capability rejected at the shared mutation boundary.
++- Final handoff commands passed: `npm run build`, `cargo fmt --manifest-path src-tauri\\Cargo.toml -- --check`, `cargo test --manifest-path src-tauri\\Cargo.toml`, `npm test -- --run`, focused unified-skill tests, and `git diff --check`.
++
++## 7. Acceptance criteria
++
++- The UI lists skill artifacts without duplicate rows caused by shared roots or linked targets.
++- Every activation toggle names its provider and scope.
++- Enabling/disabling a skill updates only the selected binding and does not delete the canonical artifact.
++- Codex plugin state and filesystem/link state remain consistent after refresh.
++- Shared `~/.agents/skills` changes display their cross-agent impact before confirmation.
++- Orca health and available topics are visible even when no Orca-owned skill directory exists.
++- Orca offline/missing CLI is represented as `unavailable`, not as an empty skill inventory.
++- Batch operations and presets produce an auditable operation report.
++- Existing global/project/tool behavior remains backward compatible.
++
++## 8. Out of scope for v1
++
++- Executing arbitrary shell commands from the UI.
++- Mutating undocumented Orca internal files.
++- Treating Orca's bundled topic list as a local install manifest.
++- Cloud synchronization of provider credentials or CLI sessions.
++- Automatic installation of all available Orca topics.
++- Replacing the current `Tool` model in one large migration.
++
++## 9. Original recommended first implementation slice (completed)
++
++Implement the smallest vertical slice first:
++
++1. Add `SkillProvider`/capability types without removing `Tool`.
++2. Add `agents-directory` inventory for `~/.agents/skills`.
++3. Add read-only Orca status/topic inventory.
++4. Render both in the existing Skills page behind a provider filter.
++5. Add tests and only then route enable/disable through the new adapter boundary.
++
++This gives the user immediate visibility into the current Orca/shared-skill setup while reducing the risk of changing the already-working filesystem/link behavior.
+diff --git a/skills/skills-manager-architecture/SKILL.md b/skills/skills-manager-architecture/SKILL.md
+new file mode 100644
+index 0000000..fc8b286
+--- /dev/null
++++ b/skills/skills-manager-architecture/SKILL.md
+@@ -0,0 +1,34 @@
++---
++name: skills-manager-architecture
++description: Design and review Skills Manager provider inventory, skill bindings, scopes, presets, shared roots, and CLI/UI parity. Use when changing the control-plane model or evaluating whether a feature preserves canonical artifacts and provider isolation.
++---
++
++# Skills Manager Architecture
++
++Use the provider-aware model in `IMPLEMENTATION_PLAN.md` as the design authority.
++
++## Invariants
++
++- Keep `Skill` as the canonical artifact record and `SkillBinding` as the per-provider state record.
++- Preserve `global`, `project`, and `tool` instance IDs. Do not resolve a project or tool skill by the legacy artifact ID alone.
++- Treat a provider root, not a tool label, as the source of truth for filesystem visibility.
++- Never delete or mutate a canonical manager skill while enabling or disabling a binding.
++- Treat `~/.agents/skills` as a shared provider. Any operation there must identify all configured consumers.
++- Treat Orca topics as read-only runtime capabilities, not local installed skills.
++
++## Design workflow
++
++1. Read the relevant scanner, linker, config, command, and UI code before proposing a new abstraction.
++2. Add shared Rust service behavior first, then make Tauri and CLI adapters call that service.
++3. Represent unknown, missing, conflicting, and unavailable states explicitly; do not collapse them into `false`.
++4. Keep global scope as the default read scope. Require an explicit project ID for project-scoped reads and writes.
++5. Return an auditable operation report for mutations, including skipped and failed bindings and shared-root impacts.
++6. Add a focused fixture/test for every new state transition and verify both interfaces.
++
++## Review checklist
++
++- Does the change duplicate an artifact because a shared path is visible through multiple providers?
++- Can a disabled direct skill still be listed and toggled?
++- Does the selected provider and scope appear in every activation operation?
++- Does a provider capability prevent unsupported mutation before filesystem changes occur?
++- Does a refresh reconcile the on-disk state instead of trusting cached enabled maps?
+diff --git a/skills/skills-manager-architecture/agents/openai.yaml b/skills/skills-manager-architecture/agents/openai.yaml
+new file mode 100644
+index 0000000..bd1bb10
+--- /dev/null
++++ b/skills/skills-manager-architecture/agents/openai.yaml
+@@ -0,0 +1,4 @@
++interface:
++  display_name: "Skills Manager Architecture"
++  short_description: "Provider-aware architecture guidance"
++  default_prompt: "Use $skills-manager-architecture to reason about provider inventory, binding state, scopes, and shared-root safety."
+diff --git a/skills/skills-manager-orca/SKILL.md b/skills/skills-manager-orca/SKILL.md
+new file mode 100644
+index 0000000..057fbf1
+--- /dev/null
++++ b/skills/skills-manager-orca/SKILL.md
+@@ -0,0 +1,25 @@
++---
++name: skills-manager-orca
++description: Integrate Orca runtime health, topic discovery, shared agent skills, and workspace context into Skills Manager. Use when inspecting Orca, adding Orca provider behavior, or deciding whether a capability is read-only versus a local skill binding.
++---
++
++# Skills Manager Orca
++
++Keep Orca runtime capabilities separate from local filesystem skill bindings.
++
++## Read-only inspection
++
++- Run `orca status --json` for app and runtime health.
++- Run `orca skills list --json` for bundled topic metadata.
++- Apply a short timeout and terminate a hung child process.
++- Represent missing CLI, failed commands, malformed JSON, offline runtime, and empty topics as explicit unavailable/empty states.
++- Sanitize command errors before returning them to the UI or CLI.
++
++## Binding rules
++
++- Do not invent an `.orca/skills` directory or mutate undocumented Orca files.
++- A local skill enabled for a consuming tool is not automatically an Orca-native topic.
++- Treat `~/.agents/skills` as a shared root and report all configured consumers before changing it.
++- Keep Orca topic rows read-only until Orca exposes a stable activation contract.
++
++Verify both running and unavailable Orca states and confirm the provider inventory still lists local direct skills when Orca is offline.
+diff --git a/skills/skills-manager-orca/agents/openai.yaml b/skills/skills-manager-orca/agents/openai.yaml
+new file mode 100644
+index 0000000..b9cb722
+--- /dev/null
++++ b/skills/skills-manager-orca/agents/openai.yaml
+@@ -0,0 +1,4 @@
++interface:
++  display_name: "Skills Manager Orca"
++  short_description: "Safe Orca runtime integration"
++  default_prompt: "Use $skills-manager-orca to inspect or extend Orca integration, shared agents directories, and read-only runtime capabilities."
+diff --git a/skills/skills-manager-tauri/SKILL.md b/skills/skills-manager-tauri/SKILL.md
+new file mode 100644
+index 0000000..6d0d7a3
+--- /dev/null
++++ b/skills/skills-manager-tauri/SKILL.md
+@@ -0,0 +1,28 @@
++---
++name: skills-manager-tauri
++description: Implement and verify Skills Manager Rust/Tauri services, commands, scanners, linkers, Codex adapters, and provider operations. Use when changing backend skill activation, project scope, provider discovery, operation reports, or the inspect CLI.
++---
++
++# Skills Manager Tauri
++
++Implement backend behavior in the shared Rust services before editing interface adapters.
++
++## Workflow
++
++1. Read `IMPLEMENTATION_PLAN.md` and inspect the existing service, command, model, and test paths.
++2. Put reusable behavior in `src-tauri/src/services/skill_control.rs`, `tool_control.rs`, or the provider-specific service; keep Tauri commands thin.
++3. Reuse `ScannerService` for global/project/direct skill discovery and `LinkerService` for link, junction, and copy-mode state.
++4. Route Codex plugin state through `codex_config.rs`; preserve unrelated TOML sections and line endings.
++5. Gate activation through provider capabilities. Disabled or undetected providers may still expose direct skills, but read-only providers must reject mutation.
++6. Return operation reports with applied, skipped, failed, and impacted-provider details. Do not fail fast before recording partial results for batch or preset operations.
++
++## Safety rules
++
++- Never remove a canonical skill from the manager directory during a provider toggle.
++- Use `symlink_metadata` when a disabled suffix or broken link must remain observable.
++- Keep inspect/preview commands read-only and make them safe for a missing CLI or malformed JSON.
++- Preserve existing command payload compatibility unless a new response field is additive.
++
++## Verification
++
++Run `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`, `cargo check --manifest-path src-tauri/Cargo.toml --bins`, and `cargo test --manifest-path src-tauri/Cargo.toml`. Exercise `skills-manager-inspect providers`, `bindings`, and `skill preview` against a read-only configuration.
+diff --git a/skills/skills-manager-tauri/agents/openai.yaml b/skills/skills-manager-tauri/agents/openai.yaml
+new file mode 100644
+index 0000000..20e5953
+--- /dev/null
++++ b/skills/skills-manager-tauri/agents/openai.yaml
+@@ -0,0 +1,4 @@
++interface:
++  display_name: "Skills Manager Tauri"
++  short_description: "Rust and Tauri backend implementation"
++  default_prompt: "Use $skills-manager-tauri to implement backend changes with shared services, safe filesystem behavior, and Rust tests."
+diff --git a/skills/skills-manager-testing/SKILL.md b/skills/skills-manager-testing/SKILL.md
+new file mode 100644
+index 0000000..a4d17ac
+--- /dev/null
++++ b/skills/skills-manager-testing/SKILL.md
+@@ -0,0 +1,29 @@
++---
++name: skills-manager-testing
++description: Verify Skills Manager provider bindings, activation reports, project scopes, shared roots, Codex plugin state, and CLI/UI parity. Use when adding or reviewing behavior that can change skill visibility or activation.
++---
++
++# Skills Manager Testing
++
++Test the shared service and both interfaces against the same observable state.
++
++## Required matrix
++
++- Managed global skill: enabled, disabled, missing target, wrong target, and broken target.
++- Project-scoped skill: default global read versus explicit project read.
++- Direct tool skill: enabled, `.disabled-by-sm`, disabled tool, and Codex plugin state.
++- Shared `~/.agents/skills`: one consumer, multiple consumers, conflicting consumer states, and read-only inventory.
++- Orca: healthy, offline, missing CLI, malformed response, and empty topic list.
++- Operations: single toggle, batch, preset target, preset scope, skipped no-op, partial failure, and operation report.
++
++## Commands
++
++Run Rust unit tests, frontend tests/build, then read-only checks such as:
++
++```text
++skills-manager-inspect providers --json
++skills-manager-inspect bindings --json
++skills-manager-inspect skill preview --id <instance-id> --tool <provider-id> --enable --json
++```
++
++Assert JSON fields and actual filesystem/config state; a green build alone is not evidence that provider discovery or scope behavior is correct.
+diff --git a/skills/skills-manager-testing/agents/openai.yaml b/skills/skills-manager-testing/agents/openai.yaml
+new file mode 100644
+index 0000000..67d8ebc
+--- /dev/null
++++ b/skills/skills-manager-testing/agents/openai.yaml
+@@ -0,0 +1,4 @@
++interface:
++  display_name: "Skills Manager Testing"
++  short_description: "Provider binding and parity verification"
++  default_prompt: "Use $skills-manager-testing to design and run focused backend, frontend, fixture, and manual verification for Skills Manager."
+diff --git a/skills/skills-manager-ui/SKILL.md b/skills/skills-manager-ui/SKILL.md
+new file mode 100644
+index 0000000..8bdca48
+--- /dev/null
++++ b/skills/skills-manager-ui/SKILL.md
+@@ -0,0 +1,27 @@
++---
++name: skills-manager-ui
++description: Build and review the Skills Manager React UI for provider-aware skill inventory, binding states, presets, filters, scope selection, and operation feedback. Use when changing Skills or Presets while preserving CLI parity.
++---
++
++# Skills Manager UI
++
++Keep the UI a presentation and interaction layer over the shared Tauri services.
++
++## Workflow
++
++1. Read the relevant Rust command signature and `src/types/index.ts` before adding an invoke call.
++2. Keep provider identity, scope, and binding state visible near every activation control.
++3. Load global state by default; pass an explicit `projectId` when the user selected a project. Refresh skills, bindings, and provider inventory together after mutations.
++4. Keep direct skills from disabled tools visible and actionable. Do not hide a row because `enabled[provider]` is false.
++5. Show `enabled`, `disabled`, `missing`, `conflict`, and `unavailable` distinctly. Explain read-only or shared-root restrictions instead of silently disabling controls.
++6. Use the operation preview before a shared-root toggle and show operation-report failures after batch or preset actions.
++
++## Parity checklist
++
++- Provider filters use the same provider IDs as the CLI.
++- Project/global selectors map to the same scanner scope as `skills-manager-inspect`.
++- Presets target one selected agent and include manager-owned plus direct skills for that agent.
++- UI refreshes from disk after every activation, import, delete, or preset application.
++- Add focused pure-function tests for grouping, filtering, state labels, and selection behavior.
++
++Run `npm run build`, `npm test -- --run`, and the focused skill-list tests before handoff.
+diff --git a/skills/skills-manager-ui/agents/openai.yaml b/skills/skills-manager-ui/agents/openai.yaml
+new file mode 100644
+index 0000000..f475095
+--- /dev/null
++++ b/skills/skills-manager-ui/agents/openai.yaml
+@@ -0,0 +1,4 @@
++interface:
++  display_name: "Skills Manager UI"
++  short_description: "Provider-aware Skills Manager frontend"
++  default_prompt: "Use $skills-manager-ui to change the Skills Manager frontend while preserving UI and CLI parity."

@@ -1,6 +1,9 @@
 {
   "name": "Skills Manager",
   "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
   "version": "2.1.7",
   "type": "module",
   "scripts": {

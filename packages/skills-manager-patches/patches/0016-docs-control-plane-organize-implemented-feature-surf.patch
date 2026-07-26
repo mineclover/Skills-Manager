@@ -1,0 +1,143 @@
+From f0269660025da06ee6554e2c77374b855c5754b7 Mon Sep 17 00:00:00 2001
+From: mineclover <mineclover@naver.com>
+Date: Sun, 19 Jul 2026 17:34:59 +0900
+Subject: docs(control-plane): organize implemented feature surfaces
+
+---
+ IMPLEMENTATION_PLAN.md | 68 +++++++++++++++++++++++++++++++++++-------
+ 1 file changed, 57 insertions(+), 11 deletions(-)
+
+diff --git a/IMPLEMENTATION_PLAN.md b/IMPLEMENTATION_PLAN.md
+index e8dbb82..8ef351d 100644
+--- a/IMPLEMENTATION_PLAN.md
++++ b/IMPLEMENTATION_PLAN.md
+@@ -1,7 +1,7 @@
+ # Skills Manager — Skill Control Plane Implementation Plan
+ 
+ > Status: provider inventory, capability-gated activation, operation reporting, local skill packages, and Vercel Skills workspace/repository registration complete
+-> Last audited: 2026-07-18 (Asia/Seoul)
++> Last audited: 2026-07-19 (Asia/Seoul)
+ > Scope: unified skill inventory, provider-aware activation/deactivation, and Orca integration
+ 
+ ## Current implementation slice
+@@ -27,22 +27,67 @@
+ - Final audit completed against the provider matrix: Orca reachable/unavailable handling, shared-root impact/guard behavior, Codex plugin state, duplicate IDs, project scope, and read-only providers are covered by runtime checks and tests.
+ - Vercel Skills compatibility audit completed with repository preview, project registration, active-project switching, removal, Windows path normalization, empty Git repository registration, project-local activation, and multi-root scanner fixtures.
+ 
++## Interface and scope map
++
++The UI and `skills-manager-inspect` use the same Rust service boundary. The interface is split by the user's intent rather than by duplicating provider logic:
++
++| Surface | Primary responsibility | Default read scope | Mutation target |
++|---|---|---|---|
++| Skills | Unified skill artifacts, provider bindings, state/source filters, direct installed skills, and per-binding toggles | Global plus direct tool skills | Selected skill instance + selected provider |
++| Tools | Detected providers and skills installed directly in an agent directory; tool-wide bulk toggles | Global plus direct tool skills | Selected provider's skill bindings |
++| Presets | Reusable skill sets assigned to one agent/provider and one global or project scope | Selected scope | Managed skills and direct skills for the selected target |
++| Inspector CLI | Read-only inventory plus parity commands for skill, tool, batch, preset, and project operations | Global when omitted | Explicit command arguments; shared mutations require confirmation |
++
++### Scope rules
++
++- Global is the default. Omitted project arguments never silently follow the active project.
++- A project read or mutation requires an explicit project ID. The UI's project selector supplies that ID to scanner, provider inventory, bindings, previews, and preset operations.
++- Tools intentionally stays global/direct because it represents agent directories rather than a repository workspace. Project-local activation belongs in Skills and Presets.
++- Tool-scoped skills are retained in every scope view when they are installed in the owning agent directory, including when the manager-level tool is disabled.
++- A skill instance is identified by its scope-aware `instance_id`; the legacy artifact ID is not sufficient for project/tool operations.
++
++### State and safety rules
++
++- `Skill` is the canonical artifact; `SkillBinding` is the provider-specific state. Enable/disable never mutates or deletes the canonical source.
++- `enabled`, `disabled`, `missing`, `conflict`, and `unavailable` are distinct states. A conflict is surfaced for review rather than silently adopted or overwritten.
++- `~/.agents/skills` is a shared provider. The UI previews all configured consumers before a change, and CLI mutations require `--confirm-shared`.
++- Orca-native topics are inventory-only and read-only. They are not treated as local installed skills and cannot be toggled through the filesystem activation path.
++
++### CLI quick reference
++
++```bash
++# Global inspection (default)
++npm run inspect -- inspect --json
++npm run inspect -- providers --json
++npm run inspect -- bindings --json
++
++# Project inspection
++npm run inspect -- inspect --project <project-id> --json
++npm run inspect -- providers --project <project-id> --json
++npm run inspect -- bindings --project <project-id> --json
++```
++
++Use `npm run inspect -- --help` for mutation commands. The CLI and Tauri commands call the same `SkillControlService`, `ProviderInventoryService`, and workspace services; the CLI is not a second implementation of activation behavior.
++
+ ## 1. Current baseline
+ 
+ ### Repository
+ 
+ - Repository: `C:\Users\minec\Skills-Manager`
+ - Branch: `main`
+-- HEAD at audit: `acdaeca` (`fix: prevent presets page container overflow and card layout collapse`)
+-- The working tree contains an existing, uncommitted WIP change set. It includes Codex plugin-state handling, scoped/tool skill scanning, package/group handling, preset work, and related UI changes. Do not reset or overwrite these changes while implementing this plan.
++- The implementation slice is committed on `main`; documentation updates are committed separately from feature changes.
+ - `DESIGN.md` is a visual/style reference, not an implementation plan. This document is the implementation source of truth for the skill control-plane work.
+ 
+ ### Verified build baseline
+ 
+-- `npm run build`: passed.
+-- `cargo test --manifest-path src-tauri\\Cargo.toml`: passed, 189 tests.
++- `npx tsc --noEmit --pretty false --incremental false`: passed.
++- `npx vite build`: passed.
++- `cargo check --manifest-path src-tauri\\Cargo.toml --bins`: passed.
++- `cargo test --manifest-path src-tauri\\Cargo.toml`: passed, 201 tests.
+ - `cargo fmt --manifest-path src-tauri\\Cargo.toml -- --check`: passed.
+-- `npm test -- --run`: passed, 3 tests; focused unified-skill tests passed, 174 tests.
++- `npm test -- --run`: passed, 276 tests.
++- `npm run inspect -- providers --json`: passed for the global scope.
++- `npm run inspect -- providers --project <project-id> --json`: passed for an explicit project scope.
+ - Five repo-local skill packages passed `quick_validate.py` with generated `agents/openai.yaml` metadata.
+ - `orca status --json` returned a running, ready, reachable runtime; `orca skills list --json` returned the installed topic inventory.
+ - The previous Vite font-reference, large-chunk, stale Browserslist, and Rust `editor_detector` warnings were fixed. The final Vite build and `cargo check --bins` are warning-free.
+@@ -57,10 +102,10 @@ The current code already provides most of the first-generation control surface:
+ - Per-tool skill enable/disable through `scanner.rs`, `linker.rs`, and `commands/skills.rs`.
+ - Tool-level and skill-level bulk actions.
+ - Presets for capturing and applying activation states.
+-- Codex plugin `config.toml` enable/disable handling in the current WIP (`src-tauri/src/services/codex_config.rs`).
++- Codex plugin `config.toml` enable/disable handling through the provider adapter (`src-tauri/src/services/codex_config.rs`).
+ - React pages for unified skills and tool-oriented management: `src/pages/Skills.tsx` and `src/pages/Tools.tsx`.
+ 
+-The existing `Tool` model is currently both an agent/tool detector and an activation target. That is sufficient for filesystem-backed integrations, but it is too narrow for Orca and shared skill registries.
++The existing `Tool` model remains compatible as the agent detector and activation target, while `SkillProvider`/`SkillBinding` provide the richer control-plane model required for shared roots, config-file state, and read-only Orca inventory.
+ 
+ ## 2. Audited local runtime configuration
+ 
+@@ -201,7 +246,7 @@ The UI should not represent “installed” as “enabled”.
+ 
+ ### Phase 0 — Baseline protection
+ 
+-- Preserve the current uncommitted WIP changes.
++- Preserve the existing global/project/tool behavior while extending it through the provider boundary.
+ - Add this plan and a provider/Orca integration design note.
+ - Capture fixture snapshots for `.agents/skills`, `.codex/skills`, `.orca/agent-hooks`, and a Codex `config.toml` (see `src-tauri/tests/fixtures/provider-inventory`).
+ - Keep build/test commands in the handoff checklist.
+@@ -273,7 +318,7 @@ The Orca documentation confirms that repositories with `skills/<name>/SKILL.md`
+ 
+ ### Phase 6 — Verification and release readiness
+ 
+-Current status: complete. Backend, frontend, CLI, local skill metadata, and the provider matrix are green. The working tree remains intentionally dirty because it contains the user's existing WIP plus this implementation slice.
++Current status: complete. Backend, frontend, CLI, local skill metadata, and the provider matrix are green. The implementation worktree is clean after topic-based commits; operational conflicts are reported as state and are not auto-overwritten.
+ 
+ - Rust unit tests for each provider adapter and state transition.
+ - TypeScript tests for grouping, filtering, status labels, batch operations, and optimistic rollback.
+@@ -285,7 +330,7 @@ Current status: complete. Backend, frontend, CLI, local skill metadata, and the
+   - duplicate skill IDs across provider/scope fixtures;
+   - project-scoped scanner and activation tests;
+   - a provider without enable/disable capability rejected at the shared mutation boundary.
+-- Final handoff commands passed: `npm run build`, `cargo fmt --manifest-path src-tauri\\Cargo.toml -- --check`, `cargo test --manifest-path src-tauri\\Cargo.toml`, `npm test -- --run`, focused unified-skill tests, and `git diff --check`.
++- Final handoff commands passed: `npx tsc --noEmit --pretty false --incremental false`, `npx vite build`, `cargo fmt --manifest-path src-tauri\\Cargo.toml -- --check`, `cargo check --manifest-path src-tauri\\Cargo.toml --bins`, `cargo test --manifest-path src-tauri\\Cargo.toml`, `npm test -- --run`, inspector global/project smoke tests, and `git diff --check`.
+ 
+ ## 7. Acceptance criteria
+ 
+@@ -298,6 +343,7 @@ Current status: complete. Backend, frontend, CLI, local skill metadata, and the
+ - Orca offline/missing CLI is represented as `unavailable`, not as an empty skill inventory.
+ - Batch operations and presets produce an auditable operation report.
+ - Existing global/project/tool behavior remains backward compatible.
++- UI and CLI expose the same provider inventory, scope rules, shared-root confirmation, and operation-report semantics.
+ 
+ ## 8. Out of scope for v1
+ 

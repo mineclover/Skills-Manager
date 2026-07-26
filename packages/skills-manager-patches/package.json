@@ -1,0 +1,7 @@
+{
+  "name": "@skills-manager/local-patches",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Patch manifest and review assets for the Skills Manager upstream integration.",
+  "type": "module"
+}

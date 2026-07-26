@@ -1,0 +1,60 @@
+From 975fa69c11a6de43cb0c880182a15e7f4093f795 Mon Sep 17 00:00:00 2001
+From: mineclover <mineclover@naver.com>
+Date: Fri, 26 Jun 2026 18:56:40 +0900
+Subject: fix: fix test compile and improve presets skill list grid layout
+
+---
+ src-tauri/src/models/config.rs |  1 +
+ src/pages/Presets.tsx          | 11 ++++++-----
+ 2 files changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/src-tauri/src/models/config.rs b/src-tauri/src/models/config.rs
+index 778067a..a07f322 100644
+--- a/src-tauri/src/models/config.rs
++++ b/src-tauri/src/models/config.rs
+@@ -399,6 +399,7 @@ mod tests {
+             restored.skill_metadata.get("react-playground"),
+             Some(&SkillMetadata {
+                 tags: vec!["react".to_string(), "frontend".to_string()],
++                comment: None,
+             })
+         );
+     }
+diff --git a/src/pages/Presets.tsx b/src/pages/Presets.tsx
+index b113d77..79f6e00 100644
+--- a/src/pages/Presets.tsx
++++ b/src/pages/Presets.tsx
+@@ -562,20 +562,20 @@ export function Presets() {
+                       </CardHeader>
+                       <CardContent className="p-4 pt-0">
+                         {skills.length > 0 ? (
+-                          <div className="mt-3 divide-y divide-border border border-border rounded-md bg-background/30 overflow-hidden">
++                          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                             {skills.map((skill) => {
+                               const isActive = isSkillActiveInPreset(tool.id, skill.instance_id);
+                               return (
+                                 <div
+                                   key={skill.instance_id}
+-                                  className="flex items-center justify-between p-3 hover:bg-secondary/20 transition-colors"
++                                  className="flex items-center justify-between p-3 border border-border rounded-md bg-background/30 hover:bg-secondary/20 transition-colors"
+                                 >
+-                                  <div className="flex flex-col min-w-0 pr-4">
+-                                    <span className="text-xs font-medium text-foreground truncate">
++                                  <div className="flex flex-col min-w-0 pr-3">
++                                    <span className="text-xs font-medium text-foreground truncate" title={skill.name}>
+                                       {skill.name}
+                                     </span>
+                                     {skill.description && (
+-                                      <span className="text-[10px] text-muted-foreground truncate">
++                                      <span className="text-[10px] text-muted-foreground truncate" title={skill.description}>
+                                         {skill.description}
+                                       </span>
+                                     )}
+@@ -585,6 +585,7 @@ export function Presets() {
+                                     onCheckedChange={(checked) =>
+                                       handleToggleSkill(tool.id, skill.instance_id, checked)
+                                     }
++                                    className="flex-shrink-0"
+                                   />
+                                 </div>
+                               );
