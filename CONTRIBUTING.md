@@ -1,131 +1,87 @@
-# 贡献指南
+# 기여 가이드
 
-感谢你对 Skills Manager 的关注！
+Skills Manager는 upstream 원본과 로컬 patch를 분리해 관리합니다. 일반적인 개발
+규칙은 [`DEVELOPMENT.md`](./DEVELOPMENT.md), upstream 동기화는
+[`PATCH_GUIDE.md`](./PATCH_GUIDE.md)를 먼저 읽어주세요.
 
-## 开发流程
+## 시작하기
 
-### 1. Fork 仓库
-
-点击右上角的 Fork 按钮。
-
-### 2. 克隆到本地
-
-```bash
-git clone https://github.com/YOUR_USERNAME/Skills-Manager.git
+```powershell
+git clone https://github.com/mineclover/Skills-Manager.git
 cd Skills-Manager
-```
-
-### 3. 创建分支
-
-```bash
-git checkout -b feat/your-feature-name
-```
-
-分支命名规范：
-- `feat/` - 新功能
-- `fix/` - Bug 修复
-- `docs/` - 文档更新
-- `refactor/` - 代码重构
-- `test/` - 测试相关
-
-### 4. 安装依赖
-
-```bash
+git remote add upstream https://github.com/jiweiyeah/skills-manager.git
 npm install
-cd src-tauri
-cargo build
+cargo check --manifest-path src-tauri/Cargo.toml --bins
 ```
 
-### 5. 开发
+`upstream` remote가 이미 있으면 다시 추가하지 않습니다.
 
-```bash
+## 작업 유형 선택
+
+- upstream 기능을 통합하는 작업: `integrate/upstream-YYYYMMDD`
+- 이 저장소에만 필요한 기능: `patches/skills-manager-control-plane`에서 작업
+- 일반 수정: `feat/*`, `fix/*`, `test/*`, `docs/*`, `refactor/*`, `chore/*`
+
+로컬 patch 기능은 patch 레인에서 feature branch를 만든 후 완료된 커밋을 patch
+레인에 fast-forward로 반영합니다.
+
+```powershell
+git switch patches/skills-manager-control-plane
+git switch -c feat/my-local-change
+# 구현 및 검증
+git commit -m "feat: describe the local change"
+git switch patches/skills-manager-control-plane
+git merge --ff-only feat/my-local-change
+```
+
+통합 결과만 `main`에 반영하고, force push는 사용하지 않습니다.
+
+## 개발과 검증
+
+```powershell
 npm run tauri dev
-```
-
-### 6. 测试
-
-```bash
-# 前端测试
 npm test
-
-# Rust 测试
-cd src-tauri
-cargo test
+npm run build
+cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
 ```
 
-### 7. 提交代码
+provider/scope를 변경했다면 다음도 확인합니다.
 
-遵循 Conventional Commits 规范：
-
-```bash
-git commit -m "feat: add skill export feature"
-git commit -m "fix: resolve symlink creation on Windows"
+```powershell
+npm run inspect -- providers --json
+npm run inspect -- bindings --json
+npm run inspect -- inspect --project <project-id> --json
 ```
 
-提交类型：
-- `feat` - 新功能
-- `fix` - Bug 修复
-- `docs` - 文档
-- `style` - 格式（不影响代码逻辑）
-- `refactor` - 重构
-- `test` - 测试
-- `chore` - 构建/工具链
+테스트는 임시 HOME/project fixture를 사용합니다. 실제 사용자 skill root나 설정을
+자동으로 enable/disable하지 않습니다.
 
-### 8. 推送并创建 PR
+## 커밋과 PR
 
-```bash
-git push origin feat/your-feature-name
+커밋은 Conventional Commits 형식을 사용합니다.
+
+```text
+feat(control-plane): add project binding preview
+fix(scanner): preserve disabled direct skills
+test(scanner): cover skill discovery after add
+docs(repo): update development conventions
 ```
 
-然后在 GitHub 上创建 Pull Request。
+PR에는 다음 내용을 포함합니다.
 
-## PR 规范
+- 변경 목적과 upstream/local patch 분류
+- provider와 scope 영향
+- canonical skill과 shared root에 대한 영향
+- 실행한 테스트 명령과 결과
+- UI 변경 시 화면 캡처 또는 동작 설명
 
-**标题格式：**
-```
-feat: add AI translation caching
-fix: resolve skill sync race condition
-```
+## 변경 시 지켜야 할 기준
 
-**描述模板：**
-```markdown
-## 变更说明
-简要描述这个 PR 做了什么。
-
-## 测试
-- [ ] 本地测试通过
-- [ ] 添加了单元测试
-- [ ] 在 macOS 测试通过
-- [ ] 在 Windows 测试通过（如适用）
-
-## Screenshots（如果是 UI 变更）
-![before](...)
-![after](...)
-
-## Checklist
-- [ ] 遵循代码风格
-- [ ] 更新了文档
-- [ ] 通过了所有测试
-- [ ] 没有引入新的警告
-```
-
-## 代码风格
-
-### TypeScript/React
-- 使用 2 空格缩进
-- 使用函数组件和 Hooks
-- 遵循 ESLint 规则
-
-### Rust
-- 遵循 `rustfmt` 格式
-- 运行 `cargo clippy` 检查
-- 添加必要的注释
-
-## 提问与讨论
-
-- 💬 [Discussions](https://github.com/jiweiyeah/Skills-Manager/discussions)
-- 🐛 [Issues](https://github.com/jiweiyeah/Skills-Manager/issues)
-
-## 行为准则
-
-请尊重所有贡献者，保持友善和专业。
+- `Skill` canonical artifact와 `SkillBinding` provider 상태를 분리합니다.
+- `global`, `project`, `tool` instance ID를 유지하고 legacy skill ID로 project/tool 대상을
+  추론하지 않습니다.
+- 직접 설치된 CLI skill, `.disabled-by-sm`, manager 비활성 provider의 skill도 숨기지 않습니다.
+- Orca topic은 read-only inventory이며 filesystem skill처럼 토글하지 않습니다.
+- 모든 mutation은 shared Rust service와 auditable operation report를 거칩니다.
+- 문서 변경 시 관련된 README, 개발 규칙, patch guide, implementation plan을 함께 검토합니다.

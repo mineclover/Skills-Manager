@@ -1,7 +1,7 @@
 # Skills Manager — Skill Control Plane Implementation Plan
 
 > Status: provider inventory, capability-gated activation, operation reporting, local skill packages, and Vercel Skills workspace/repository registration complete
-> Last audited: 2026-07-19 (Asia/Seoul)
+> Last audited: 2026-07-26 (Asia/Seoul)
 > Scope: unified skill inventory, provider-aware activation/deactivation, and Orca integration
 
 ## Current implementation slice
@@ -26,6 +26,8 @@
 - Orca-native topics remain read-only inventory entries; local skill bindings are reported separately and never inferred from an Orca topic name.
 - Final audit completed against the provider matrix: Orca reachable/unavailable handling, shared-root impact/guard behavior, Codex plugin state, duplicate IDs, project scope, and read-only providers are covered by runtime checks and tests.
 - Vercel Skills compatibility audit completed with repository preview, project registration, active-project switching, removal, Windows path normalization, empty Git repository registration, project-local activation, and multi-root scanner fixtures.
+- Repository ownership is separated through `upstream/main`, `patches/skills-manager-control-plane`, and the integrated `main` branch; see `PATCH_GUIDE.md` and `DEVELOPMENT.md`.
+- A regression fixture verifies that a skill added after the initial project scan is discovered on the next explicit project-scope scan.
 
 ## Interface and scope map
 
@@ -83,14 +85,14 @@ Use `npm run inspect -- --help` for mutation commands. The CLI and Tauri command
 - `npx tsc --noEmit --pretty false --incremental false`: passed.
 - `npx vite build`: passed.
 - `cargo check --manifest-path src-tauri\\Cargo.toml --bins`: passed.
-- `cargo test --manifest-path src-tauri\\Cargo.toml`: passed, 201 tests.
+- `cargo test --manifest-path src-tauri\\Cargo.toml -- --test-threads=1`: passed, 316 tests.
 - `cargo fmt --manifest-path src-tauri\\Cargo.toml -- --check`: passed.
-- `npm test -- --run`: passed, 276 tests.
+- `npm test`: passed, 281 tests.
 - `npm run inspect -- providers --json`: passed for the global scope.
 - `npm run inspect -- providers --project <project-id> --json`: passed for an explicit project scope.
 - Five repo-local skill packages passed `quick_validate.py` with generated `agents/openai.yaml` metadata.
-- `orca status --json` returned a running, ready, reachable runtime; `orca skills list --json` returned the installed topic inventory.
-- The previous Vite font-reference, large-chunk, stale Browserslist, and Rust `editor_detector` warnings were fixed. The final Vite build and `cargo check --bins` are warning-free.
+- The latest inspector observed the Orca CLI but received a status timeout; the provider reports this as unavailable rather than as an empty local skill inventory.
+- The previous Vite font-reference, large-chunk, stale Browserslist, and Rust `editor_detector` warnings were fixed. A small set of non-blocking Rust visibility/dead-code warnings remains in the upstream-integrated code.
 - `caniuse-lite` and `baseline-browser-mapping` were refreshed in `package-lock.json`; the generated route chunks stay below the Vite 500 kB warning threshold.
 
 ### Existing application capabilities
@@ -209,7 +211,7 @@ Codex needs two state channels:
 1. Skill files under its configured skill directory.
 2. Plugin state in `config.toml`.
 
-The current WIP `codex_config.rs` should become the Codex provider adapter rather than remain embedded as a special case in the generic scanner. Preserve its section matching, line endings, comments, and unrelated TOML sections.
+The Codex provider adapter in `codex_config.rs` owns plugin state rather than leaving it embedded as a special case in the generic scanner. Preserve its section matching, line endings, comments, and unrelated TOML sections.
 
 ### 5.3 Shared `agents-directory` provider
 
@@ -324,13 +326,13 @@ Current status: complete. Backend, frontend, CLI, local skill metadata, and the 
 - TypeScript tests for grouping, filtering, status labels, batch operations, and optimistic rollback.
 - Integration fixtures for Windows path normalization and symlink/copy behavior.
 - Provider matrix verification completed with:
-  - Orca running/reachable via the live CLI and missing/offline/malformed response tests;
+  - Orca CLI detection plus timeout, missing/offline/malformed response tests;
   - shared `~/.agents/skills` installed, including read-only preview and confirmation guard;
   - Codex plugin enabled/disabled state tests;
   - duplicate skill IDs across provider/scope fixtures;
-  - project-scoped scanner and activation tests;
+  - project-scoped scanner and activation tests, including discovery after a skill is added;
   - a provider without enable/disable capability rejected at the shared mutation boundary.
-- Final handoff commands passed: `npx tsc --noEmit --pretty false --incremental false`, `npx vite build`, `cargo fmt --manifest-path src-tauri\\Cargo.toml -- --check`, `cargo check --manifest-path src-tauri\\Cargo.toml --bins`, `cargo test --manifest-path src-tauri\\Cargo.toml`, `npm test -- --run`, inspector global/project smoke tests, and `git diff --check`.
+- Final handoff commands passed: `npm test`, `npm run build`, `cargo fmt --manifest-path src-tauri\\Cargo.toml -- --check`, `cargo check --manifest-path src-tauri\\Cargo.toml --bins`, `cargo test --manifest-path src-tauri\\Cargo.toml -- --test-threads=1`, inspector global/project smoke tests, and `git diff --check` for source/document changes.
 
 ## 7. Acceptance criteria
 

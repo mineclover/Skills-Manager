@@ -18,10 +18,12 @@ It uses a powerful **symlink synchronization mechanism**, allowing you to write 
 - **🎯 Unified Management**: Centralize all your AI skills in one secure location.
 - **🔄 Smart Synchronization**: Automatic symlink management ensures your tools always have the latest version of your skills without file duplication.
 - **🎛️ Granular Control**: Enable or disable specific skills for individual tools without deleting the original files.
+- **🧭 Provider-aware Scopes**: Manage global, project, and individual CLI skill bindings with explicit targets.
+- **🔎 Control-plane Inspector**: Inspect providers, bindings, projects, and operation previews from the CLI.
 - **🛒 Marketplace**: Browse, install, and share community-contributed skills directly within the app.
 - **🌐 AI Translation**: Translate skill names, descriptions, and content into your preferred language using LLM.
 - **⌨️ Command Palette**: Quick navigation and actions via `⌘K` / `Ctrl+K`.
-- **🌍 Bilingual UI**: Full English and Chinese interface support.
+- **🌍 Multilingual UI**: English, Korean, and Chinese interface support.
 - **⚡ High Performance**: Built with **Rust** and **Tauri 2.0** for a lightweight, blazing-fast experience.
 - **🛡️ Cross-Platform**: Native support for macOS, Windows, and Linux.
 - **🔌 Multi-Tool Support**: Out-of-the-box support for 30+ AI tools (Claude Code, Codex, Cursor, Gemini CLI, Windsurf, Trae, Cline, Augment, Goose, and many more), extensible via custom tools.
@@ -73,6 +75,17 @@ npm run inspect -- bindings --project <project-id> --json
 ```
 
 Use `--help` for the complete read-only and mutation command list. Commands that can change skill state require the explicit `--confirm-shared` flag when a shared root would be affected.
+
+## 🧭 Repository & Development
+
+This repository tracks the upstream project separately from local patches. The integrated
+application remains at the repository root; `upstream/main`,
+`patches/skills-manager-control-plane`, and `main` are the source-control lanes.
+
+- [Development conventions](./DEVELOPMENT.md)
+- [Contributing guide](./CONTRIBUTING.md)
+- [Upstream and patch guide](./PATCH_GUIDE.md)
+- [Control-plane implementation plan](./IMPLEMENTATION_PLAN.md)
 
 ## ❗ Linux Troubleshooting
 

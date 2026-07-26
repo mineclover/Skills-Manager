@@ -18,10 +18,12 @@
 - **🎯 统一管理**：在一个安全的位置集中管理所有的 AI Skills。
 - **🔄 智能同步**：自动化的软链接管理，确保您的工具始终使用最新版本的技能，无需手动复制文件。
 - **🎛️ 灵活控制**：无需删除源文件，即可随时针对特定工具启用或禁用某个 Skill。
+- **🧭 Provider 作用域**：明确管理全局、项目和单个 CLI 的 Skill 绑定。
+- **🔎 控制面检查器**：通过 CLI 检查 Provider、绑定、项目和操作预览。
 - **🛒 技能市场**：应用内浏览、安装和分享社区贡献的 Skills。
 - **🌐 AI 翻译**：使用 LLM 将技能名称、描述和内容翻译为您偏好的语言。
 - **⌨️ 命令面板**：通过 `⌘K` / `Ctrl+K` 快速导航和执行操作。
-- **🌍 双语界面**：完整支持中英文界面。
+- **🌍 多语言界面**：支持英文、韩文和中文界面。
 - **⚡ 极致性能**：基于 **Rust** 和 **Tauri 2.0** 构建，带来轻量级、秒开的极致体验。
 - **🛡️ 跨平台支持**：完美支持 macOS、Windows 和 Linux 系统。
 - **🔌 多工具支持**：开箱即用支持 30+ 款 AI 工具（Claude Code、Codex、Cursor、Gemini CLI、Windsurf、Trae、Cline、Augment、Goose 等），并支持自定义扩展。
@@ -55,6 +57,17 @@
 1. **安装**：下载并运行对应平台的安装程序。
 2. **设置**：首次启动时，应用会引导您选择或创建技能存储目录。
 3. **同步**：应用会自动检测已安装的 AI 工具（如 Claude Code）并建立skills链接。
+
+## 🧭 仓库与开发文档
+
+本仓库将 upstream 原始项目与本地 patch 分开管理。应用源码仍保留在仓库根目录，
+`upstream/main`、`patches/skills-manager-control-plane` 和 `main` 分别承担原始、
+本地功能和集成发布职责。
+
+- [开发规范](./DEVELOPMENT.md)
+- [贡献指南](./CONTRIBUTING.md)
+- [upstream 与 patch 指南](./PATCH_GUIDE.md)
+- [控制面实现计划](./IMPLEMENTATION_PLAN.md)
 
 ## ❗ Linux 常见问题 (Troubleshooting)
 
