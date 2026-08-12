@@ -96,6 +96,27 @@ import {
   loadSkillsListFilterState,
   saveSkillsListFilterState,
 } from "./skills/skillsListFilterState";
+
+const DEFAULT_SKILL_CONTRACT = `schema_version: 1
+purpose:
+  summary: ""
+  use_when: []
+  avoid_when: []
+requirements:
+  runtimes: []
+  project_signals: []
+  verification: []
+success_contract:
+  expected_outcomes: []
+  non_goals: []
+  safety_rules: []
+feedback:
+  codes: [completed, partial, failed]
+  required_for_completed: [verification_evidence]
+evaluation:
+  cases: []
+  review_cycle_days: 90
+`;
 import {
   buildBatchTargets,
   getSelectedBatchItems,
@@ -3325,6 +3346,24 @@ export function Skills() {
                 ) : (
                   <p>Add <code>skill-manager.yaml</code> to define the skill's purpose, feedback, and evaluation.</p>
                 )}
+                <button
+                  type="button"
+                  className="mt-2 rounded border border-border px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+                  onClick={() => void (async () => {
+                    const contractPath = `${skill.path}${skill.path.endsWith("\\") || skill.path.endsWith("/") ? "" : "/"}skill-manager.yaml`;
+                    try {
+                      if (!contract?.path) {
+                        await invoke("write_file", { path: contractPath, content: DEFAULT_SKILL_CONTRACT });
+                        await handleRefresh();
+                      }
+                      navigate(`/editor?root=${encodeURIComponent(skill.path)}&file=skill-manager.yaml`);
+                    } catch (contractError) {
+                      addToast(`Unable to create skill contract: ${String(contractError)}`);
+                    }
+                  })()}
+                >
+                  {contract?.path ? "Edit contract" : "Create contract"}
+                </button>
               </div>
               {item.openPath && (
                 <div>
