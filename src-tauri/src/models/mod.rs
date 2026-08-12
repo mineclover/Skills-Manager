@@ -3,6 +3,7 @@ pub mod config;
 pub mod editor;
 pub mod marketplace;
 pub mod provider;
+pub mod publish;
 pub mod risk;
 pub mod skill;
 pub mod skill_package;
@@ -12,7 +13,7 @@ pub mod update;
 pub use config::{
     builtin_skill_activation_presets, home_dir, is_builtin_skill_activation_preset_id, AppConfig,
     CustomToolConfig, LlmProvider, MarketplaceFavoriteMeta, PresetActivation, ProjectBinding,
-    SkillActivationPreset, SkillMetadata, ToolConfig,
+    SkillActivationPreset, SkillMetadata, SkillPublishRecord, ToolConfig,
 };
 pub use editor::{DetectedEditor, EDITOR_DEFINITIONS};
 pub use marketplace::{
@@ -24,6 +25,9 @@ pub use provider::{
     OrcaInventory, OrcaTopic, SkillBinding, SkillBindingImpact, SkillBindingState,
     SkillOperationAction, SkillOperationFailure, SkillOperationPreview, SkillOperationReport,
     SkillProvider, SkillProviderCapabilities, SkillProviderInventory, SkillProviderKind,
+};
+pub use publish::{
+    ClawhubIdentity, PublishFile, PublishFileEntry, PublishPreview, PublishRequest, PublishResult,
 };
 pub use risk::{
     RiskCacheKey, RiskCategory, RiskFinding, RiskLevel, RiskLocation, RiskScanMode, SkillRiskReport,

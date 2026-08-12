@@ -440,6 +440,7 @@ pub fn import_skills_from_zip(
             let instance_id = Skill::global_instance_id(&final_id);
             let entry = updated_metadata
                 .entry(instance_id)
+                // New imports must not inherit a publication record from a prior skill.
                 .or_insert_with(|| SkillMetadata {
                     tags: Vec::new(),
                     favorited_at: None,
@@ -497,7 +498,6 @@ fn chrono_now_secs() -> i64 {
 mod tests {
     use super::*;
     use crate::test_support::with_temp_home;
-    use std::collections::HashMap;
     use std::path::PathBuf;
 
     fn write_skill_md(dir: &Path, id: &str, body: &str) {

@@ -10,6 +10,7 @@ pub mod llm;
 pub mod marketplace;
 pub mod orca;
 pub mod provider_inventory;
+pub mod publish;
 pub mod risk;
 pub mod scanner;
 pub mod skill_control;

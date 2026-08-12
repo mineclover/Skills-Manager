@@ -3,9 +3,9 @@
 > **一款用于管理 AI 编程助手技能（Skills）的统一桌面应用。**
 > 无缝组织、同步和共享 **Claude Code、Codex、Opencode** 及其他 AI 工具的技能。
 
-![Version](https://img.shields.io/badge/version-2.1.7-blue) ![Downloads](https://img.shields.io/github/downloads/jiweiyeah/skills-manager/total?color=brightgreen&label=downloads) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey) ![Tech](https://img.shields.io/badge/built%20with-Tauri%202.0%20%2B%20React%2019-orange)
+![Version](https://img.shields.io/badge/version-2.1.8-blue) ![Downloads](https://img.shields.io/github/downloads/jiweiyeah/skills-manager/total?color=brightgreen&label=downloads) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey) ![Tech](https://img.shields.io/badge/built%20with-Tauri%202.0%20%2B%20React%2019-orange)
 
-[English README](./README.md)
+[**官网**](https://skillsmanager.freeourdays.com/zh/) · [English README](./README.md)
 
 ## 📖 简介
 
@@ -40,7 +40,7 @@
 
 ## 📥 下载安装
 
-请前往 **[Releases 页面](../../releases)** 下载适用于您系统的最新安装包。
+可前往 **[官网下载](https://skillsmanager.freeourdays.com/zh/#download)**（会自动识别您的系统与架构），或到 **[Releases 页面](../../releases)** 自行挑选安装包。
 
 | 操作系统 | 安装包类型 |
 |----|----------------|

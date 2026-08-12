@@ -30,6 +30,9 @@ pub struct UserPreferences {
     pub skill_usage_monitor: bool,
     #[serde(default)]
     pub github_token: Option<String>,
+    /// ClawHub API token，用于发布技能。用户在 clawhub.ai/settings/skills/tokens 生成。
+    #[serde(default)]
+    pub clawhub_token: Option<String>,
     #[serde(default)]
     pub risk_scan_mode: RiskScanMode,
 }
@@ -55,6 +58,27 @@ pub struct SkillMetadata {
     pub comment: Option<String>,
     #[serde(default)]
     pub favorited_at: Option<i64>,
+    /// 最近一次成功发布到 ClawHub 的记录。用于在列表上标识已发布状态，
+    /// 并让下次发布沿用同一个 slug/owner 而不是重新按目录名推导。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publish: Option<SkillPublishRecord>,
+}
+
+/// 一次成功发布留下的本地凭证。ClawHub 用 (owner, slug) 唯一定位一个技能，
+/// 所以这两项必须持久化，否则改过 slug 或发布到组织名下后就与远端脱钩了。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillPublishRecord {
+    pub slug: String,
+    /// 发布归属账号；None 表示发布在当前登录用户名下。
+    #[serde(default)]
+    pub owner_handle: Option<String>,
+    pub version: String,
+    pub published_at: i64,
+    /// ClawHub 返回的发布状态："published" | "pending"。
+    #[serde(default)]
+    pub publication_status: Option<String>,
+    #[serde(default)]
+    pub external_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -314,6 +338,7 @@ impl Default for UserPreferences {
             remove_links_when_disabling_tool: false,
             skill_usage_monitor: true,
             github_token: None,
+            clawhub_token: None,
             risk_scan_mode: RiskScanMode::Off,
         }
     }
@@ -491,7 +516,7 @@ pub struct ToolConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            version: "2.1.7".to_string(),
+            version: "2.1.8".to_string(),
             skills_dir: Self::default_skills_dir(),
             tools: HashMap::new(),
             custom_tools: HashMap::new(),

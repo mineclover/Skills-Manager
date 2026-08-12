@@ -8,6 +8,7 @@ pub mod llm;
 pub mod marketplace;
 pub mod projects;
 pub mod providers;
+pub mod publish;
 pub mod risk;
 pub mod skill_packages;
 pub mod skill_transfer;
@@ -50,6 +51,9 @@ pub use projects::{
     set_active_project_binding,
 };
 pub use providers::{list_skill_bindings, list_skill_providers, preview_skill_operation};
+pub use publish::{
+    get_clawhub_categories, preview_clawhub_publish, publish_skill_to_clawhub, verify_clawhub_token,
+};
 pub use risk::{
     clear_risk_cache_command, get_risk_report, get_risk_reports_batch, get_risk_scanner_version,
     rescan_skill, scan_all_risks, start_background_scan,

@@ -9,6 +9,7 @@ import {
   DetectedEditor,
   UpdateInfo,
   LlmProvider,
+  ClawhubIdentity,
 } from "@/types";
 import { defaultPreferences } from "@/constants/preferences";
 import { checkUpdate } from "@/services/updater";
@@ -38,6 +39,8 @@ export function Settings() {
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [editorDropdownOpen, setEditorDropdownOpen] = useState(false);
   const [showGithubToken, setShowGithubToken] = useState(false);
+  const [showClawhubToken, setShowClawhubToken] = useState(false);
+  const [clawhubTokenChecking, setClawhubTokenChecking] = useState(false);
   const [availableEditors, setAvailableEditors] = useState<DetectedEditor[]>([]);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
@@ -257,6 +260,25 @@ export function Settings() {
       addToast(t("settings.riskScanCacheCleared"), "success");
     } catch (err) {
       addToast(err instanceof Error ? err.message : String(err), "error");
+    }
+  };
+
+  const handleVerifyClawhubToken = async () => {
+    const token = (config?.preferences?.clawhub_token || "").trim();
+    if (!token) {
+      return;
+    }
+    setClawhubTokenChecking(true);
+    try {
+      // 传入当前输入框里的 token，这样还没保存也能测。
+      const identity = await invoke<ClawhubIdentity>("verify_clawhub_token", { token });
+      const handle = identity.handle || identity.display_name || "—";
+      addToast(t("settings.clawhubTokenValid").replace("{handle}", handle), "success");
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      addToast(`${t("settings.clawhubTokenInvalid")}: ${detail}`, "error");
+    } finally {
+      setClawhubTokenChecking(false);
     }
   };
 
@@ -608,7 +630,7 @@ export function Settings() {
             <SettingsRow
               label={t("settings.githubToken")}
               description={t("settings.githubTokenDesc")}
-              isLast={true}
+              isLast={false}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                 <PasswordInput
@@ -625,6 +647,54 @@ export function Settings() {
                   color: (prefs.github_token || "").trim() ? 'var(--color-success)' : 'var(--muted-foreground)',
                 }}>
                   {(prefs.github_token || "").trim()
+                    ? t("settings.marketplaceKeySaved")
+                    : t("settings.marketplaceKeyMissing")}
+                </span>
+              </div>
+            </SettingsRow>
+
+            <SettingsRow
+              label={t("settings.clawhubToken")}
+              description={t("settings.clawhubTokenDesc")}
+              isLast={true}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                <PasswordInput
+                  value={prefs.clawhub_token || ""}
+                  onChange={(value) => updatePreference("clawhub_token", value)}
+                  placeholder={t("settings.clawhubTokenPlaceholder")}
+                  visible={showClawhubToken}
+                  onToggleVisibility={() => setShowClawhubToken((v) => !v)}
+                  width={240}
+                />
+                <button
+                  type="button"
+                  disabled={clawhubTokenChecking || !(prefs.clawhub_token || "").trim()}
+                  onClick={handleVerifyClawhubToken}
+                  style={{
+                    padding: '6px 12px',
+                    fontSize: '12px',
+                    fontWeight: 500,
+                    color: 'var(--foreground)',
+                    backgroundColor: 'var(--background)',
+                    border: '1px solid var(--border)',
+                    borderRadius: '6px',
+                    cursor: clawhubTokenChecking || !(prefs.clawhub_token || "").trim()
+                      ? 'not-allowed'
+                      : 'pointer',
+                    opacity: clawhubTokenChecking || !(prefs.clawhub_token || "").trim() ? 0.6 : 1,
+                  }}
+                >
+                  {clawhubTokenChecking
+                    ? t("settings.clawhubTokenTesting")
+                    : t("settings.clawhubTokenTest")}
+                </button>
+                <span style={{
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  color: (prefs.clawhub_token || "").trim() ? 'var(--color-success)' : 'var(--muted-foreground)',
+                }}>
+                  {(prefs.clawhub_token || "").trim()
                     ? t("settings.marketplaceKeySaved")
                     : t("settings.marketplaceKeyMissing")}
                 </span>

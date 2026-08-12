@@ -66,9 +66,15 @@ export function ScopeSearchField({ onOpenPalette }: ScopeSearchFieldProps) {
     return () => document.removeEventListener("mousedown", handler);
   }, [switcherOpen]);
 
-  // Clear the shared page search query whenever the route changes so a stale
-  // filter from the previous page doesn't bleed into the next one.
+  // Clear the shared page search query whenever the route actually changes so a
+  // stale filter from the previous page doesn't bleed into the next one. The
+  // first run after mount is skipped on purpose: the editor route renders
+  // outside the Layout, so coming back from it remounts this field and would
+  // otherwise wipe the query the user left behind on the Skills page.
+  const lastPathnameRef = useRef(location.pathname);
   useEffect(() => {
+    if (lastPathnameRef.current === location.pathname) return;
+    lastPathnameRef.current = location.pathname;
     setPageSearchQuery("");
   }, [location.pathname, setPageSearchQuery]);
 

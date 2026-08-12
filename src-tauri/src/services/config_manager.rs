@@ -100,9 +100,12 @@ impl ConfigManager {
                 .as_ref()
                 .map(|c| !c.trim().is_empty())
                 .unwrap_or(false);
-            // 只有当 tags 为空且 favorited_at 也为 None 时才丢弃 entry，
-            // 避免丢失只有 favorited_at 没有 tags 的收藏状态
-            if tags.is_empty() && !has_comment && item.favorited_at.is_none() {
+            // Keep metadata that has a comment, favorite, or ClawHub publish record.
+            if tags.is_empty()
+                && !has_comment
+                && item.favorited_at.is_none()
+                && item.publish.is_none()
+            {
                 changed = true;
                 continue;
             }
@@ -129,6 +132,7 @@ impl ConfigManager {
                         tags,
                         comment,
                         favorited_at: item.favorited_at,
+                        publish: item.publish.clone(),
                     },
                 )
                 .is_some()
@@ -678,7 +682,7 @@ impl Default for ConfigManager {
 #[cfg(test)]
 mod tests {
     use super::ConfigManager;
-    use crate::models::{AppConfig, SkillMetadata};
+    use crate::models::{AppConfig, SkillMetadata, SkillPublishRecord};
     use crate::test_support::with_temp_home;
     use serde_json::json;
     use std::fs;
@@ -1282,6 +1286,40 @@ mod tests {
 
             let loaded = manager.load().expect("load config");
             assert_eq!(loaded.skill_metadata.get("global:skill-c"), None);
+        });
+    }
+
+    #[test]
+    fn save_and_load_preserves_publish_record_without_tags_or_favorite() {
+        with_temp_home(|_home_dir| {
+            let manager = ConfigManager::new();
+            let mut config = manager.init_default().expect("init default config");
+            let record = SkillPublishRecord {
+                slug: "my-skill".to_string(),
+                owner_handle: Some("my-org".to_string()),
+                version: "1.2.3".to_string(),
+                published_at: 1700000000,
+                publication_status: Some("published".to_string()),
+                external_url: Some("https://clawhub.ai/my-org/skills/my-skill".to_string()),
+            };
+            config.skill_metadata.insert(
+                "global:skill-d".to_string(),
+                SkillMetadata {
+                    publish: Some(record.clone()),
+                    ..Default::default()
+                },
+            );
+
+            manager.save(&config).expect("save config");
+
+            let loaded = manager.load().expect("load config");
+            assert_eq!(
+                loaded
+                    .skill_metadata
+                    .get("global:skill-d")
+                    .and_then(|meta| meta.publish.as_ref()),
+                Some(&record)
+            );
         });
     }
 }

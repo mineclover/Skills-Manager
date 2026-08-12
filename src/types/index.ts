@@ -59,6 +59,8 @@ export interface SkillMetadata {
   tags: string[];
   comment?: string | null;
   favorited_at?: number | null;
+  /** 最近一次成功发布到 ClawHub 的记录；未发布过时缺省。 */
+  publish?: SkillPublishRecord | null;
 }
 
 export type SkillMetadataMap = Record<string, SkillMetadata>;
@@ -265,6 +267,7 @@ export interface UserPreferences {
 
   // Marketplace auth
   github_token?: string | null;
+  clawhub_token?: string | null;
 }
 
 export interface SkillUsageStats {
@@ -701,4 +704,59 @@ export interface ImportResult {
   overwritten: string[];
   renamed: RenamedSkillRecord[];
   failed: ImportFailure[];
+}
+
+// ===== ClawHub 发布 =====
+
+export interface ClawhubIdentity {
+  handle: string | null;
+  display_name: string | null;
+  image: string | null;
+}
+
+export interface PublishFileEntry {
+  rel_path: string;
+  size: number;
+}
+
+export interface PublishPreview {
+  files: PublishFileEntry[];
+  total_bytes: number;
+  suggested_slug: string;
+  suggested_display_name: string;
+  suggested_owner_handle: string | null;
+  latest_version: string | null;
+  suggested_version: string;
+  existing_record: SkillPublishRecord | null;
+  version_lookup_failed: boolean;
+  warning: string | null;
+}
+
+export interface SkillPublishRecord {
+  slug: string;
+  owner_handle?: string | null;
+  version: string;
+  published_at: number;
+  publication_status?: string | null;
+  external_url?: string | null;
+}
+
+export interface PublishRequest {
+  instance_id: string;
+  slug: string;
+  display_name: string;
+  version: string;
+  changelog: string;
+  categories: string[];
+  topics: string[];
+  owner_handle?: string | null;
+  accept_license_terms: boolean;
+}
+
+export interface PublishResult {
+  ok: boolean;
+  version_id?: string | null;
+  publication_status?: string | null;
+  external_url?: string | null;
+  version: string;
 }

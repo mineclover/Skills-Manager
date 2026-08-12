@@ -34,3 +34,9 @@ design/
 
 # Local tool config
 config/
+
+# Landing page worktree (lives on the private-only `landing` orphan branch)
+landing/
+
+# SEO research docs (private, lives on landing branch)
+research/

@@ -17,4 +17,5 @@ export const defaultPreferences: UserPreferences = {
   skill_usage_monitor: true,
   risk_scan_mode: "off",
   github_token: "",
+  clawhub_token: "",
 };

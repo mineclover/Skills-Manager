@@ -5,6 +5,7 @@ import { Check, ChevronRight, ExternalLink, Layers3, List, Minus, Sparkles } fro
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { confirm, open, save } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { ToastContainer, useToast } from "@/components/ui/toast";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { PageHeader } from "@/components/ui/page-header";
@@ -26,7 +27,9 @@ import {
   ImportResult,
   InstalledSkillPackage,
   ProjectBinding,
+  PublishResult,
   Skill,
+  SkillPublishRecord,
   SkillBinding,
   SkillBindingState,
   SkillOperationPreview,
@@ -90,6 +93,10 @@ import {
   takeSkillsListScrollOffset,
 } from "./skills/skillsListScrollState";
 import {
+  loadSkillsListFilterState,
+  saveSkillsListFilterState,
+} from "./skills/skillsListFilterState";
+import {
   buildBatchTargets,
   getSelectedBatchItems,
   pruneBatchSelectionToAvailable,
@@ -100,6 +107,7 @@ import {
 import { getActionableToolIds } from "./skills/getActionableToolIds";
 import { BatchManageToolsDialog } from "./skills/BatchManageToolsDialog";
 import { ImportConflictDialog } from "./skills/ImportConflictDialog";
+import { PublishToClawhubDialog } from "./skills/PublishToClawhubDialog";
 import { buildBatchToolStateSummaries } from "./skills/buildBatchToolStates";
 import {
   buildGroupBulkToolActionPlan,
@@ -294,6 +302,8 @@ type SkillCardActionMenuProps = {
   moreActionsLabel: string;
   onEdit: () => void;
   onDelete: () => void;
+  publishLabel?: string;
+  onPublish?: () => void;
 };
 
 const menuItemBaseStyle: CSSProperties = {
@@ -428,6 +438,50 @@ function SkillsHeaderMoreMenu({
   );
 }
 
+function PublishedBadge({
+  record,
+  label,
+  title,
+}: {
+  record: SkillPublishRecord;
+  label: string;
+  title: string;
+}) {
+  const content = <><ExternalLink size={10} strokeWidth={2} />{label}</>;
+  const style: CSSProperties = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "3px",
+    height: "22px",
+    padding: "0 8px",
+    fontSize: "11px",
+    fontWeight: 600,
+    color: "var(--color-success)",
+    backgroundColor: "color-mix(in srgb, var(--color-success) 12%, transparent)",
+    border: "1px solid color-mix(in srgb, var(--color-success) 35%, transparent)",
+    borderRadius: "999px",
+    flexShrink: 0,
+  };
+
+  if (!record.external_url) {
+    return <span style={style} title={title}>{content}</span>;
+  }
+
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={(event) => {
+        event.stopPropagation();
+        void openUrl(record.external_url!).catch(() => {});
+      }}
+      style={{ ...style, cursor: "pointer" }}
+    >
+      {content}
+    </button>
+  );
+}
+
 function renderPreviewChips(chips: string[], overflowCount: number) {
   if (chips.length === 0 && overflowCount === 0) {
     return null;
@@ -523,6 +577,8 @@ function SkillCardActionMenu({
   moreActionsLabel,
   onEdit,
   onDelete,
+  publishLabel,
+  onPublish,
 }: SkillCardActionMenuProps) {
   const [open, setOpen] = useState(false);
   const [menuPosition, setMenuPosition] = useState<{
@@ -571,7 +627,7 @@ function SkillCardActionMenu({
 
           const triggerRect = e.currentTarget.getBoundingClientRect();
           const gap = 6;
-          const menuHeight = 96;
+          const menuHeight = onPublish ? 126 : 96;
           const right = Math.max(8, window.innerWidth - triggerRect.right);
           const hasRoomBelow = triggerRect.bottom + gap + menuHeight <= window.innerHeight - 8;
           setMenuPosition(hasRoomBelow
@@ -667,6 +723,25 @@ function SkillCardActionMenu({
             >
               {editLabel}
             </button>
+            {publishLabel && onPublish && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  closeMenu();
+                  onPublish();
+                }}
+                style={menuItemBaseStyle}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = "var(--surface-hover)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = "transparent";
+                }}
+              >
+                {publishLabel}
+              </button>
+            )}
             <button
               type="button"
               onClick={(e) => {
@@ -732,16 +807,20 @@ export function Skills() {
   // Page-level search query is shared with the TopBar scope field via context,
   // so the Skills page no longer renders its own search input.
   const { query: searchQuery } = usePageSearch(t("skills.searchPlaceholder"));
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [untaggedOnly, setUntaggedOnly] = useState(false);
-  const [scopeFilter, setScopeFilter] = useState<"all" | "global" | "project" | "tool">("all");
+  const [restoredFilterState] = useState(loadSkillsListFilterState);
+  const [selectedTags, setSelectedTags] = useState<string[]>(restoredFilterState.selectedTags);
+  const [untaggedOnly, setUntaggedOnly] = useState(restoredFilterState.untaggedOnly);
+  const [scopeFilter, setScopeFilter] = useState<"all" | "global" | "project" | "tool">(
+    restoredFilterState.scopeFilter,
+  );
   const [providerFilter, setProviderFilter] = useState("all");
   const [bindingStateFilter, setBindingStateFilter] = useState<SkillBindingState | "all">("all");
   const [sourceFilter, setSourceFilter] = useState<Skill["source"] | "all">("all");
-  const [riskOnly, setRiskOnly] = useState(false);
-  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [riskOnly, setRiskOnly] = useState(restoredFilterState.riskOnly);
+  const [favoritesOnly, setFavoritesOnly] = useState(restoredFilterState.favoritesOnly);
   const [togglingSkill, setTogglingSkill] = useState<string | null>(null);
   const [deletingSkill, setDeletingSkill] = useState<string | null>(null);
+  const [publishingSkill, setPublishingSkill] = useState<Skill | null>(null);
   const [toolEditorSkillId, setToolEditorSkillId] = useState<string | null>(null);
   const [toolEditorQuery, setToolEditorQuery] = useState("");
   const [toolEditorEnabledOnly, setToolEditorEnabledOnly] = useState(false);
@@ -790,6 +869,11 @@ export function Skills() {
   const { toasts, addToast, updateToast, removeToast } = useToast();
   const skillMetadata = config?.skill_metadata;
   const favorites = useFavorites(skillMetadata);
+  const getPublishRecord = useCallback(
+    (instanceId: string | undefined) =>
+      (instanceId ? skillMetadata?.[instanceId]?.publish : null) ?? null,
+    [skillMetadata],
+  );
   const listContainerRef = useRef<HTMLElement | null>(null);
   const hasRestoredScrollRef = useRef(false);
   const highlightTargetRef = useRef<HTMLDivElement | null>(null);
@@ -809,6 +893,16 @@ export function Skills() {
       // Local storage is optional; the in-memory expansion state still works.
     }
   }, [expandedSkillGroups]);
+
+  useEffect(() => {
+    saveSkillsListFilterState({
+      selectedTags,
+      untaggedOnly,
+      riskOnly,
+      favoritesOnly,
+      scopeFilter,
+    });
+  }, [selectedTags, untaggedOnly, riskOnly, favoritesOnly, scopeFilter]);
 
   const handleToggleFavorite = useCallback(async (instanceId: string, skillName: string, event: MouseEvent) => {
     event.stopPropagation();
@@ -2022,6 +2116,25 @@ export function Skills() {
     setImportPreview(null);
   }, [importProcessing]);
 
+  const handleSkillPublished = useCallback(
+    (result: PublishResult) => {
+      const key = result.publication_status === "pending"
+        ? "publish.successPending"
+        : "publish.successPublished";
+      addToast(
+        t(key)
+          .replace("{slug}", publishingSkill?.name ?? "")
+          .replace("{version}", result.version),
+        "success",
+      );
+      void reloadData();
+      if (result.external_url) {
+        void openUrl(result.external_url).catch(() => {});
+      }
+    },
+    [addToast, publishingSkill, reloadData, t],
+  );
+
   const handleOpenBatchToolDialog = useCallback(() => {
     if (selectedBatchItems.length === 0) {
       addToast(t("skills.batchNoSelection"), "error");
@@ -3060,6 +3173,18 @@ export function Skills() {
               <span className="skills-list-row-copy">
                 <span className="skills-list-row-title-line">
                   <span className="skills-list-row-title">{title}</span>
+                  {(() => {
+                    const record = getPublishRecord(skill.instance_id);
+                    return record ? (
+                      <PublishedBadge
+                        record={record}
+                        label={t("publish.publishedBadge")}
+                        title={t("publish.publishedBadgeTitle")
+                          .replace("{slug}", record.slug)
+                          .replace("{version}", record.version)}
+                      />
+                    ) : null;
+                  })()}
                   {skill.scope === "project" && (
                     <span className="skills-scope-badge is-project">
                       {selectedProjectName ?? t("skills.scopeProject")}
@@ -3169,6 +3294,8 @@ export function Skills() {
                   moreActionsLabel={t("skills.moreActions")}
                   onEdit={() => openSkillEditor(skill.instance_id, "tools")}
                   onDelete={() => void handleDelete(skill)}
+                  publishLabel={t("publish.menuLabel")}
+                  onPublish={() => setPublishingSkill(skill)}
                 />
               </div>
             )}
@@ -4533,6 +4660,8 @@ export function Skills() {
                             moreActionsLabel={t("skills.moreActions")}
                             onEdit={() => openSkillEditor(item.skill!.instance_id, "tools")}
                             onDelete={() => void handleDelete(item.skill!)}
+                            publishLabel={t("publish.menuLabel")}
+                            onPublish={() => setPublishingSkill(item.skill!)}
                           />
                         </div>
                       )}
@@ -4977,6 +5106,14 @@ export function Skills() {
         isProcessing={importProcessing}
         onCancel={handleCloseImportDialog}
         onConfirm={(resolutions) => void handleConfirmImport(resolutions)}
+        t={t}
+      />
+
+      <PublishToClawhubDialog
+        open={publishingSkill !== null}
+        skill={publishingSkill}
+        onClose={() => setPublishingSkill(null)}
+        onPublished={handleSkillPublished}
         t={t}
       />
 
