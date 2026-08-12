@@ -117,6 +117,34 @@ evaluation:
   cases: []
   review_cycle_days: 90
 `;
+
+function buildSkillContractDraft(skill: Skill): string {
+  const quote = (value: string) => JSON.stringify(value.trim());
+  const summary = skill.description?.trim() || `${skill.name} workflow`;
+  const scopeHint = skill.scope === "project"
+    ? `the registered project context for ${skill.name}`
+    : `${skill.name} is needed for the current task`;
+  return `schema_version: 1
+purpose:
+  summary: ${quote(summary)}
+  use_when: [${quote(scopeHint)}]
+  avoid_when: ["The task does not require this skill's declared workflow"]
+requirements:
+  runtimes: []
+  project_signals: []
+  verification: []
+success_contract:
+  expected_outcomes: []
+  non_goals: []
+  safety_rules: []
+feedback:
+  codes: [completed, partial, failed, instruction_gap, dependency_gap, safety_concern]
+  required_for_completed: [verification_evidence]
+evaluation:
+  cases: []
+  review_cycle_days: 90
+`;
+}
 import {
   buildBatchTargets,
   getSelectedBatchItems,
@@ -3353,7 +3381,7 @@ export function Skills() {
                     const contractPath = `${skill.path}${skill.path.endsWith("\\") || skill.path.endsWith("/") ? "" : "/"}skill-manager.yaml`;
                     try {
                       if (!contract?.path) {
-                        await invoke("write_file", { path: contractPath, content: DEFAULT_SKILL_CONTRACT });
+                        await invoke("write_file", { path: contractPath, content: buildSkillContractDraft(skill) || DEFAULT_SKILL_CONTRACT });
                         await handleRefresh();
                       }
                       navigate(`/editor?root=${encodeURIComponent(skill.path)}&file=skill-manager.yaml`);
