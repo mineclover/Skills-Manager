@@ -15,6 +15,7 @@ pub mod risk;
 pub mod scanner;
 pub mod skill_control;
 pub mod skill_packages;
+pub mod skill_sets;
 pub mod skill_transfer;
 pub mod tool_control;
 pub mod translation;
@@ -46,5 +47,6 @@ pub use skill_control::{
     BatchSkillToolAction, BatchSkillToolTarget, BatchSkillToolTargetKind, SkillControlService,
 };
 pub use skill_packages::SkillPackageService;
+pub use skill_sets::SkillSetService;
 pub use tool_control::ToolControlService;
 pub use workspace::WorkspaceService;

@@ -8,6 +8,7 @@ pub mod risk;
 pub mod skill;
 pub mod skill_contract;
 pub mod skill_package;
+pub mod skill_set;
 pub mod tool;
 pub mod update;
 
@@ -42,4 +43,11 @@ pub use skill_contract::{
     SKILL_CONTRACT_FILE_NAME,
 };
 pub use skill_package::{InstalledSkillPackage, SkillPackageMeta};
+pub use skill_set::{
+    ActivationPlanAction, AssignSkillSetReleaseRequest, CreateSkillSetBlueprintRequest,
+    CreateSkillSetReleaseRequest, SetSkillSetAssignmentActiveRequest,
+    SkillSetActivationApplyResult, SkillSetActivationOperation, SkillSetActivationPlan,
+    SkillSetAssignment, SkillSetBlueprint, SkillSetMember, SkillSetRelease, SkillSetStore,
+    UpdateSkillSetBlueprintRequest,
+};
 pub use tool::{Tool, ToolDefinition, ToolSource, SUPPORTED_TOOLS};

@@ -58,6 +58,76 @@ export interface SkillContractSummary {
   validation_errors: string[];
 }
 
+export interface SkillSetMember {
+  skill_id: string;
+}
+
+export interface SkillSetBlueprint {
+  id: string;
+  name: string;
+  description: string;
+  members: SkillSetMember[];
+  created_at: number;
+  updated_at: number;
+}
+
+export interface SkillSetRelease {
+  id: string;
+  blueprint_id: string;
+  blueprint_name: string;
+  label: string;
+  content_digest: string;
+  members: SkillSetMember[];
+  created_at: number;
+}
+
+export interface SkillSetAssignment {
+  id: string;
+  release_id: string;
+  project_id?: string | null;
+  work_scope: string;
+  provider_ids: string[];
+  active: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface SkillSetStore {
+  schema_version: number;
+  blueprints: SkillSetBlueprint[];
+  releases: SkillSetRelease[];
+  assignments: SkillSetAssignment[];
+}
+
+export type ActivationPlanAction = "enable" | "unchanged";
+
+export interface SkillSetActivationOperation {
+  skill_id: string;
+  skill_instance_id: string;
+  tool_id: string;
+  current_enabled: boolean;
+  action: ActivationPlanAction;
+  reason: string;
+}
+
+export interface SkillSetActivationPlan {
+  assignment_id: string;
+  release_id: string;
+  project_id?: string | null;
+  work_scope: string;
+  operations: SkillSetActivationOperation[];
+  missing_skill_ids: string[];
+  generated_at: number;
+}
+
+export interface SkillSetActivationApplyResult {
+  plan: SkillSetActivationPlan;
+  applied_count: number;
+  skipped_count: number;
+  failed_count: number;
+  failures: string[];
+}
+
 export interface Skill {
   id: string;
   instance_id: string;

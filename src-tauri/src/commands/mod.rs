@@ -11,6 +11,7 @@ pub mod providers;
 pub mod publish;
 pub mod risk;
 pub mod skill_packages;
+pub mod skill_sets;
 pub mod skill_transfer;
 pub mod skills;
 pub mod sync;
@@ -60,6 +61,12 @@ pub use risk::{
 };
 pub use skill_packages::{
     install_skill_package_from_path, list_skill_packages, remove_skill_package,
+};
+pub use skill_sets::{
+    apply_skill_set_activation, assign_skill_set_release, create_skill_set_blueprint,
+    create_skill_set_release, delete_skill_set_assignment, delete_skill_set_blueprint,
+    get_skill_set_catalog, preview_skill_set_activation, set_skill_set_assignment_active,
+    update_skill_set_blueprint,
 };
 pub use skill_transfer::{export_skills, import_skills, preview_import_skills};
 pub use skills::{
