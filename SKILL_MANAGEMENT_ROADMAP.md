@@ -24,9 +24,10 @@ desktop application:
   human-only improvement suggestions derived from repeated feedback.
 
 This does not yet mark every roadmap milestone complete. Per-project/provider
-health breakdowns, duplicate-skill detection, and generated authoring drafts remain
-follow-up work. Existing presets remain separate legacy activation profiles and are
-never converted automatically.
+health breakdowns remain follow-up work. Contract drafts are context-seeded but
+still require human completion, and duplicate detection only flags candidates for
+review. Existing presets remain separate legacy activation profiles and are never
+converted automatically.
 
 ## 1. Product direction
 
