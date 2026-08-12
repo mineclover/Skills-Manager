@@ -89,6 +89,7 @@ provider 和 scope；影响 shared root 时必须显式传入 `--confirm-shared`
 - [贡献指南](./CONTRIBUTING.md)
 - [upstream 与 patch 指南](./PATCH_GUIDE.md)
 - [控制面实现计划](./IMPLEMENTATION_PLAN.md)
+- [技能管理路线图](./SKILL_MANAGEMENT_ROADMAP.md)
 
 ## ❗ Linux 常见问题 (Troubleshooting)
 

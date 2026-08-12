@@ -90,6 +90,7 @@ application remains at the repository root; `upstream/main`,
 - [Contributing guide](./CONTRIBUTING.md)
 - [Upstream and patch guide](./PATCH_GUIDE.md)
 - [Control-plane implementation plan](./IMPLEMENTATION_PLAN.md)
+- [Skill management roadmap](./SKILL_MANAGEMENT_ROADMAP.md)
 
 ## ❗ Linux Troubleshooting
 
