@@ -98,6 +98,7 @@ export interface SkillSetAssignment {
   release_id: string;
   project_id?: string | null;
   work_scope: string;
+  role: "default" | "recommended";
   provider_ids: string[];
   active: boolean;
   created_at: number;

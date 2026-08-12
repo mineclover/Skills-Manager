@@ -51,6 +51,19 @@ pub struct SkillSetRelease {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillSetAssignmentRole {
+    Default,
+    Recommended,
+}
+
+impl Default for SkillSetAssignmentRole {
+    fn default() -> Self {
+        Self::Recommended
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SkillSetAssignment {
     pub id: String,
     pub release_id: String,
@@ -58,6 +71,9 @@ pub struct SkillSetAssignment {
     pub project_id: Option<String>,
     /// Human-readable intended work scope, such as `upstream-integration`.
     pub work_scope: String,
+    /// Defaults apply to every work scope; recommended assignments require a matching scope.
+    #[serde(default)]
+    pub role: SkillSetAssignmentRole,
     #[serde(default)]
     pub provider_ids: Vec<String>,
     pub active: bool,
@@ -111,6 +127,8 @@ pub struct AssignSkillSetReleaseRequest {
     #[serde(default)]
     pub project_id: Option<String>,
     pub work_scope: String,
+    #[serde(default)]
+    pub role: SkillSetAssignmentRole,
     #[serde(default)]
     pub provider_ids: Vec<String>,
 }

@@ -10,8 +10,9 @@ use crate::models::{
     CreateSkillSetReleaseRequest, EffectiveSkillSet, EffectiveSkillSetMember,
     ResolveEffectiveSkillSetRequest, SetSkillSetAssignmentActiveRequest,
     SkillSetActivationApplyResult, SkillSetActivationOperation, SkillSetActivationPlan,
-    SkillSetAssignment, SkillSetBlueprint, SkillSetDriftReport, SkillSetMember,
-    SkillSetMemberSnapshot, SkillSetRelease, SkillSetStore, UpdateSkillSetBlueprintRequest,
+    SkillSetAssignment, SkillSetAssignmentRole, SkillSetBlueprint, SkillSetDriftReport,
+    SkillSetMember, SkillSetMemberSnapshot, SkillSetRelease, SkillSetStore,
+    UpdateSkillSetBlueprintRequest,
 };
 use crate::services::{ConfigManager, ScannerService, SkillControlService, StudioFeedbackService};
 
@@ -283,9 +284,14 @@ impl SkillSetService {
 
     pub fn assign_release(request: AssignSkillSetReleaseRequest) -> Result<SkillSetStore, String> {
         let work_scope = request.work_scope.trim().to_string();
-        if work_scope.is_empty() {
+        if work_scope.is_empty() && request.role == SkillSetAssignmentRole::Recommended {
             return Err("Work scope is required".to_string());
         }
+        let work_scope = if work_scope.is_empty() {
+            "default".to_string()
+        } else {
+            work_scope
+        };
         let mut store = Self::load()?;
         if !store
             .releases
@@ -313,6 +319,7 @@ impl SkillSetService {
                 .project_id
                 .filter(|project_id| !project_id.trim().is_empty()),
             work_scope,
+            role: request.role,
             provider_ids,
             active: true,
             created_at: now,
@@ -364,7 +371,8 @@ impl SkillSetService {
             .iter()
             .filter(|assignment| {
                 assignment.active
-                    && assignment.work_scope == work_scope
+                    && (assignment.role == SkillSetAssignmentRole::Default
+                        || assignment.work_scope == work_scope)
                     && (assignment.project_id.is_none() || assignment.project_id == project_id)
             })
             .collect::<Vec<_>>();
@@ -622,6 +630,7 @@ mod tests {
                 release_id: store.releases[0].id.clone(),
                 project_id: Some("project-a".to_string()),
                 work_scope: "code-review".to_string(),
+                role: SkillSetAssignmentRole::Recommended,
                 provider_ids: vec!["codex".to_string(), "codex".to_string()],
             })
             .unwrap();
@@ -707,9 +716,10 @@ mod tests {
             .unwrap();
             let project_release_id = store.releases.last().unwrap().id.clone();
             SkillSetService::assign_release(AssignSkillSetReleaseRequest {
-                release_id: global_release_id,
+                release_id: global_release_id.clone(),
                 project_id: None,
                 work_scope: "integration".to_string(),
+                role: SkillSetAssignmentRole::Default,
                 provider_ids: vec![],
             })
             .unwrap();
@@ -717,6 +727,7 @@ mod tests {
                 release_id: project_release_id,
                 project_id: Some("project-a".to_string()),
                 work_scope: "integration".to_string(),
+                role: SkillSetAssignmentRole::Recommended,
                 provider_ids: vec![],
             })
             .unwrap();
@@ -740,6 +751,15 @@ mod tests {
                 2
             );
             assert_eq!(effective.unresolved_skill_ids.len(), 2);
+
+            let baseline =
+                SkillSetService::resolve_effective_set(ResolveEffectiveSkillSetRequest {
+                    project_id: Some("project-a".to_string()),
+                    work_scope: "deployment".to_string(),
+                })
+                .unwrap();
+            assert_eq!(baseline.release_ids, vec![global_release_id]);
+            assert_eq!(baseline.members.len(), 1);
         });
     }
 }
