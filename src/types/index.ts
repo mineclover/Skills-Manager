@@ -69,6 +69,7 @@ export interface SkillSetBlueprint {
   members: SkillSetMember[];
   created_at: number;
   updated_at: number;
+  reviewed_at?: number | null;
 }
 
 export interface SkillSetRelease {

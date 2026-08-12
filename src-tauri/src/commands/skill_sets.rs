@@ -1,7 +1,8 @@
 use crate::models::{
     AssignSkillSetReleaseRequest, CreateSkillSetBlueprintRequest, CreateSkillSetReleaseRequest,
-    SetSkillSetAssignmentActiveRequest, SkillSetActivationApplyResult, SkillSetActivationPlan,
-    SkillSetStore, UpdateSkillSetBlueprintRequest,
+    ReviewSkillSetBlueprintRequest, SetSkillSetAssignmentActiveRequest,
+    SkillSetActivationApplyResult, SkillSetActivationPlan, SkillSetStore,
+    UpdateSkillSetBlueprintRequest,
 };
 use crate::services::SkillSetService;
 
@@ -22,6 +23,13 @@ pub fn update_skill_set_blueprint(
     request: UpdateSkillSetBlueprintRequest,
 ) -> Result<SkillSetStore, String> {
     SkillSetService::update_blueprint(request)
+}
+
+#[tauri::command]
+pub fn review_skill_set_blueprint(
+    request: ReviewSkillSetBlueprintRequest,
+) -> Result<SkillSetStore, String> {
+    SkillSetService::review_blueprint(&request.blueprint_id)
 }
 
 #[tauri::command]

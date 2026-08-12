@@ -15,6 +15,8 @@ pub struct SkillSetBlueprint {
     pub members: Vec<SkillSetMember>,
     pub created_at: i64,
     pub updated_at: i64,
+    #[serde(default)]
+    pub reviewed_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -71,6 +73,11 @@ pub struct UpdateSkillSetBlueprintRequest {
     #[serde(default)]
     pub description: String,
     pub skill_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReviewSkillSetBlueprintRequest {
+    pub blueprint_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

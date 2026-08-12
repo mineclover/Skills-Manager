@@ -46,10 +46,10 @@ pub use skill_contract::{
 pub use skill_package::{InstalledSkillPackage, SkillPackageMeta};
 pub use skill_set::{
     ActivationPlanAction, AssignSkillSetReleaseRequest, CreateSkillSetBlueprintRequest,
-    CreateSkillSetReleaseRequest, SetSkillSetAssignmentActiveRequest,
-    SkillSetActivationApplyResult, SkillSetActivationOperation, SkillSetActivationPlan,
-    SkillSetAssignment, SkillSetBlueprint, SkillSetMember, SkillSetRelease, SkillSetStore,
-    UpdateSkillSetBlueprintRequest,
+    CreateSkillSetReleaseRequest, ReviewSkillSetBlueprintRequest,
+    SetSkillSetAssignmentActiveRequest, SkillSetActivationApplyResult, SkillSetActivationOperation,
+    SkillSetActivationPlan, SkillSetAssignment, SkillSetBlueprint, SkillSetMember, SkillSetRelease,
+    SkillSetStore, UpdateSkillSetBlueprintRequest,
 };
 pub use studio_feedback::{
     ActivationRun, EvaluationRecord, EvaluationStatus, RecordEvaluationRequest,

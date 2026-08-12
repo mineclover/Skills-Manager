@@ -123,6 +123,7 @@ impl SkillSetService {
             members: Self::normalize_members(request.skill_ids)?,
             created_at: now,
             updated_at: now,
+            reviewed_at: None,
         });
         Self::save(&store)?;
         Ok(store)
@@ -151,6 +152,19 @@ impl SkillSetService {
         blueprint.description = request.description.trim().to_string();
         blueprint.members = members;
         blueprint.updated_at = Self::now();
+        blueprint.reviewed_at = None;
+        Self::save(&store)?;
+        Ok(store)
+    }
+
+    pub fn review_blueprint(blueprint_id: &str) -> Result<SkillSetStore, String> {
+        let mut store = Self::load()?;
+        let blueprint = store
+            .blueprints
+            .iter_mut()
+            .find(|blueprint| blueprint.id == blueprint_id)
+            .ok_or_else(|| format!("Skill set not found: {blueprint_id}"))?;
+        blueprint.reviewed_at = Some(Self::now());
         Self::save(&store)?;
         Ok(store)
     }
@@ -186,6 +200,9 @@ impl SkillSetService {
             .find(|blueprint| blueprint.id == request.blueprint_id)
             .cloned()
             .ok_or_else(|| format!("Skill set not found: {}", request.blueprint_id))?;
+        if blueprint.reviewed_at.is_none() {
+            return Err("Review the blueprint before creating a release".to_string());
+        }
         let created_at = Self::now();
         let label = request.label.trim().to_string();
         let digest_input = serde_json::to_vec(&(&blueprint.id, &label, &blueprint.members))
@@ -409,6 +426,7 @@ mod tests {
             })
             .unwrap();
             let blueprint_id = created.blueprints[0].id.clone();
+            SkillSetService::review_blueprint(&blueprint_id).unwrap();
             let released = SkillSetService::create_release(CreateSkillSetReleaseRequest {
                 blueprint_id: blueprint_id.clone(),
                 label: "v1".to_string(),
@@ -438,6 +456,7 @@ mod tests {
                 skill_ids: vec!["review".to_string()],
             })
             .unwrap();
+            SkillSetService::review_blueprint(&store.blueprints[0].id).unwrap();
             let store = SkillSetService::create_release(CreateSkillSetReleaseRequest {
                 blueprint_id: store.blueprints[0].id.clone(),
                 label: String::new(),
@@ -461,6 +480,25 @@ mod tests {
             assert!(!updated.assignments[0].active);
             assert_eq!(updated.releases.len(), 1);
             assert_eq!(updated.assignments[0].provider_ids, vec!["codex"]);
+        });
+    }
+
+    #[test]
+    fn release_requires_explicit_human_review() {
+        with_temp_home(|_| {
+            let store = SkillSetService::create_blueprint(CreateSkillSetBlueprintRequest {
+                name: "Draft".to_string(),
+                description: String::new(),
+                skill_ids: vec!["draft-skill".to_string()],
+            })
+            .unwrap();
+            assert!(
+                SkillSetService::create_release(CreateSkillSetReleaseRequest {
+                    blueprint_id: store.blueprints[0].id.clone(),
+                    label: String::new()
+                })
+                .is_err()
+            );
         });
     }
 }
