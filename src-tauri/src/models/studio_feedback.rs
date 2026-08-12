@@ -140,6 +140,19 @@ pub struct ReleaseHealth {
     pub freshness_days: Option<i64>,
 }
 
+/// Optional dimensions for reviewing a release in a concrete operating context.
+/// Omitted dimensions intentionally aggregate across that dimension.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ReleaseHealthContextRequest {
+    pub release_id: String,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub work_scope: Option<String>,
+    #[serde(default)]
+    pub provider_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewReason {

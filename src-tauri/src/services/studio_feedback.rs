@@ -2,13 +2,14 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, params_from_iter, types::Value, Connection};
 use uuid::Uuid;
 
 use crate::models::{
     ActivationProviderOutcome, ActivationRun, EvaluationRecord, RecordEvaluationRequest,
-    RecordStudioFeedbackRequest, ReleaseHealth, ReviewQueueItem, ReviewReason, StudioFeedbackCode,
-    StudioFeedbackEvent, StudioFeedbackTargetKind, StudioHealthStatus,
+    RecordStudioFeedbackRequest, ReleaseHealth, ReleaseHealthContextRequest, ReviewQueueItem,
+    ReviewReason, StudioFeedbackCode, StudioFeedbackEvent, StudioFeedbackTargetKind,
+    StudioHealthStatus,
 };
 use crate::services::SkillSetService;
 
@@ -303,9 +304,48 @@ impl StudioFeedbackService {
     }
 
     pub fn release_health(release_id: &str) -> Result<ReleaseHealth, String> {
+        Self::release_health_for_context(release_id, None, None, None)
+    }
+
+    pub fn contextual_release_health(
+        request: ReleaseHealthContextRequest,
+    ) -> Result<ReleaseHealth, String> {
+        let release_id = request.release_id.trim().to_string();
+        if release_id.is_empty() {
+            return Err("Release id is required to query contextual health".to_string());
+        }
+        Self::release_health_for_context(
+            &release_id,
+            Self::optional(request.project_id),
+            Self::optional(request.work_scope),
+            Self::optional(request.provider_id),
+        )
+    }
+
+    fn release_health_for_context(
+        release_id: &str,
+        project_id: Option<String>,
+        work_scope: Option<String>,
+        provider_id: Option<String>,
+    ) -> Result<ReleaseHealth, String> {
         let conn = Self::open()?;
         let target_kind = Self::text(&StudioFeedbackTargetKind::SkillSetRelease)?;
-        let mut statement = conn.prepare("SELECT code, COUNT(*), MAX(created_at) FROM studio_feedback_events WHERE target_kind=?1 AND target_id=?2 GROUP BY code")
+        let mut feedback_filters = String::from(" WHERE target_kind=? AND target_id=?");
+        let mut feedback_values = vec![
+            Value::Text(target_kind),
+            Value::Text(release_id.to_string()),
+        ];
+        for (column, value) in [
+            ("project_id", project_id.as_ref()),
+            ("work_scope", work_scope.as_ref()),
+            ("provider_id", provider_id.as_ref()),
+        ] {
+            if let Some(value) = value {
+                feedback_filters.push_str(&format!(" AND {column}=?"));
+                feedback_values.push(Value::Text(value.clone()));
+            }
+        }
+        let mut statement = conn.prepare(&format!("SELECT code, COUNT(*), MAX(created_at) FROM studio_feedback_events{feedback_filters} GROUP BY code"))
             .map_err(|error| format!("Failed to query feedback health: {error}"))?;
         let mut completed = 0_u64;
         let mut partial = 0_u64;
@@ -314,7 +354,7 @@ impl StudioFeedbackService {
         let mut evaluated = 0_u64;
         let mut last_success = None;
         let rows = statement
-            .query_map(params![target_kind, release_id], |row| {
+            .query_map(params_from_iter(feedback_values), |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, u64>(1)?,
@@ -366,12 +406,27 @@ impl StudioFeedbackService {
         } else {
             StudioHealthStatus::Healthy
         };
+        let mut activation_filters = String::from(" WHERE runs.release_id=?");
+        let mut activation_values = vec![Value::Text(release_id.to_string())];
+        if let Some(project_id) = &project_id {
+            activation_filters.push_str(" AND runs.project_id=?");
+            activation_values.push(Value::Text(project_id.clone()));
+        }
+        if let Some(work_scope) = &work_scope {
+            activation_filters.push_str(" AND runs.work_scope=?");
+            activation_values.push(Value::Text(work_scope.clone()));
+        }
+        let usage_query = if let Some(provider_id) = &provider_id {
+            activation_filters.push_str(" AND outcomes.provider_id=?");
+            activation_values.push(Value::Text(provider_id.clone()));
+            format!("SELECT COUNT(DISTINCT runs.id) FROM studio_activation_runs runs INNER JOIN studio_activation_provider_outcomes outcomes ON outcomes.run_id=runs.id{activation_filters}")
+        } else {
+            format!("SELECT COUNT(*) FROM studio_activation_runs runs{activation_filters}")
+        };
         let usage_count = conn
-            .query_row(
-                "SELECT COUNT(*) FROM studio_activation_runs WHERE release_id=?1",
-                params![release_id],
-                |row| row.get::<_, u64>(0),
-            )
+            .query_row(&usage_query, params_from_iter(activation_values), |row| {
+                row.get::<_, u64>(0)
+            })
             .map_err(|error| format!("Failed to query activation history: {error}"))?;
         Ok(ReleaseHealth {
             release_id: release_id.to_string(),
@@ -557,6 +612,53 @@ mod tests {
                     .status,
                 StudioHealthStatus::NeedsReview
             );
+        });
+    }
+
+    #[test]
+    fn contextual_health_filters_feedback_and_provider_usage() {
+        with_temp_home(|_| {
+            for _ in 0..5 {
+                let mut item = request(StudioFeedbackCode::Completed, "verified in project");
+                item.project_id = Some("project-a".to_string());
+                item.work_scope = Some("integration".to_string());
+                item.provider_id = Some("codex".to_string());
+                StudioFeedbackService::record_feedback(item).unwrap();
+            }
+            for _ in 0..5 {
+                let mut item = request(StudioFeedbackCode::Failed, "other provider failed");
+                item.project_id = Some("project-a".to_string());
+                item.work_scope = Some("integration".to_string());
+                item.provider_id = Some("claude".to_string());
+                StudioFeedbackService::record_feedback(item).unwrap();
+            }
+            StudioFeedbackService::record_activation_run(
+                "assignment-a",
+                "release-a",
+                Some("project-a".to_string()),
+                "integration",
+                1,
+                0,
+                0,
+                vec![ActivationProviderOutcome {
+                    provider_id: "codex".to_string(),
+                    applied_count: 1,
+                    skipped_count: 0,
+                    failed_count: 0,
+                }],
+            )
+            .unwrap();
+            let health =
+                StudioFeedbackService::contextual_release_health(ReleaseHealthContextRequest {
+                    release_id: "release-a".to_string(),
+                    project_id: Some("project-a".to_string()),
+                    work_scope: Some("integration".to_string()),
+                    provider_id: Some("codex".to_string()),
+                })
+                .unwrap();
+            assert_eq!(health.status, StudioHealthStatus::Healthy);
+            assert_eq!(health.evaluated_count, 5);
+            assert_eq!(health.usage_count, 1);
         });
     }
 

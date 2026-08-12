@@ -18,6 +18,7 @@ export function ReviewQueue() {
   const [catalog, setCatalog] = useState<SkillSetStore | null>(null);
   const [queue, setQueue] = useState<ReviewQueueItem[]>([]);
   const [health, setHealth] = useState<Record<string, ReleaseHealth>>({});
+  const [contextualHealth, setContextualHealth] = useState<ReleaseHealth | null>(null);
   const [releaseId, setReleaseId] = useState("");
   const [code, setCode] = useState<StudioFeedbackCode>("completed");
   const [evidenceType, setEvidenceType] =
@@ -86,6 +87,29 @@ export function ReviewQueue() {
         await load();
       } catch (submitError) {
         setError(String(submitError));
+      } finally {
+        setBusy(false);
+      }
+    })();
+
+  const loadContextualHealth = () =>
+    void (async () => {
+      if (!releaseId) return;
+      setBusy(true);
+      setError(null);
+      try {
+        setContextualHealth(
+          await invoke<ReleaseHealth>("get_contextual_release_health", {
+            request: {
+              release_id: releaseId,
+              project_id: contextProjectId || null,
+              work_scope: contextWorkScope || null,
+              provider_id: contextProviderId || null,
+            },
+          }),
+        );
+      } catch (loadError) {
+        setError(String(loadError));
       } finally {
         setBusy(false);
       }
@@ -314,6 +338,13 @@ export function ReviewQueue() {
               </p>
             </div>
           )}
+          <div className="mt-3 rounded-md border border-border p-3 text-xs">
+            <div className="flex items-center justify-between gap-3">
+              <div><strong>Contextual health</strong><p className="mt-1 text-muted-foreground">Filters the metrics above by the optional project, work scope, and provider values.</p></div>
+              <button type="button" onClick={loadContextualHealth} disabled={busy || !releaseId} className="rounded border border-border px-2 py-1">Check context</button>
+            </div>
+            {contextualHealth && <p className="mt-3">{contextualHealth.status.replace(/_/g, " ")} · Evaluated: {contextualHealth.evaluated_count} · Activation runs: {contextualHealth.usage_count} · Success: {contextualHealth.verified_success_rate == null ? "—" : `${Math.round(contextualHealth.verified_success_rate * 100)}%`}</p>}
+          </div>
           <div className="mt-4 rounded-md border border-border p-3 text-xs">
             <div className="flex items-center justify-between gap-3"><div><strong>Feedback-informed suggestions</strong><p className="mt-1 text-muted-foreground">Repeated, evidence-backed outcomes only. Suggestions never edit a release or binding.</p></div><button type="button" onClick={() => loadSuggestions(releaseId)} disabled={busy || !releaseId} className="rounded border border-border px-2 py-1">Generate</button></div>
             {suggestions.length > 0 && <div className="mt-3 space-y-2">{suggestions.map((suggestion) => <article key={suggestion.code} className="rounded bg-muted/50 p-2"><p className="font-medium">{suggestion.title} <span className="text-muted-foreground">({suggestion.occurrence_count})</span></p><p className="mt-1 text-muted-foreground">{suggestion.rationale}</p><p className="mt-1">Next: {suggestion.suggested_action}</p></article>)}</div>}

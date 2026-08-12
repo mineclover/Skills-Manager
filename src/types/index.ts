@@ -211,6 +211,13 @@ export interface ReleaseHealth {
   freshness_days?: number | null;
 }
 
+export interface ReleaseHealthContextRequest {
+  release_id: string;
+  project_id?: string | null;
+  work_scope?: string | null;
+  provider_id?: string | null;
+}
+
 export interface ReviewQueueItem { release_id: string; reason: ReviewReason; detail: string; }
 
 export interface ReleaseImprovementSuggestion {

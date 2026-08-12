@@ -1,6 +1,7 @@
 use crate::models::{
     ActivationRun, EvaluationRecord, RecordEvaluationRequest, RecordStudioFeedbackRequest,
-    ReleaseHealth, ReleaseImprovementSuggestion, ReviewQueueItem, StudioFeedbackEvent,
+    ReleaseHealth, ReleaseHealthContextRequest, ReleaseImprovementSuggestion, ReviewQueueItem,
+    StudioFeedbackEvent,
 };
 use crate::services::StudioFeedbackService;
 
@@ -21,6 +22,13 @@ pub fn record_release_evaluation(
 #[tauri::command]
 pub fn get_release_health(release_id: String) -> Result<ReleaseHealth, String> {
     StudioFeedbackService::release_health(&release_id)
+}
+
+#[tauri::command]
+pub fn get_contextual_release_health(
+    request: ReleaseHealthContextRequest,
+) -> Result<ReleaseHealth, String> {
+    StudioFeedbackService::contextual_release_health(request)
 }
 
 #[tauri::command]
