@@ -1,7 +1,7 @@
 import { NavLink } from "react-router-dom";
 import { useTranslation } from "@/i18n";
 import { AuthButton } from "@/components/auth/AuthButton";
-import { Sparkles, Wrench, Sliders, ShoppingBag, Settings, MessageSquare, Layers3, ClipboardCheck } from "lucide-react";
+import { Sparkles, Wrench, Sliders, ShoppingBag, Settings, MessageSquare, Layers3, ClipboardCheck, FolderKanban } from "lucide-react";
 
 export function Sidebar() {
   const { t } = useTranslation();
@@ -26,6 +26,11 @@ export function Sidebar() {
       to: "/skill-sets",
       label: "Skill Sets",
       icon: <Layers3 size={16} />,
+    },
+    {
+      to: "/projects",
+      label: "Projects",
+      icon: <FolderKanban size={16} />,
     },
     {
       to: "/review-queue",

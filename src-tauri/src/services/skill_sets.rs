@@ -10,10 +10,11 @@ use crate::models::{
     home_dir, ActivationPlanAction, ActivationProviderOutcome, AssignSkillSetReleaseRequest,
     CreateSkillSetBlueprintRequest, CreateSkillSetReleaseRequest, EffectiveSkillSet,
     EffectiveSkillSetMember, ResolveEffectiveSkillSetRequest, SetSkillSetAssignmentActiveRequest,
-    SkillSetActivationApplyResult, SkillSetActivationOperation, SkillSetActivationPlan,
-    SkillSetAssignment, SkillSetAssignmentRole, SkillSetBlueprint, SkillSetDriftReport,
-    SkillSetMember, SkillSetMemberScopePolicy, SkillSetMemberSnapshot, SkillSetRelease,
-    SkillSetStore, UpdateSkillSetBlueprintRequest,
+    SetSkillSetAssignmentPriorityRequest, SkillSetActivationApplyResult,
+    SkillSetActivationOperation, SkillSetActivationPlan, SkillSetAssignment,
+    SkillSetAssignmentRole, SkillSetBlueprint, SkillSetDriftReport, SkillSetMember,
+    SkillSetMemberScopePolicy, SkillSetMemberSnapshot, SkillSetRelease, SkillSetStore,
+    UpdateSkillSetBlueprintRequest,
 };
 use crate::services::{ConfigManager, ScannerService, SkillControlService, StudioFeedbackService};
 
@@ -348,6 +349,7 @@ impl SkillSetService {
             work_scope,
             role: request.role,
             provider_ids,
+            priority: request.priority,
             active: true,
             created_at: now,
             updated_at: now,
@@ -366,6 +368,21 @@ impl SkillSetService {
             .find(|assignment| assignment.id == request.assignment_id)
             .ok_or_else(|| format!("Skill set assignment not found: {}", request.assignment_id))?;
         assignment.active = request.active;
+        assignment.updated_at = Self::now();
+        Self::save(&store)?;
+        Ok(store)
+    }
+
+    pub fn set_assignment_priority(
+        request: SetSkillSetAssignmentPriorityRequest,
+    ) -> Result<SkillSetStore, String> {
+        let mut store = Self::load()?;
+        let assignment = store
+            .assignments
+            .iter_mut()
+            .find(|assignment| assignment.id == request.assignment_id)
+            .ok_or_else(|| format!("Skill set assignment not found: {}", request.assignment_id))?;
+        assignment.priority = request.priority;
         assignment.updated_at = Self::now();
         Self::save(&store)?;
         Ok(store)
@@ -393,7 +410,7 @@ impl SkillSetService {
         }
         let project_id = request.project_id.filter(|value| !value.trim().is_empty());
         let store = Self::load()?;
-        let assignments = store
+        let mut assignments = store
             .assignments
             .iter()
             .filter(|assignment| {
@@ -403,6 +420,13 @@ impl SkillSetService {
                     && (assignment.project_id.is_none() || assignment.project_id == project_id)
             })
             .collect::<Vec<_>>();
+        assignments.sort_by(|left, right| {
+            right
+                .priority
+                .cmp(&left.priority)
+                .then_with(|| right.project_id.is_some().cmp(&left.project_id.is_some()))
+                .then_with(|| left.created_at.cmp(&right.created_at))
+        });
         let config = ConfigManager::new().load()?;
         let skills = ScannerService::scan_skills_for_scope(&config, project_id.as_deref())?;
         let mut by_skill = std::collections::BTreeMap::<String, EffectiveSkillSetMember>::new();
@@ -703,6 +727,7 @@ mod tests {
                 work_scope: "code-review".to_string(),
                 role: SkillSetAssignmentRole::Recommended,
                 provider_ids: vec!["codex".to_string(), "codex".to_string()],
+                priority: 0,
             })
             .unwrap();
             let assignment_id = store.assignments[0].id.clone();
@@ -795,14 +820,16 @@ mod tests {
                 work_scope: "integration".to_string(),
                 role: SkillSetAssignmentRole::Default,
                 provider_ids: vec![],
+                priority: 0,
             })
             .unwrap();
             SkillSetService::assign_release(AssignSkillSetReleaseRequest {
-                release_id: project_release_id,
+                release_id: project_release_id.clone(),
                 project_id: Some("project-a".to_string()),
                 work_scope: "integration".to_string(),
                 role: SkillSetAssignmentRole::Recommended,
                 provider_ids: vec![],
+                priority: 10,
             })
             .unwrap();
 
@@ -813,6 +840,10 @@ mod tests {
                 })
                 .unwrap();
             assert_eq!(effective.assignment_ids.len(), 2);
+            assert_eq!(
+                effective.release_ids,
+                vec![project_release_id, global_release_id.clone()]
+            );
             assert_eq!(effective.members.len(), 2);
             assert_eq!(
                 effective

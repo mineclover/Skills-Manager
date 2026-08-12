@@ -95,6 +95,9 @@ pub struct SkillSetAssignment {
     pub role: SkillSetAssignmentRole,
     #[serde(default)]
     pub provider_ids: Vec<String>,
+    /// Higher values resolve first when multiple assignments match one context.
+    #[serde(default)]
+    pub priority: i32,
     pub active: bool,
     pub created_at: i64,
     pub updated_at: i64,
@@ -155,12 +158,20 @@ pub struct AssignSkillSetReleaseRequest {
     pub role: SkillSetAssignmentRole,
     #[serde(default)]
     pub provider_ids: Vec<String>,
+    #[serde(default)]
+    pub priority: i32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SetSkillSetAssignmentActiveRequest {
     pub assignment_id: String,
     pub active: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SetSkillSetAssignmentPriorityRequest {
+    pub assignment_id: String,
+    pub priority: i32,
 }
 
 #[derive(Debug, Clone, Deserialize)]

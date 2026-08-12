@@ -68,7 +68,7 @@ pub use skill_sets::{
     create_skill_set_release, delete_skill_set_assignment, delete_skill_set_blueprint,
     get_skill_set_catalog, get_skill_set_drift, preview_skill_set_activation,
     resolve_effective_skill_set, review_skill_set_blueprint, set_skill_set_assignment_active,
-    update_skill_set_blueprint,
+    set_skill_set_assignment_priority, update_skill_set_blueprint,
 };
 pub use skill_transfer::{export_skills, import_skills, preview_import_skills};
 pub use skills::{

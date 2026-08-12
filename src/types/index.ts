@@ -101,6 +101,7 @@ export interface SkillSetAssignment {
   work_scope: string;
   role: "default" | "recommended";
   provider_ids: string[];
+  priority: number;
   active: boolean;
   created_at: number;
   updated_at: number;

@@ -33,12 +33,13 @@ use commands::{
     remove_project_binding, remove_skill_package, rename_path, rescan_skill,
     resolve_effective_skill_set, review_skill_set_blueprint, save_config, save_llm_provider,
     scan_all_risks, scan_existing_skills, scan_skills_for_scope, set_active_project_binding,
-    set_preset_all, set_preset_skill, set_skill_set_assignment_active, set_tool_enabled,
-    start_github_auth, start_google_auth, submit_feedback, sync_marketplace_installed_skills,
-    test_llm_provider, toggle_marketplace_favorite, toggle_marketplace_source,
-    toggle_skill_favorite, translate_marketplace_skill, translate_skill, translate_skill_files,
-    translate_skills_batch, translate_text_content, uninstall_usage_hook, update_custom_tool,
-    update_skill_set_blueprint, update_tool_paths, verify_clawhub_token, write_file,
+    set_preset_all, set_preset_skill, set_skill_set_assignment_active,
+    set_skill_set_assignment_priority, set_tool_enabled, start_github_auth, start_google_auth,
+    submit_feedback, sync_marketplace_installed_skills, test_llm_provider,
+    toggle_marketplace_favorite, toggle_marketplace_source, toggle_skill_favorite,
+    translate_marketplace_skill, translate_skill, translate_skill_files, translate_skills_batch,
+    translate_text_content, uninstall_usage_hook, update_custom_tool, update_skill_set_blueprint,
+    update_tool_paths, verify_clawhub_token, write_file,
 };
 use services::{AppCache, MarketplaceCache};
 use tauri::{Emitter, Manager};
@@ -103,6 +104,7 @@ pub fn run() {
             create_skill_set_release,
             assign_skill_set_release,
             set_skill_set_assignment_active,
+            set_skill_set_assignment_priority,
             delete_skill_set_assignment,
             preview_skill_set_activation,
             apply_skill_set_activation,

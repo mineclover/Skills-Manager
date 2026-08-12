@@ -1,8 +1,9 @@
 use crate::models::{
     AssignSkillSetReleaseRequest, CreateSkillSetBlueprintRequest, CreateSkillSetReleaseRequest,
     EffectiveSkillSet, ResolveEffectiveSkillSetRequest, ReviewSkillSetBlueprintRequest,
-    SetSkillSetAssignmentActiveRequest, SkillSetActivationApplyResult, SkillSetActivationPlan,
-    SkillSetDriftReport, SkillSetStore, UpdateSkillSetBlueprintRequest,
+    SetSkillSetAssignmentActiveRequest, SetSkillSetAssignmentPriorityRequest,
+    SkillSetActivationApplyResult, SkillSetActivationPlan, SkillSetDriftReport, SkillSetStore,
+    UpdateSkillSetBlueprintRequest,
 };
 use crate::services::SkillSetService;
 
@@ -56,6 +57,13 @@ pub fn set_skill_set_assignment_active(
     request: SetSkillSetAssignmentActiveRequest,
 ) -> Result<SkillSetStore, String> {
     SkillSetService::set_assignment_active(request)
+}
+
+#[tauri::command]
+pub fn set_skill_set_assignment_priority(
+    request: SetSkillSetAssignmentPriorityRequest,
+) -> Result<SkillSetStore, String> {
+    SkillSetService::set_assignment_priority(request)
 }
 
 #[tauri::command]

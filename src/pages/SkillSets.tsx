@@ -33,6 +33,7 @@ export function SkillSets() {
   const [memberScopePolicies, setMemberScopePolicies] = useState<Record<string, "global" | "project" | "project_then_global" | "tool_local">>({});
   const [assignmentScope, setAssignmentScope] = useState("");
   const [assignmentRole, setAssignmentRole] = useState<"default" | "recommended">("recommended");
+  const [assignmentPriority, setAssignmentPriority] = useState(0);
   const [assignmentProjectId, setAssignmentProjectId] = useState("");
   const [providerIds, setProviderIds] = useState("");
   const [plan, setPlan] = useState<SkillSetActivationPlan | null>(null);
@@ -117,6 +118,7 @@ export function SkillSets() {
         project_id: assignmentProjectId || null,
         work_scope: assignmentScope,
         role: assignmentRole,
+        priority: assignmentPriority,
         provider_ids: providerIds.split(",").map((value) => value.trim()).filter(Boolean),
       },
     }),
@@ -221,7 +223,7 @@ export function SkillSets() {
 
           <div className="rounded-lg border border-border bg-card p-4">
             <h2 className="text-sm font-semibold">Frozen releases and assignments</h2>
-            <div className="mt-3 grid gap-2 sm:grid-cols-4"><label className="text-xs font-medium">Project<select value={assignmentProjectId} onChange={(event) => setAssignmentProjectId(event.target.value)} className="mt-1 w-full rounded-md border border-input bg-background px-2 py-2 text-sm"><option value="">Global / no project</option>{(config?.projects ?? []).map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><label className="text-xs font-medium">Role<select value={assignmentRole} onChange={(event) => setAssignmentRole(event.target.value as "default" | "recommended")} className="mt-1 w-full rounded-md border border-input bg-background px-2 py-2 text-sm"><option value="default">Default baseline</option><option value="recommended">Recommended overlay</option></select></label><label className="text-xs font-medium">Work scope<input value={assignmentScope} onChange={(event) => setAssignmentScope(event.target.value)} className="mt-1 w-full rounded-md border border-input bg-background px-2 py-2 text-sm" placeholder={assignmentRole === "default" ? "optional" : "upstream-integration"} /></label><label className="text-xs font-medium">Tool providers<input value={providerIds} onChange={(event) => setProviderIds(event.target.value)} className="mt-1 w-full rounded-md border border-input bg-background px-2 py-2 text-sm" placeholder="codex, claude-code" /></label></div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-5"><label className="text-xs font-medium">Project<select value={assignmentProjectId} onChange={(event) => setAssignmentProjectId(event.target.value)} className="mt-1 w-full rounded-md border border-input bg-background px-2 py-2 text-sm"><option value="">Global / no project</option>{(config?.projects ?? []).map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><label className="text-xs font-medium">Role<select value={assignmentRole} onChange={(event) => setAssignmentRole(event.target.value as "default" | "recommended")} className="mt-1 w-full rounded-md border border-input bg-background px-2 py-2 text-sm"><option value="default">Default baseline</option><option value="recommended">Recommended overlay</option></select></label><label className="text-xs font-medium">Work scope<input value={assignmentScope} onChange={(event) => setAssignmentScope(event.target.value)} className="mt-1 w-full rounded-md border border-input bg-background px-2 py-2 text-sm" placeholder={assignmentRole === "default" ? "optional" : "upstream-integration"} /></label><label className="text-xs font-medium">Priority<input type="number" value={assignmentPriority} onChange={(event) => setAssignmentPriority(Number(event.target.value) || 0)} className="mt-1 w-full rounded-md border border-input bg-background px-2 py-2 text-sm" /></label><label className="text-xs font-medium">Tool providers<input value={providerIds} onChange={(event) => setProviderIds(event.target.value)} className="mt-1 w-full rounded-md border border-input bg-background px-2 py-2 text-sm" placeholder="codex, claude-code" /></label></div>
             <button type="button" onClick={resolveEffectiveSet} disabled={busy || !assignmentScope.trim()} className="mt-2 rounded border border-border px-2 py-1 text-xs">Resolve active set</button>
             <div className="mt-3 space-y-2">
               {store.releases.map((release) => (

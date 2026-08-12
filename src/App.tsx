@@ -20,6 +20,7 @@ const Skills = lazy(() => import("@/pages/Skills").then(({ Skills }) => ({ defau
 const Tools = lazy(() => import("@/pages/Tools").then(({ Tools }) => ({ default: Tools })));
 const Presets = lazy(() => import("@/pages/Presets").then(({ Presets }) => ({ default: Presets })));
 const SkillSets = lazy(() => import("@/pages/SkillSets").then(({ SkillSets }) => ({ default: SkillSets })));
+const ProjectProfile = lazy(() => import("@/pages/ProjectProfile").then(({ ProjectProfile }) => ({ default: ProjectProfile })));
 const ReviewQueue = lazy(() => import("@/pages/ReviewQueue").then(({ ReviewQueue }) => ({ default: ReviewQueue })));
 const Marketplace = lazy(() => import("@/pages/Marketplace").then(({ Marketplace }) => ({ default: Marketplace })));
 const Settings = lazy(() => import("@/pages/Settings").then(({ Settings }) => ({ default: Settings })));
@@ -155,6 +156,7 @@ function App() {
                       <Route path="tools" element={<Tools />} />
                       <Route path="presets" element={<Presets />} />
                       <Route path="skill-sets" element={<SkillSets />} />
+                      <Route path="projects" element={<ProjectProfile />} />
                       <Route path="review-queue" element={<ReviewQueue />} />
                       <Route path="marketplace" element={<Marketplace />} />
                       <Route path="settings" element={<Settings />} />
