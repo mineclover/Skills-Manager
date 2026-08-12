@@ -190,6 +190,7 @@ feedback:
   codes: [completed, partial, failed, instruction_gap, dependency_gap, safety_concern]
   required_for_completed: [verification_evidence]
 evaluation:
+  cases: [evaluations/upstream-integration.md]
   review_cycle_days: 90
   health_thresholds:
     minimum_verified_success_rate: 0.80

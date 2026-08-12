@@ -710,6 +710,7 @@ mod tests {
             marketplace_meta: None,
             vault_meta: None,
             package_meta: None,
+            contract: crate::models::SkillContractSummary::unmanaged(),
             enabled: HashMap::from([(String::from("claude-code"), false)]),
             path,
         }

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::models::SkillPackageMeta;
+use crate::models::{SkillContractSummary, SkillPackageMeta};
 
 pub const DISABLED_TOOL_SKILL_SUFFIX: &str = ".disabled-by-sm";
 
@@ -23,6 +23,8 @@ pub struct Skill {
     pub vault_meta: Option<VaultMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package_meta: Option<SkillPackageMeta>,
+    #[serde(default = "SkillContractSummary::unmanaged")]
+    pub contract: SkillContractSummary,
     pub enabled: HashMap<String, bool>,
     pub path: PathBuf,
 }
@@ -105,6 +107,7 @@ impl Skill {
             marketplace_meta: None,
             vault_meta: None,
             package_meta: None,
+            contract: SkillContractSummary::unmanaged(),
             enabled: HashMap::new(),
             path,
         }

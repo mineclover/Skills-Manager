@@ -980,6 +980,7 @@ mod tests {
             }),
             vault_meta: None,
             package_meta: None,
+            contract: crate::models::SkillContractSummary::unmanaged(),
             enabled: HashMap::new(),
             path: PathBuf::from(format!("/tmp/{id}")),
         }
@@ -1271,6 +1272,7 @@ mod tests {
                 marketplace_meta: None,
                 vault_meta: None,
                 package_meta: None,
+                contract: crate::models::SkillContractSummary::unmanaged(),
                 enabled: HashMap::new(),
                 path: PathBuf::from("/tmp/local-only"),
             },

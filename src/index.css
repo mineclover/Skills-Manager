@@ -644,6 +644,29 @@
   background: var(--primary);
 }
 
+.skills-contract-badge {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--muted-foreground);
+  background: var(--secondary);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 18px;
+  padding: 0 6px;
+}
+
+.skills-contract-badge.is-managed {
+  border-color: color-mix(in srgb, var(--primary) 35%, transparent);
+  color: var(--primary);
+  background: var(--primary-tint);
+}
+
+.skills-contract-badge.is-incomplete {
+  border-color: color-mix(in srgb, var(--color-warning) 45%, transparent);
+  color: var(--color-warning);
+}
+
 .skills-group-subline {
   gap: 8px;
   overflow: hidden;

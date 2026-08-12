@@ -443,6 +443,7 @@ impl ScannerService {
             marketplace_meta: meta.marketplace_meta,
             vault_meta: meta.vault_meta,
             package_meta: meta.package_meta,
+            contract: crate::models::SkillContractSummary::load(skill_path),
             enabled,
             path: skill_path.to_path_buf(),
         })
@@ -707,10 +708,79 @@ impl ScannerService {
 #[cfg(test)]
 mod tests {
     use super::{LinkerService, ScannerService};
-    use crate::models::{AppConfig, ProjectBinding, SkillSource};
+    use crate::models::{AppConfig, ProjectBinding, SkillContractStatus, SkillScope, SkillSource};
     use crate::test_support::with_temp_home;
     use serde_json::json;
     use std::fs;
+
+    const VALID_SKILL_CONTRACT: &str = r#"
+schema_version: 1
+purpose:
+  summary: Contract-aware test skill
+  use_when: ["contract scan"]
+  avoid_when: ["unrelated work"]
+requirements:
+  verification: ["cargo test"]
+success_contract:
+  expected_outcomes: ["contract visible"]
+  non_goals: ["mutating activation"]
+  safety_rules: ["read only"]
+feedback:
+  codes: ["completed"]
+  required_for_completed: ["test output"]
+evaluation:
+  cases: ["evaluations/scan.md"]
+  review_cycle_days: 30
+"#;
+
+    fn write_contract_skill(root: &std::path::Path, name: &str) -> std::path::PathBuf {
+        let skill_dir = root.join(name);
+        fs::create_dir_all(&skill_dir).expect("create contract skill dir");
+        fs::write(skill_dir.join("SKILL.md"), format!("# {name}\n")).expect("write SKILL.md");
+        fs::write(skill_dir.join("skill-manager.yaml"), VALID_SKILL_CONTRACT)
+            .expect("write skill contract");
+        skill_dir
+    }
+
+    #[test]
+    fn contract_status_is_preserved_for_global_project_and_tool_scans() {
+        with_temp_home(|home| {
+            let global_root = home.join("global-skills");
+            let project_root = home.join("project-skills");
+            let tool_root = home.join("tool-skills");
+            write_contract_skill(&global_root, "global-contract");
+            write_contract_skill(&project_root, "project-contract");
+            write_contract_skill(&tool_root, "tool-contract");
+
+            let mut config = AppConfig::default();
+            config.skills_dir = global_root;
+            let project = ProjectBinding {
+                id: "project-1".to_string(),
+                name: "Project One".to_string(),
+                skills_dir: project_root,
+                root_path: None,
+            };
+
+            let global = ScannerService::scan_global_skills(&config).expect("scan global");
+            let project_skills =
+                ScannerService::scan_project_skills(&project, &config).expect("scan project");
+            let tool = ScannerService::scan_tool_skills(
+                "test-tool",
+                &tool_root,
+                &home.join("tool-config"),
+                &config,
+            )
+            .expect("scan tool");
+
+            for skills in [&global, &project_skills, &tool] {
+                assert_eq!(skills.len(), 1);
+                assert_eq!(skills[0].contract.status, SkillContractStatus::Managed);
+            }
+            assert_eq!(global[0].scope, SkillScope::Global);
+            assert_eq!(project_skills[0].scope, SkillScope::Project);
+            assert_eq!(tool[0].scope, SkillScope::Tool);
+        });
+    }
 
     #[test]
     fn load_skill_with_config_falls_back_to_skill_md_description_when_meta_is_null() {

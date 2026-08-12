@@ -74,6 +74,7 @@ mod tests {
             marketplace_meta: None,
             vault_meta: None,
             package_meta: None,
+            contract: crate::models::SkillContractSummary::unmanaged(),
             enabled: enabled
                 .iter()
                 .map(|(tool_id, value)| (tool_id.to_string(), *value))
@@ -97,6 +98,7 @@ mod tests {
             marketplace_meta: None,
             vault_meta: None,
             package_meta: None,
+            contract: crate::models::SkillContractSummary::unmanaged(),
             enabled: enabled
                 .iter()
                 .map(|(tool_id, value)| (tool_id.to_string(), *value))

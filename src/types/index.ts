@@ -12,6 +12,52 @@ export interface SkillMarketplaceMeta {
   remote_revision?: string | null;
 }
 
+export type SkillContractStatus = "unmanaged" | "incomplete" | "managed";
+
+export interface SkillContractPurpose {
+  summary: string;
+  use_when: string[];
+  avoid_when: string[];
+}
+
+export interface SkillContractRequirements {
+  runtimes: string[];
+  project_signals: string[];
+  verification: string[];
+}
+
+export interface SkillContractSuccess {
+  expected_outcomes: string[];
+  non_goals: string[];
+  safety_rules: string[];
+}
+
+export interface SkillContractFeedback {
+  codes: string[];
+  required_for_completed: string[];
+}
+
+export interface SkillContractEvaluation {
+  cases: string[];
+  review_cycle_days?: number | null;
+}
+
+export interface SkillContract {
+  schema_version?: number | null;
+  purpose: SkillContractPurpose;
+  requirements: SkillContractRequirements;
+  success_contract: SkillContractSuccess;
+  feedback: SkillContractFeedback;
+  evaluation: SkillContractEvaluation;
+}
+
+export interface SkillContractSummary {
+  status: SkillContractStatus;
+  path?: string | null;
+  contract?: SkillContract | null;
+  validation_errors: string[];
+}
+
 export interface Skill {
   id: string;
   instance_id: string;
@@ -23,6 +69,7 @@ export interface Skill {
   description: string | null;
   version: string;
   source: "local" | "imported" | "marketplace" | "vault";
+  contract: SkillContractSummary;
   enabled: Record<string, boolean>;
   package_meta?: SkillPackageMeta | null;
   marketplace_meta?: SkillMarketplaceMeta | null;

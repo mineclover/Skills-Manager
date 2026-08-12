@@ -3128,6 +3128,8 @@ export function Skills() {
     const isHighlighted = highlightKey === item.key;
     const owningGroup = parentGroup ?? groupedSkillCollection.groupBySkillKey.get(item.key) ?? null;
     const riskReport = riskReports[skill.instance_id];
+    const contract = skill.contract;
+    const contractStatus = contract?.status ?? "unmanaged";
     const fileProgress = skillTranslationProgress[skill.instance_id];
     const fileProgressText = fileProgress
       ? t("editor.translateFilesCompact")
@@ -3190,6 +3192,13 @@ export function Skills() {
                       {selectedProjectName ?? t("skills.scopeProject")}
                     </span>
                   )}
+                  <span className={`skills-contract-badge is-${contractStatus}`}>
+                    {contractStatus === "managed"
+                      ? "Contract managed"
+                      : contractStatus === "incomplete"
+                        ? "Contract incomplete"
+                        : "No contract"}
+                  </span>
                   {!parentGroup && owningGroup && (
                     <span className="skills-membership-label">{owningGroup.title}</span>
                   )}
@@ -3306,6 +3315,16 @@ export function Skills() {
               <div>
                 <span className="skills-detail-label">{t("skills.skillDescription")}</span>
                 <p>{skill.description || t("skills.noDescription")}</p>
+              </div>
+              <div>
+                <span className="skills-detail-label">Skill contract</span>
+                {contract?.contract?.purpose.summary ? (
+                  <p>{contract.contract.purpose.summary}</p>
+                ) : contractStatus === "incomplete" ? (
+                  <p>{contract?.validation_errors.join(" · ") || "The contract could not be read."}</p>
+                ) : (
+                  <p>Add <code>skill-manager.yaml</code> to define the skill's purpose, feedback, and evaluation.</p>
+                )}
               </div>
               {item.openPath && (
                 <div>

@@ -6,6 +6,7 @@ pub mod provider;
 pub mod publish;
 pub mod risk;
 pub mod skill;
+pub mod skill_contract;
 pub mod skill_package;
 pub mod tool;
 pub mod update;
@@ -34,6 +35,11 @@ pub use risk::{
 };
 pub use skill::{
     MarketplaceMeta, Skill, SkillScope, SkillSource, VaultMeta, DISABLED_TOOL_SKILL_SUFFIX,
+};
+pub use skill_contract::{
+    SkillContract, SkillContractEvaluation, SkillContractFeedback, SkillContractPurpose,
+    SkillContractRequirements, SkillContractStatus, SkillContractSuccess, SkillContractSummary,
+    SKILL_CONTRACT_FILE_NAME,
 };
 pub use skill_package::{InstalledSkillPackage, SkillPackageMeta};
 pub use tool::{Tool, ToolDefinition, ToolSource, SUPPORTED_TOOLS};
