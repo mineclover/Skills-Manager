@@ -9,6 +9,7 @@ pub mod skill;
 pub mod skill_contract;
 pub mod skill_package;
 pub mod skill_set;
+pub mod studio_feedback;
 pub mod tool;
 pub mod update;
 
@@ -49,5 +50,10 @@ pub use skill_set::{
     SkillSetActivationApplyResult, SkillSetActivationOperation, SkillSetActivationPlan,
     SkillSetAssignment, SkillSetBlueprint, SkillSetMember, SkillSetRelease, SkillSetStore,
     UpdateSkillSetBlueprintRequest,
+};
+pub use studio_feedback::{
+    ActivationRun, EvaluationRecord, EvaluationStatus, RecordEvaluationRequest,
+    RecordStudioFeedbackRequest, ReleaseHealth, ReviewQueueItem, ReviewReason, StudioEvidenceType,
+    StudioFeedbackCode, StudioFeedbackEvent, StudioFeedbackTargetKind, StudioHealthStatus,
 };
 pub use tool::{Tool, ToolDefinition, ToolSource, SUPPORTED_TOOLS};

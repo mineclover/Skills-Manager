@@ -122,11 +122,33 @@ export interface SkillSetActivationPlan {
 
 export interface SkillSetActivationApplyResult {
   plan: SkillSetActivationPlan;
+  activation_run_id: string;
   applied_count: number;
   skipped_count: number;
   failed_count: number;
   failures: string[];
 }
+
+export type StudioFeedbackTargetKind = "skill" | "skill_set_release" | "activation_run";
+export type StudioFeedbackCode = "completed" | "partial" | "failed" | "wrong_scope" | "instruction_gap" | "dependency_gap" | "safety_concern";
+export type StudioEvidenceType = "command_result" | "evaluation_assertion" | "human_confirmation";
+export type StudioHealthStatus = "unknown" | "healthy" | "needs_review";
+export type ReviewReason = "insufficient_evidence" | "threshold_breach" | "safety_concern" | "stale_evaluation";
+
+export interface ReleaseHealth {
+  release_id: string;
+  status: StudioHealthStatus;
+  evaluated_count: number;
+  usage_count: number;
+  verified_success_rate?: number | null;
+  correction_rate?: number | null;
+  scope_mismatch_rate?: number | null;
+  safety_incidents: number;
+  last_success_at?: number | null;
+  freshness_days?: number | null;
+}
+
+export interface ReviewQueueItem { release_id: string; reason: ReviewReason; detail: string; }
 
 export interface Skill {
   id: string;

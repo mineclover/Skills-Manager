@@ -12,7 +12,7 @@ use crate::models::{
     SkillSetAssignment, SkillSetBlueprint, SkillSetMember, SkillSetRelease, SkillSetStore,
     UpdateSkillSetBlueprintRequest,
 };
-use crate::services::{ConfigManager, ScannerService, SkillControlService};
+use crate::services::{ConfigManager, ScannerService, SkillControlService, StudioFeedbackService};
 
 const STORE_FILE_NAME: &str = "skill-sets.json";
 const STORE_SCHEMA_VERSION: u32 = 1;
@@ -348,6 +348,7 @@ impl SkillSetService {
         }
         let mut result = SkillSetActivationApplyResult {
             plan: plan.clone(),
+            activation_run_id: String::new(),
             applied_count: 0,
             skipped_count: 0,
             failed_count: 0,
@@ -379,6 +380,16 @@ impl SkillSetService {
                 }
             }
         }
+        let run = StudioFeedbackService::record_activation_run(
+            &plan.assignment_id,
+            &plan.release_id,
+            plan.project_id.clone(),
+            &plan.work_scope,
+            result.applied_count,
+            result.skipped_count,
+            result.failed_count,
+        )?;
+        result.activation_run_id = run.id;
         Ok(result)
     }
 }

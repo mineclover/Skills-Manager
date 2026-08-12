@@ -127,6 +127,7 @@ pub struct SkillSetActivationPlan {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SkillSetActivationApplyResult {
     pub plan: SkillSetActivationPlan,
+    pub activation_run_id: String,
     pub applied_count: usize,
     pub skipped_count: usize,
     pub failed_count: usize,

@@ -14,6 +14,7 @@ pub mod skill_packages;
 pub mod skill_sets;
 pub mod skill_transfer;
 pub mod skills;
+pub mod studio_feedback;
 pub mod sync;
 pub mod tools;
 pub mod updater;
@@ -74,6 +75,9 @@ pub use skills::{
     capture_preset, clear_active_preset, create_preset, create_skill, delete_preset, delete_skill,
     disable_skill, enable_skill, import_skills_to_hub, list_skills, refresh_skills,
     scan_existing_skills, scan_skills_for_scope, set_preset_all, set_preset_skill,
+};
+pub use studio_feedback::{
+    get_release_health, get_studio_review_queue, record_release_evaluation, record_studio_feedback,
 };
 pub use sync::{check_sync_status, fix_sync_issues};
 pub use tools::{

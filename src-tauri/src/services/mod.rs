@@ -17,6 +17,7 @@ pub mod skill_control;
 pub mod skill_packages;
 pub mod skill_sets;
 pub mod skill_transfer;
+pub mod studio_feedback;
 pub mod tool_control;
 pub mod translation;
 pub mod translation_cache;
@@ -48,5 +49,6 @@ pub use skill_control::{
 };
 pub use skill_packages::SkillPackageService;
 pub use skill_sets::SkillSetService;
+pub use studio_feedback::StudioFeedbackService;
 pub use tool_control::ToolControlService;
 pub use workspace::WorkspaceService;
