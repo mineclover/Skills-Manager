@@ -238,4 +238,6 @@ pub struct SkillSetActivationApplyResult {
     pub skipped_count: usize,
     pub failed_count: usize,
     pub failures: Vec<String>,
+    #[serde(default)]
+    pub provider_outcomes: Vec<crate::models::ActivationProviderOutcome>,
 }

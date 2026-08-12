@@ -6,9 +6,9 @@ use rusqlite::{params, Connection};
 use uuid::Uuid;
 
 use crate::models::{
-    ActivationRun, EvaluationRecord, RecordEvaluationRequest, RecordStudioFeedbackRequest,
-    ReleaseHealth, ReviewQueueItem, ReviewReason, StudioFeedbackCode, StudioFeedbackEvent,
-    StudioFeedbackTargetKind, StudioHealthStatus,
+    ActivationProviderOutcome, ActivationRun, EvaluationRecord, RecordEvaluationRequest,
+    RecordStudioFeedbackRequest, ReleaseHealth, ReviewQueueItem, ReviewReason, StudioFeedbackCode,
+    StudioFeedbackEvent, StudioFeedbackTargetKind, StudioHealthStatus,
 };
 use crate::services::SkillSetService;
 
@@ -63,6 +63,16 @@ impl StudioFeedbackService {
             );
             CREATE INDEX IF NOT EXISTS studio_activation_release_idx ON studio_activation_runs(release_id, created_at);"
         ).map_err(|error| format!("Failed to initialize Studio database: {error}"))?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS studio_activation_provider_outcomes (
+                run_id TEXT NOT NULL, provider_id TEXT NOT NULL,
+                applied_count INTEGER NOT NULL, skipped_count INTEGER NOT NULL,
+                failed_count INTEGER NOT NULL,
+                PRIMARY KEY (run_id, provider_id)
+            );
+            CREATE INDEX IF NOT EXISTS studio_activation_provider_outcome_idx ON studio_activation_provider_outcomes(provider_id, run_id);",
+        )
+        .map_err(|error| format!("Failed to initialize provider activation history: {error}"))?;
         Ok(conn)
     }
 
@@ -160,6 +170,7 @@ impl StudioFeedbackService {
         applied_count: usize,
         skipped_count: usize,
         failed_count: usize,
+        provider_outcomes: Vec<ActivationProviderOutcome>,
     ) -> Result<ActivationRun, String> {
         let run = ActivationRun {
             id: format!("activation-{}", Uuid::new_v4()),
@@ -170,6 +181,7 @@ impl StudioFeedbackService {
             applied_count,
             skipped_count,
             failed_count,
+            provider_outcomes,
             created_at: Self::now(),
         };
         let conn = Self::open()?;
@@ -177,7 +189,33 @@ impl StudioFeedbackService {
             "INSERT INTO studio_activation_runs (id,assignment_id,release_id,project_id,work_scope,applied_count,skipped_count,failed_count,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             params![run.id, run.assignment_id, run.release_id, run.project_id, run.work_scope, run.applied_count, run.skipped_count, run.failed_count, run.created_at],
         ).map_err(|error| format!("Failed to record activation run: {error}"))?;
+        for outcome in &run.provider_outcomes {
+            conn.execute(
+                "INSERT INTO studio_activation_provider_outcomes (run_id,provider_id,applied_count,skipped_count,failed_count) VALUES (?1,?2,?3,?4,?5)",
+                params![run.id, outcome.provider_id, outcome.applied_count, outcome.skipped_count, outcome.failed_count],
+            ).map_err(|error| format!("Failed to record provider activation outcome: {error}"))?;
+        }
         Ok(run)
+    }
+
+    fn provider_outcomes(
+        conn: &Connection,
+        run_id: &str,
+    ) -> Result<Vec<ActivationProviderOutcome>, String> {
+        let mut statement = conn.prepare("SELECT provider_id,applied_count,skipped_count,failed_count FROM studio_activation_provider_outcomes WHERE run_id=?1 ORDER BY provider_id")
+            .map_err(|error| format!("Failed to query provider activation outcomes: {error}"))?;
+        let rows = statement
+            .query_map(params![run_id], |row| {
+                Ok(ActivationProviderOutcome {
+                    provider_id: row.get(0)?,
+                    applied_count: row.get(1)?,
+                    skipped_count: row.get(2)?,
+                    failed_count: row.get(3)?,
+                })
+            })
+            .map_err(|error| format!("Failed to read provider activation outcomes: {error}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Failed to decode provider activation outcomes: {error}"))
     }
 
     /// Returns recent activation attempts without exposing command output or provider secrets.
@@ -201,6 +239,7 @@ impl StudioFeedbackService {
                 applied_count: row.get(5)?,
                 skipped_count: row.get(6)?,
                 failed_count: row.get(7)?,
+                provider_outcomes: Vec::new(),
                 created_at: row.get(8)?,
             })
         };
@@ -209,8 +248,13 @@ impl StudioFeedbackService {
             None => statement.query_map([], read_row),
         }
         .map_err(|error| format!("Failed to read activation history: {error}"))?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|error| format!("Failed to decode activation history: {error}"))
+        let mut runs = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Failed to decode activation history: {error}"))?;
+        for run in &mut runs {
+            run.provider_outcomes = Self::provider_outcomes(&conn, &run.id)?;
+        }
+        Ok(runs)
     }
 
     pub fn evaluation_records(release_id: &str) -> Result<Vec<EvaluationRecord>, String> {
@@ -527,6 +571,12 @@ mod tests {
                 2,
                 1,
                 0,
+                vec![ActivationProviderOutcome {
+                    provider_id: "codex".to_string(),
+                    applied_count: 2,
+                    skipped_count: 1,
+                    failed_count: 0,
+                }],
             )
             .unwrap();
             StudioFeedbackService::record_activation_run(
@@ -537,11 +587,13 @@ mod tests {
                 1,
                 0,
                 0,
+                vec![],
             )
             .unwrap();
             let runs = StudioFeedbackService::activation_runs(Some("release-a")).unwrap();
             assert_eq!(runs.len(), 1);
             assert_eq!(runs[0].assignment_id, "assignment-a");
+            assert_eq!(runs[0].provider_outcomes[0].provider_id, "codex");
         });
     }
 

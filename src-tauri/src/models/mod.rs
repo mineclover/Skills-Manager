@@ -54,9 +54,9 @@ pub use skill_set::{
     SkillSetRelease, SkillSetStore, UpdateSkillSetBlueprintRequest,
 };
 pub use studio_feedback::{
-    ActivationRun, EvaluationRecord, EvaluationStatus, RecordEvaluationRequest,
-    RecordStudioFeedbackRequest, ReleaseHealth, ReleaseImprovementSuggestion, ReviewQueueItem,
-    ReviewReason, StudioEvidenceType, StudioFeedbackCode, StudioFeedbackEvent,
-    StudioFeedbackTargetKind, StudioHealthStatus,
+    ActivationProviderOutcome, ActivationRun, EvaluationRecord, EvaluationStatus,
+    RecordEvaluationRequest, RecordStudioFeedbackRequest, ReleaseHealth,
+    ReleaseImprovementSuggestion, ReviewQueueItem, ReviewReason, StudioEvidenceType,
+    StudioFeedbackCode, StudioFeedbackEvent, StudioFeedbackTargetKind, StudioHealthStatus,
 };
 pub use tool::{Tool, ToolDefinition, ToolSource, SUPPORTED_TOOLS};

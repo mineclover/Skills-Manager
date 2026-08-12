@@ -141,6 +141,14 @@ export interface SkillSetActivationApplyResult {
   skipped_count: number;
   failed_count: number;
   failures: string[];
+  provider_outcomes: ActivationProviderOutcome[];
+}
+
+export interface ActivationProviderOutcome {
+  provider_id: string;
+  applied_count: number;
+  skipped_count: number;
+  failed_count: number;
 }
 
 export interface SkillSetDriftReport {
@@ -163,6 +171,7 @@ export interface ActivationRun {
   applied_count: number;
   skipped_count: number;
   failed_count: number;
+  provider_outcomes: ActivationProviderOutcome[];
   created_at: number;
 }
 

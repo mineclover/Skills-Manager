@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -6,9 +7,9 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::models::{
-    home_dir, ActivationPlanAction, AssignSkillSetReleaseRequest, CreateSkillSetBlueprintRequest,
-    CreateSkillSetReleaseRequest, EffectiveSkillSet, EffectiveSkillSetMember,
-    ResolveEffectiveSkillSetRequest, SetSkillSetAssignmentActiveRequest,
+    home_dir, ActivationPlanAction, ActivationProviderOutcome, AssignSkillSetReleaseRequest,
+    CreateSkillSetBlueprintRequest, CreateSkillSetReleaseRequest, EffectiveSkillSet,
+    EffectiveSkillSetMember, ResolveEffectiveSkillSetRequest, SetSkillSetAssignmentActiveRequest,
     SkillSetActivationApplyResult, SkillSetActivationOperation, SkillSetActivationPlan,
     SkillSetAssignment, SkillSetAssignmentRole, SkillSetBlueprint, SkillSetDriftReport,
     SkillSetMember, SkillSetMemberScopePolicy, SkillSetMemberSnapshot, SkillSetRelease,
@@ -558,10 +559,21 @@ impl SkillSetService {
             skipped_count: 0,
             failed_count: 0,
             failures: Vec::new(),
+            provider_outcomes: Vec::new(),
         };
+        let mut outcomes = BTreeMap::<String, ActivationProviderOutcome>::new();
         for operation in &plan.operations {
+            let outcome = outcomes
+                .entry(operation.tool_id.clone())
+                .or_insert_with(|| ActivationProviderOutcome {
+                    provider_id: operation.tool_id.clone(),
+                    applied_count: 0,
+                    skipped_count: 0,
+                    failed_count: 0,
+                });
             if operation.action == ActivationPlanAction::Unchanged {
                 result.skipped_count += 1;
+                outcome.skipped_count += 1;
                 continue;
             }
             match SkillControlService::set_skill_enabled_for_scope(
@@ -571,20 +583,25 @@ impl SkillSetService {
                 true,
             ) {
                 Ok(report) if report.failed_count == 0 => {
-                    result.applied_count += report.applied_count
+                    result.applied_count += report.applied_count;
+                    outcome.applied_count += report.applied_count;
                 }
                 Ok(report) => {
-                    result.failed_count += report.failed_count.max(1);
+                    let failures = report.failed_count.max(1);
+                    result.failed_count += failures;
+                    outcome.failed_count += failures;
                     result
                         .failures
                         .extend(report.failures.into_iter().map(|failure| failure.message));
                 }
                 Err(error) => {
                     result.failed_count += 1;
+                    outcome.failed_count += 1;
                     result.failures.push(error);
                 }
             }
         }
+        result.provider_outcomes = outcomes.into_values().collect();
         let run = StudioFeedbackService::record_activation_run(
             &plan.assignment_id,
             &plan.release_id,
@@ -593,6 +610,7 @@ impl SkillSetService {
             result.applied_count,
             result.skipped_count,
             result.failed_count,
+            result.provider_outcomes.clone(),
         )?;
         result.activation_run_id = run.id;
         Ok(result)

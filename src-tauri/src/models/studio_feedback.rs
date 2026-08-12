@@ -44,6 +44,14 @@ pub struct StudioFeedbackEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActivationProviderOutcome {
+    pub provider_id: String,
+    pub applied_count: usize,
+    pub skipped_count: usize,
+    pub failed_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ActivationRun {
     pub id: String,
     pub assignment_id: String,
@@ -53,6 +61,8 @@ pub struct ActivationRun {
     pub applied_count: usize,
     pub skipped_count: usize,
     pub failed_count: usize,
+    #[serde(default)]
+    pub provider_outcomes: Vec<ActivationProviderOutcome>,
     pub created_at: i64,
 }
 
