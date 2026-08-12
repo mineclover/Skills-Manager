@@ -1,6 +1,6 @@
 # Skills Manager — Skill Set Studio & Activation Control Roadmap
 
-> Status: proposal
+> Status: implementation in progress
 >
 > Scope: skill-set definition, project/work-scope assignment, provider-aware activation,
 > feedback, evaluation, and health management.
@@ -8,6 +8,25 @@
 > Relationship: this document extends the implemented provider-aware control plane in
 > [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md). It does not replace its
 > provider, scope, or filesystem safety rules.
+
+## Implementation status (August 2026)
+
+The first Studio and Activation Control vertical slices are implemented in the
+desktop application:
+
+- portable `skill-manager.yaml` contracts with validation, managed status, and an
+  explicit editor entry point;
+- reviewed blueprints, immutable release snapshots, evaluation-case snapshots,
+  default/recommended project assignments, and effective-set resolution;
+- provider-aware preview/apply through `SkillControlService`, plus binding drift
+  and bounded activation history;
+- redacted feedback/evaluation records, release health, a Review Queue, and
+  human-only improvement suggestions derived from repeated feedback.
+
+This does not yet mark every roadmap milestone complete. In particular, member
+scope-policy authoring, per-project/provider health breakdowns, duplicate-skill
+detection, and generated authoring drafts remain follow-up work. Existing presets
+remain separate legacy activation profiles and are never converted automatically.
 
 ## 1. Product direction
 
