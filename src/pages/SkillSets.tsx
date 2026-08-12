@@ -71,6 +71,16 @@ export function SkillSets() {
     return map;
   }, [skills]);
 
+  const likelyDuplicateGroups = useMemo(() => {
+    const groups = new Map<string, Skill[]>();
+    for (const skill of skillsById.values()) {
+      const key = `${skill.name.trim().toLowerCase()}|${(skill.description ?? "").trim().toLowerCase()}`;
+      if (!key || key === "|") continue;
+      groups.set(key, [...(groups.get(key) ?? []), skill]);
+    }
+    return [...groups.values()].filter((group) => group.length > 1);
+  }, [skillsById]);
+
   const updateStore = async (operation: () => Promise<SkillSetStore>) => {
     setBusy(true);
     setError(null);
@@ -190,6 +200,7 @@ export function SkillSets() {
               {skillsById.size === 0 && <p className="p-2 text-xs text-muted-foreground">No discovered skills yet.</p>}
             </div>
           </div>
+          {likelyDuplicateGroups.length > 0 && <div className="mt-3 rounded-md border border-warning/40 bg-warning/10 p-2 text-xs"><strong>Likely duplicate skills</strong><p className="mt-1 text-muted-foreground">Review matching names before adding both to a new set; this notice never merges or removes artifacts.</p><div className="mt-2 space-y-1">{likelyDuplicateGroups.map((group) => <p key={group.map((skill) => skill.instance_id).join(":")}>{group[0].name}: {group.map((skill) => skill.instance_id).join(", ")}</p>)}</div></div>}
           <button type="button" onClick={createBlueprint} disabled={busy || !name.trim() || memberIds.size === 0} className="mt-4 inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground disabled:opacity-50"><Plus size={14} /> Create blueprint</button>
         </div>
 
