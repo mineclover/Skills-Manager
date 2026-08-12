@@ -23,6 +23,9 @@ export function ReviewQueue() {
   const [evidenceType, setEvidenceType] =
     useState<StudioEvidenceType>("command_result");
   const [evidence, setEvidence] = useState("");
+  const [contextProjectId, setContextProjectId] = useState("");
+  const [contextWorkScope, setContextWorkScope] = useState("");
+  const [contextProviderId, setContextProviderId] = useState("");
   const [evaluationCaseId, setEvaluationCaseId] = useState("");
   const [evaluationStatus, setEvaluationStatus] = useState<EvaluationStatus>("passed");
   const [evaluationEvidence, setEvaluationEvidence] = useState("");
@@ -74,6 +77,9 @@ export function ReviewQueue() {
             code,
             evidence_type: evidenceType,
             evidence_summary: evidence,
+            project_id: contextProjectId || null,
+            work_scope: contextWorkScope || null,
+            provider_id: contextProviderId || null,
           },
         });
         setEvidence("");
@@ -111,6 +117,9 @@ export function ReviewQueue() {
             status: evaluationStatus,
             evidence_type: evidenceType,
             evidence_summary: evaluationEvidence,
+            project_id: contextProjectId || null,
+            work_scope: contextWorkScope || null,
+            provider_id: contextProviderId || null,
           },
         });
         setEvaluationEvidence("");
@@ -268,6 +277,11 @@ export function ReviewQueue() {
                 ))}
               </select>
             </label>
+          </div>
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            <label className="text-xs font-medium">Project ID<input value={contextProjectId} onChange={(event) => setContextProjectId(event.target.value)} className="mt-1 w-full rounded-md border border-input bg-background px-2 py-2 text-sm" placeholder="optional" /></label>
+            <label className="text-xs font-medium">Work scope<input value={contextWorkScope} onChange={(event) => setContextWorkScope(event.target.value)} className="mt-1 w-full rounded-md border border-input bg-background px-2 py-2 text-sm" placeholder="optional" /></label>
+            <label className="text-xs font-medium">Provider ID<input value={contextProviderId} onChange={(event) => setContextProviderId(event.target.value)} className="mt-1 w-full rounded-md border border-input bg-background px-2 py-2 text-sm" placeholder="optional" /></label>
           </div>
           <label className="mt-3 block text-xs font-medium">
             Redacted evidence summary
