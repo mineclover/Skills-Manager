@@ -69,6 +69,7 @@ export interface SkillSetMemberSnapshot {
   contract_status: SkillContractStatus;
   contract_digest?: string | null;
   purpose_summary?: string | null;
+  evaluation_cases: string[];
 }
 
 export interface SkillSetBlueprint {
@@ -199,6 +200,21 @@ export interface ReleaseHealth {
 }
 
 export interface ReviewQueueItem { release_id: string; reason: ReviewReason; detail: string; }
+
+export type EvaluationStatus = "passed" | "failed" | "blocked";
+
+export interface EvaluationRecord {
+  id: string;
+  release_id: string;
+  case_id: string;
+  status: EvaluationStatus;
+  evidence_type: StudioEvidenceType;
+  evidence_summary: string;
+  project_id?: string | null;
+  work_scope?: string | null;
+  provider_id?: string | null;
+  created_at: number;
+}
 
 export interface Skill {
   id: string;

@@ -76,6 +76,7 @@ impl SkillSetService {
                         contract_status: crate::models::SkillContractStatus::Unmanaged,
                         contract_digest: None,
                         purpose_summary: None,
+                        evaluation_cases: Vec::new(),
                     });
                 };
                 let contract_digest = skill
@@ -100,6 +101,12 @@ impl SkillSetService {
                         .as_ref()
                         .map(|contract| contract.purpose.summary.clone())
                         .filter(|summary| !summary.trim().is_empty()),
+                    evaluation_cases: skill
+                        .contract
+                        .contract
+                        .as_ref()
+                        .map(|contract| contract.evaluation.cases.clone())
+                        .unwrap_or_default(),
                 })
             })
             .collect()

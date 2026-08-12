@@ -213,6 +213,51 @@ impl StudioFeedbackService {
             .map_err(|error| format!("Failed to decode activation history: {error}"))
     }
 
+    pub fn evaluation_records(release_id: &str) -> Result<Vec<EvaluationRecord>, String> {
+        let release_id = release_id.trim();
+        if release_id.is_empty() {
+            return Err("Release id is required to query evaluations".to_string());
+        }
+        let conn = Self::open()?;
+        let mut statement = conn
+            .prepare("SELECT id,release_id,case_id,status,evidence_type,evidence_summary,project_id,work_scope,provider_id,created_at FROM studio_evaluation_records WHERE release_id=?1 ORDER BY created_at DESC LIMIT 100")
+            .map_err(|error| format!("Failed to query evaluation records: {error}"))?;
+        let rows = statement
+            .query_map(params![release_id], |row| {
+                let status = serde_json::from_value(serde_json::Value::String(row.get(3)?))
+                    .map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            3,
+                            rusqlite::types::Type::Text,
+                            Box::new(error),
+                        )
+                    })?;
+                let evidence_type = serde_json::from_value(serde_json::Value::String(row.get(4)?))
+                    .map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            4,
+                            rusqlite::types::Type::Text,
+                            Box::new(error),
+                        )
+                    })?;
+                Ok(EvaluationRecord {
+                    id: row.get(0)?,
+                    release_id: row.get(1)?,
+                    case_id: row.get(2)?,
+                    status,
+                    evidence_type,
+                    evidence_summary: row.get(5)?,
+                    project_id: row.get(6)?,
+                    work_scope: row.get(7)?,
+                    provider_id: row.get(8)?,
+                    created_at: row.get(9)?,
+                })
+            })
+            .map_err(|error| format!("Failed to read evaluation records: {error}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Failed to decode evaluation records: {error}"))
+    }
+
     pub fn release_health(release_id: &str) -> Result<ReleaseHealth, String> {
         let conn = Self::open()?;
         let target_kind = Self::text(&StudioFeedbackTargetKind::SkillSetRelease)?;
@@ -432,6 +477,26 @@ mod tests {
             let runs = StudioFeedbackService::activation_runs(Some("release-a")).unwrap();
             assert_eq!(runs.len(), 1);
             assert_eq!(runs[0].assignment_id, "assignment-a");
+        });
+    }
+
+    #[test]
+    fn evaluation_records_are_listed_per_release() {
+        with_temp_home(|_| {
+            StudioFeedbackService::record_evaluation(RecordEvaluationRequest {
+                release_id: "release-a".to_string(),
+                case_id: "skill-a::evaluations/happy-path.md".to_string(),
+                status: crate::models::EvaluationStatus::Passed,
+                evidence_type: StudioEvidenceType::EvaluationAssertion,
+                evidence_summary: "assertion passed".to_string(),
+                project_id: None,
+                work_scope: None,
+                provider_id: None,
+            })
+            .unwrap();
+            let records = StudioFeedbackService::evaluation_records("release-a").unwrap();
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0].case_id, "skill-a::evaluations/happy-path.md");
         });
     }
 }

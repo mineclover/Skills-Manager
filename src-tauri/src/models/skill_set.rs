@@ -16,6 +16,9 @@ pub struct SkillSetMemberSnapshot {
     pub contract_digest: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub purpose_summary: Option<String>,
+    /// Evaluation case identifiers frozen from the skill contract at release time.
+    #[serde(default)]
+    pub evaluation_cases: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -78,8 +78,8 @@ pub use skills::{
     scan_existing_skills, scan_skills_for_scope, set_preset_all, set_preset_skill,
 };
 pub use studio_feedback::{
-    get_release_health, get_studio_review_queue, list_activation_runs, record_release_evaluation,
-    record_studio_feedback,
+    get_release_health, get_studio_review_queue, list_activation_runs, list_release_evaluations,
+    record_release_evaluation, record_studio_feedback,
 };
 pub use sync::{check_sync_status, fix_sync_issues};
 pub use tools::{

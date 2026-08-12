@@ -32,3 +32,8 @@ pub fn get_studio_review_queue() -> Result<Vec<ReviewQueueItem>, String> {
 pub fn list_activation_runs(release_id: Option<String>) -> Result<Vec<ActivationRun>, String> {
     StudioFeedbackService::activation_runs(release_id.as_deref())
 }
+
+#[tauri::command]
+pub fn list_release_evaluations(release_id: String) -> Result<Vec<EvaluationRecord>, String> {
+    StudioFeedbackService::evaluation_records(&release_id)
+}

@@ -4,6 +4,8 @@ import { AlertTriangle, RefreshCw, ShieldAlert } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 import {
   ReleaseHealth,
+  EvaluationRecord,
+  EvaluationStatus,
   ReviewQueueItem,
   SkillSetRelease,
   SkillSetStore,
@@ -20,6 +22,10 @@ export function ReviewQueue() {
   const [evidenceType, setEvidenceType] =
     useState<StudioEvidenceType>("command_result");
   const [evidence, setEvidence] = useState("");
+  const [evaluationCaseId, setEvaluationCaseId] = useState("");
+  const [evaluationStatus, setEvaluationStatus] = useState<EvaluationStatus>("passed");
+  const [evaluationEvidence, setEvaluationEvidence] = useState("");
+  const [evaluations, setEvaluations] = useState<EvaluationRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -77,8 +83,52 @@ export function ReviewQueue() {
       }
     })();
 
+  const loadEvaluations = (selectedReleaseId: string) =>
+    void (async () => {
+      if (!selectedReleaseId) return;
+      try {
+        setEvaluations(
+          await invoke<EvaluationRecord[]>("list_release_evaluations", {
+            releaseId: selectedReleaseId,
+          }),
+        );
+      } catch (loadError) {
+        setError(String(loadError));
+      }
+    })();
+
+  const submitEvaluation = () =>
+    void (async () => {
+      setBusy(true);
+      setError(null);
+      try {
+        await invoke("record_release_evaluation", {
+          request: {
+            release_id: releaseId,
+            case_id: evaluationCaseId,
+            status: evaluationStatus,
+            evidence_type: evidenceType,
+            evidence_summary: evaluationEvidence,
+          },
+        });
+        setEvaluationEvidence("");
+        await loadEvaluations(releaseId);
+        await load();
+      } catch (submitError) {
+        setError(String(submitError));
+      } finally {
+        setBusy(false);
+      }
+    })();
+
   const releaseById = (id: string): SkillSetRelease | undefined =>
     catalog?.releases.find((release) => release.id === id);
+  const evaluationCases = (releaseById(releaseId)?.member_snapshots ?? []).flatMap((snapshot) =>
+    (snapshot.evaluation_cases ?? []).map((casePath) => ({
+      id: `${snapshot.skill_id}::${casePath}`,
+      label: `${snapshot.skill_id} · ${casePath}`,
+    })),
+  );
   return (
     <div className="h-full overflow-auto px-6 py-5">
       <PageHeader
@@ -150,7 +200,7 @@ export function ReviewQueue() {
             Release
             <select
               value={releaseId}
-              onChange={(event) => setReleaseId(event.target.value)}
+              onChange={(event) => { setReleaseId(event.target.value); setEvaluationCaseId(""); void loadEvaluations(event.target.value); }}
               className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
             >
               {catalog?.releases.map((release) => (
@@ -233,6 +283,32 @@ export function ReviewQueue() {
               </p>
             </div>
           )}
+          <div className="mt-5 border-t border-border pt-4">
+            <h3 className="text-sm font-semibold">Run a frozen evaluation case</h3>
+            <p className="mt-1 text-xs text-muted-foreground">Cases are copied from the contract when the release is frozen. Record a redacted assertion after running the case in the intended environment.</p>
+            <label className="mt-3 block text-xs font-medium">Evaluation case
+              <select value={evaluationCaseId} onChange={(event) => setEvaluationCaseId(event.target.value)} className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+                <option value="">Select frozen case</option>
+                {evaluationCases.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+              </select>
+            </label>
+            {evaluationCases.length === 0 && <p className="mt-2 text-xs text-warning">This release has no frozen evaluation cases. Create a new release after adding a managed contract.</p>}
+            <div className="mt-3 grid grid-cols-2 gap-2"><label className="text-xs font-medium">Result
+              <select value={evaluationStatus} onChange={(event) => setEvaluationStatus(event.target.value as EvaluationStatus)} className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+                {['passed', 'failed', 'blocked'].map((item) => <option key={item}>{item}</option>)}
+              </select>
+            </label><label className="text-xs font-medium">Evidence type
+              <select value={evidenceType} onChange={(event) => setEvidenceType(event.target.value as StudioEvidenceType)} className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+                {['command_result', 'evaluation_assertion', 'human_confirmation'].map((item) => <option key={item}>{item}</option>)}
+              </select>
+            </label></div>
+            <label className="mt-3 block text-xs font-medium">Redacted result summary
+              <textarea value={evaluationEvidence} onChange={(event) => setEvaluationEvidence(event.target.value)} className="mt-1 min-h-20 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" placeholder="e.g. happy path passed; assertion matched expected output" />
+            </label>
+            <button type="button" onClick={submitEvaluation} disabled={busy || !releaseId || !evaluationCaseId || !evaluationEvidence.trim()} className="mt-3 rounded-md border border-primary/50 px-3 py-2 text-xs font-medium text-primary disabled:opacity-50">Record evaluation</button>
+            <button type="button" onClick={() => loadEvaluations(releaseId)} disabled={busy || !releaseId} className="ml-2 rounded-md border border-border px-3 py-2 text-xs">View records</button>
+            {evaluations.length > 0 && <div className="mt-3 rounded-md bg-muted/50 p-3 text-xs"><strong>Recent evaluation records</strong><div className="mt-2 space-y-1">{evaluations.map((record) => <p key={record.id}>{record.status} · {record.case_id} <span className="text-muted-foreground">· {new Date(record.created_at * 1000).toLocaleString()}</span></p>)}</div></div>}
+          </div>
         </section>
       </div>
     </div>
