@@ -59,17 +59,17 @@ The UI and `skills-manager-inspect` use the same Rust service boundary. The inte
 
 ```bash
 # Global inspection (default)
-npm run inspect -- inspect --json
-npm run inspect -- providers --json
-npm run inspect -- bindings --json
+npm run inspect -- inspect -- --json
+npm run inspect -- providers -- --json
+npm run inspect -- bindings -- --json
 
 # Project inspection
-npm run inspect -- inspect --project <project-id> --json
-npm run inspect -- providers --project <project-id> --json
-npm run inspect -- bindings --project <project-id> --json
+npm run inspect -- inspect -- --project <project-id> --json
+npm run inspect -- providers -- --project <project-id> --json
+npm run inspect -- bindings -- --project <project-id> --json
 ```
 
-Use `npm run inspect -- --help` for mutation commands. The CLI and Tauri commands call the same `SkillControlService`, `ProviderInventoryService`, and workspace services; the CLI is not a second implementation of activation behavior.
+Use `npm run inspect -- -- --help` for the complete command list. The CLI and Tauri commands call the same `SkillControlService`, `ProviderInventoryService`, and workspace services; the CLI is not a second implementation of activation behavior.
 
 ## 1. Current baseline
 
@@ -88,8 +88,8 @@ Use `npm run inspect -- --help` for mutation commands. The CLI and Tauri command
 - `cargo test --manifest-path src-tauri\\Cargo.toml -- --test-threads=1`: passed, 316 tests.
 - `cargo fmt --manifest-path src-tauri\\Cargo.toml -- --check`: passed.
 - `npm test`: passed, 281 tests.
-- `npm run inspect -- providers --json`: passed for the global scope.
-- `npm run inspect -- providers --project <project-id> --json`: passed for an explicit project scope.
+- `npm run inspect -- providers -- --json`: passed for the global scope.
+- `npm run inspect -- providers -- --project <project-id> --json`: passed for an explicit project scope.
 - Five repo-local skill packages passed `quick_validate.py` with generated `agents/openai.yaml` metadata.
 - The latest inspector observed the Orca CLI but received a status timeout; the provider reports this as unavailable rather than as an empty local skill inventory.
 - The previous Vite font-reference, large-chunk, stale Browserslist, and Rust `editor_detector` warnings were fixed. A small set of non-blocking Rust visibility/dead-code warnings remains in the upstream-integrated code.

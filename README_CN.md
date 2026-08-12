@@ -33,9 +33,9 @@
 ## 📸 应用截图
 
 <p align="center">
-  <img src="https://image.freeourdays.com/sk1.png" alt="应用截图 1" ">
-  <img src="https://image.freeourdays.com/sk2.png" alt="应用截图 2" ">
-  <img src="https://image.freeourdays.com/sk3.png" alt="应用截图 3" ">
+  <img src="https://image.freeourdays.com/sk1.png" alt="应用截图 1">
+  <img src="https://image.freeourdays.com/sk2.png" alt="应用截图 2">
+  <img src="https://image.freeourdays.com/sk3.png" alt="应用截图 3">
 </p>
 
 ## 📥 下载安装
@@ -57,6 +57,27 @@
 1. **安装**：下载并运行对应平台的安装程序。
 2. **设置**：首次启动时，应用会引导您选择或创建技能存储目录。
 3. **同步**：应用会自动检测已安装的 AI 工具（如 Claude Code）并建立skills链接。
+
+## 🔎 控制面 CLI
+
+Rust CLI 使用与 UI 相同的 provider-aware 清单，可在不打开应用的情况下检查全局或
+项目级状态：
+
+```bash
+# 默认全局状态
+npm run inspect -- inspect -- --json
+npm run inspect -- providers -- --json
+npm run inspect -- bindings -- --json
+
+# 显式项目状态
+npm run inspect -- inspect -- --project <project-id> --json
+npm run inspect -- providers -- --project <project-id> --json
+npm run inspect -- bindings -- --project <project-id> --json
+```
+
+使用 `npm run inspect -- -- --help` 查看完整命令。变更技能状态的命令会作用于所选
+provider 和 scope；影响 shared root 时必须显式传入 `--confirm-shared`。执行
+`skill enable` 或 `skill disable` 前，请先使用 `skill preview` 确认影响范围。
 
 ## 🧭 仓库与开发文档
 

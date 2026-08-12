@@ -86,8 +86,8 @@ powershell -NoProfile -File tools/check-upstream.ps1 -PrepareIntegration
    npm run build
    cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
    cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
-   npm run inspect -- providers --json
-   npm run inspect -- bindings --json
+   npm run inspect -- providers -- --json
+   npm run inspect -- bindings -- --json
    git diff --check
    ```
 

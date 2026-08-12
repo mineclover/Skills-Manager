@@ -33,9 +33,9 @@ It uses a powerful **symlink synchronization mechanism**, allowing you to write 
 ## 📸 Screenshots
 
 <p align="center">
-    <img src="https://image.freeourdays.com/sk1.png" alt="应用截图 1" ">
-    <img src="https://image.freeourdays.com/sk2.png" alt="应用截图 2" ">
-    <img src="https://image.freeourdays.com/sk3.png" alt="应用截图 3" ">
+    <img src="https://image.freeourdays.com/sk1.png" alt="Application screenshot 1">
+    <img src="https://image.freeourdays.com/sk2.png" alt="Application screenshot 2">
+    <img src="https://image.freeourdays.com/sk3.png" alt="Application screenshot 3">
 </p>
 
 ## 📥 Download
@@ -58,23 +58,27 @@ If you encounter permission issues when syncing skills (symbolic link creation e
 2. **Setup**: On first launch, the app will guide you to select your skills storage directory.
 3. **Sync**: The app automatically detects installed AI tools (like Claude Code) and links your skills.
 
-## 🔎 Read-only Inspector
+## 🔎 Control-plane CLI
 
-The Rust inspector exposes the same control-plane inventory used by the UI, which is useful for checking global and project-specific state without opening the app:
+The Rust CLI exposes the same provider-aware inventory used by the UI. Use its
+read commands to inspect global or project-specific state without opening the app:
 
 ```bash
 # Global state (default)
-npm run inspect -- inspect --json
-npm run inspect -- providers --json
-npm run inspect -- bindings --json
+npm run inspect -- inspect -- --json
+npm run inspect -- providers -- --json
+npm run inspect -- bindings -- --json
 
 # Explicit project state
-npm run inspect -- inspect --project <project-id> --json
-npm run inspect -- providers --project <project-id> --json
-npm run inspect -- bindings --project <project-id> --json
+npm run inspect -- inspect -- --project <project-id> --json
+npm run inspect -- providers -- --project <project-id> --json
+npm run inspect -- bindings -- --project <project-id> --json
 ```
 
-Use `--help` for the complete read-only and mutation command list. Commands that can change skill state require the explicit `--confirm-shared` flag when a shared root would be affected.
+Run `npm run inspect -- -- --help` for the complete command list. Mutating commands
+operate on the selected provider and scope; when they affect a shared root, they
+require the explicit `--confirm-shared` flag. Start with `skill preview` before
+using `skill enable` or `skill disable`.
 
 ## 🧭 Repository & Development
 

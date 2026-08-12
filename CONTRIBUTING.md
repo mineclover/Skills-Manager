@@ -49,9 +49,9 @@ cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
 provider/scope를 변경했다면 다음도 확인합니다.
 
 ```powershell
-npm run inspect -- providers --json
-npm run inspect -- bindings --json
-npm run inspect -- inspect --project <project-id> --json
+npm run inspect -- providers -- --json
+npm run inspect -- bindings -- --json
+npm run inspect -- inspect -- --project <project-id> --json
 ```
 
 테스트는 임시 HOME/project fixture를 사용합니다. 실제 사용자 skill root나 설정을

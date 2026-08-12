@@ -34,7 +34,7 @@
 ## 구현 순서
 
 1. `src-tauri/src/services/`의 shared Rust service와 상태 전이를 먼저 구현합니다.
-2. Tauri command와 `skills-manager-inspect`가 같은 service를 호출하도록 연결합니다.
+2. Tauri command와 `skills-manager-inspect` CLI가 같은 service를 호출하도록 연결합니다.
 3. UI는 provider, scope, capability, operation report를 표시하고 service를 직접 우회하지 않습니다.
 4. 새로운 상태 전이마다 임시 HOME/project fixture 기반 테스트를 추가합니다.
 5. provider와 scope가 다른 상태를 하나의 boolean으로 축약하지 않습니다. `missing`,
@@ -90,20 +90,21 @@ cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
 git diff --check
 ```
 
-control-plane 변경은 다음 read-only smoke check도 실행합니다.
+control-plane 변경은 다음 read-only smoke check도 실행합니다. 상태를 변경하는 CLI
+명령은 shared root 영향과 `--confirm-shared` 요구 사항을 별도로 검토합니다.
 
 ```powershell
-npm run inspect -- providers --json
-npm run inspect -- bindings --json
-npm run inspect -- --help
+npm run inspect -- providers -- --json
+npm run inspect -- bindings -- --json
+npm run inspect -- -- --help
 ```
 
 project/provider 변경은 명시적인 project ID로 다시 확인합니다.
 
 ```powershell
-npm run inspect -- inspect --project <project-id> --json
-npm run inspect -- providers --project <project-id> --json
-npm run inspect -- bindings --project <project-id> --json
+npm run inspect -- inspect -- --project <project-id> --json
+npm run inspect -- providers -- --project <project-id> --json
+npm run inspect -- bindings -- --project <project-id> --json
 ```
 
 테스트는 실제 사용자의 `~/.skills-manager`, `.claude`, `.codex`를 변경하지 않고
