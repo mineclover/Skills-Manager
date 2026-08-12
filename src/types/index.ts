@@ -62,6 +62,15 @@ export interface SkillSetMember {
   skill_id: string;
 }
 
+export interface SkillSetMemberSnapshot {
+  skill_id: string;
+  source_path: string;
+  scope: SkillScope;
+  contract_status: SkillContractStatus;
+  contract_digest?: string | null;
+  purpose_summary?: string | null;
+}
+
 export interface SkillSetBlueprint {
   id: string;
   name: string;
@@ -79,6 +88,7 @@ export interface SkillSetRelease {
   label: string;
   content_digest: string;
   members: SkillSetMember[];
+  member_snapshots: SkillSetMemberSnapshot[];
   created_at: number;
 }
 

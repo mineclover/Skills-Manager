@@ -48,8 +48,8 @@ pub use skill_set::{
     ActivationPlanAction, AssignSkillSetReleaseRequest, CreateSkillSetBlueprintRequest,
     CreateSkillSetReleaseRequest, ReviewSkillSetBlueprintRequest,
     SetSkillSetAssignmentActiveRequest, SkillSetActivationApplyResult, SkillSetActivationOperation,
-    SkillSetActivationPlan, SkillSetAssignment, SkillSetBlueprint, SkillSetMember, SkillSetRelease,
-    SkillSetStore, UpdateSkillSetBlueprintRequest,
+    SkillSetActivationPlan, SkillSetAssignment, SkillSetBlueprint, SkillSetMember,
+    SkillSetMemberSnapshot, SkillSetRelease, SkillSetStore, UpdateSkillSetBlueprintRequest,
 };
 pub use studio_feedback::{
     ActivationRun, EvaluationRecord, EvaluationStatus, RecordEvaluationRequest,

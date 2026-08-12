@@ -9,8 +9,8 @@ use crate::models::{
     home_dir, ActivationPlanAction, AssignSkillSetReleaseRequest, CreateSkillSetBlueprintRequest,
     CreateSkillSetReleaseRequest, SetSkillSetAssignmentActiveRequest,
     SkillSetActivationApplyResult, SkillSetActivationOperation, SkillSetActivationPlan,
-    SkillSetAssignment, SkillSetBlueprint, SkillSetMember, SkillSetRelease, SkillSetStore,
-    UpdateSkillSetBlueprintRequest,
+    SkillSetAssignment, SkillSetBlueprint, SkillSetMember, SkillSetMemberSnapshot, SkillSetRelease,
+    SkillSetStore, UpdateSkillSetBlueprintRequest,
 };
 use crate::services::{ConfigManager, ScannerService, SkillControlService, StudioFeedbackService};
 
@@ -52,6 +52,56 @@ impl SkillSetService {
             return Err("A skill set must include at least one canonical skill id".to_string());
         }
         Ok(members)
+    }
+
+    fn snapshot_members(members: &[SkillSetMember]) -> Result<Vec<SkillSetMemberSnapshot>, String> {
+        let config = ConfigManager::new().load()?;
+        let skills = ScannerService::scan_scoped_skills(&config)?;
+        members
+            .iter()
+            .map(|member| {
+                let skill = skills
+                    .iter()
+                    .find(|skill| {
+                        skill.id == member.skill_id
+                            && matches!(skill.scope, crate::models::SkillScope::Global)
+                    })
+                    .or_else(|| skills.iter().find(|skill| skill.id == member.skill_id));
+                let Some(skill) = skill else {
+                    return Ok(SkillSetMemberSnapshot {
+                        skill_id: member.skill_id.clone(),
+                        source_path: format!("unresolved:{}", member.skill_id),
+                        scope: crate::models::SkillScope::Global,
+                        contract_status: crate::models::SkillContractStatus::Unmanaged,
+                        contract_digest: None,
+                        purpose_summary: None,
+                    });
+                };
+                let contract_digest = skill
+                    .contract
+                    .contract
+                    .as_ref()
+                    .map(|contract| {
+                        serde_json::to_vec(contract)
+                            .map(|bytes| format!("{:x}", Sha256::digest(bytes)))
+                            .map_err(|error| format!("Failed to snapshot contract: {error}"))
+                    })
+                    .transpose()?;
+                Ok(SkillSetMemberSnapshot {
+                    skill_id: member.skill_id.clone(),
+                    source_path: skill.path.to_string_lossy().to_string(),
+                    scope: skill.scope.clone(),
+                    contract_status: skill.contract.status.clone(),
+                    contract_digest,
+                    purpose_summary: skill
+                        .contract
+                        .contract
+                        .as_ref()
+                        .map(|contract| contract.purpose.summary.clone())
+                        .filter(|summary| !summary.trim().is_empty()),
+                })
+            })
+            .collect()
     }
 
     fn load() -> Result<SkillSetStore, String> {
@@ -203,6 +253,7 @@ impl SkillSetService {
         if blueprint.reviewed_at.is_none() {
             return Err("Review the blueprint before creating a release".to_string());
         }
+        let member_snapshots = Self::snapshot_members(&blueprint.members)?;
         let created_at = Self::now();
         let label = request.label.trim().to_string();
         let digest_input = serde_json::to_vec(&(&blueprint.id, &label, &blueprint.members))
@@ -215,6 +266,7 @@ impl SkillSetService {
             label,
             content_digest,
             members: blueprint.members,
+            member_snapshots,
             created_at,
         });
         Self::save(&store)?;
@@ -443,6 +495,11 @@ mod tests {
             .unwrap();
 
             assert_eq!(release.members.len(), 2);
+            assert_eq!(release.member_snapshots.len(), 2);
+            assert_eq!(
+                release.member_snapshots[0].source_path,
+                "unresolved:upstream"
+            );
             assert!(!release.content_digest.is_empty());
         });
     }

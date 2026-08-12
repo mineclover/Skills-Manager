@@ -7,6 +7,18 @@ pub struct SkillSetMember {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillSetMemberSnapshot {
+    pub skill_id: String,
+    pub source_path: String,
+    pub scope: crate::models::SkillScope,
+    pub contract_status: crate::models::SkillContractStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose_summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SkillSetBlueprint {
     pub id: String,
     pub name: String,
@@ -29,6 +41,9 @@ pub struct SkillSetRelease {
     /// SHA-256 digest of the frozen release content.
     pub content_digest: String,
     pub members: Vec<SkillSetMember>,
+    /// Source/contract state as it existed when this immutable release was created.
+    #[serde(default)]
+    pub member_snapshots: Vec<SkillSetMemberSnapshot>,
     pub created_at: i64,
 }
 
