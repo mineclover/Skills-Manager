@@ -29,6 +29,29 @@ still require human completion, and duplicate detection only flags candidates fo
 review. Existing presets remain separate legacy activation profiles and are never
 converted automatically.
 
+### Delivery tracker
+
+| Milestone | Status | Delivered evidence | Remaining for exit |
+| --- | --- | --- | --- |
+| 0 — Vocabulary and compatibility | Complete | Studio/Activation terminology, roadmap, and legacy presets remain separate. | Keep compatibility covered by regression checks. |
+| 1 — Skill Contract and managed status | Substantially complete | Sidecar parsing, validation, managed status, detail summary, editor entry point, and context-seeded draft. | Local metadata fallback and an explicit verified lifecycle label. |
+| 2 — Blueprint and Release | Substantially complete | Reviewed blueprints, immutable membership/contract/evaluation snapshots, and per-member scope policies. | Release notes and an explicit evaluation-summary view. |
+| 3 — Project Profiles and work scopes | Substantially complete | Default/recommended assignments, work-scope overlays, effective-set resolver, and blocking unresolved entries. | Dedicated Project Profile surface and assignment priority. |
+| 4 — Activation Control | Substantially complete | Provider-aware preview/apply, `SkillControlService` mutation boundary, drift, and bounded history. | Shared-root confirmation presentation and provider-level execution history. |
+| 5 — Feedback, evaluation, and health | In progress | Redacted feedback/evaluation records, health thresholds, Review Queue, safety visibility, and feedback-driven suggestions. | Project/work-scope/provider breakdowns, provider-level activation accounting, and contextual health views. |
+| 6 — Assisted authoring and improvement | In progress | Context-seeded contract drafts, duplicate candidate warning, and human-only feedback recommendations. | Project-context skill-set drafts and missing-requirement diagnostics. |
+
+### Next implementation sequence
+
+1. Store provider-level activation outcomes while preserving existing activation-run
+   records, then expose project/work-scope/provider health breakdowns.
+2. Add a Project Profile surface for default/recommended releases and explicit
+   priority ordering.
+3. Add release notes, evaluation summaries, missing-requirement diagnostics, and
+   human-reviewed skill-set draft assistance.
+4. Run the complete acceptance audit, including shared-root confirmation and
+   provider/CLI parity, before declaring the roadmap complete.
+
 ## 1. Product direction
 
 Skills Manager is a **skill management system**, not merely a switchboard for agent
