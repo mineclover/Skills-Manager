@@ -2,7 +2,7 @@ use crate::models::{
     AssignSkillSetReleaseRequest, CreateSkillSetBlueprintRequest, CreateSkillSetReleaseRequest,
     EffectiveSkillSet, ResolveEffectiveSkillSetRequest, ReviewSkillSetBlueprintRequest,
     SetSkillSetAssignmentActiveRequest, SkillSetActivationApplyResult, SkillSetActivationPlan,
-    SkillSetStore, UpdateSkillSetBlueprintRequest,
+    SkillSetDriftReport, SkillSetStore, UpdateSkillSetBlueprintRequest,
 };
 use crate::services::SkillSetService;
 
@@ -75,6 +75,11 @@ pub fn preview_skill_set_activation(
     assignment_id: String,
 ) -> Result<SkillSetActivationPlan, String> {
     SkillSetService::preview_activation(&assignment_id)
+}
+
+#[tauri::command]
+pub fn get_skill_set_drift(assignment_id: String) -> Result<SkillSetDriftReport, String> {
+    SkillSetService::inspect_drift(&assignment_id)
 }
 
 #[tauri::command]

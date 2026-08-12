@@ -10,8 +10,8 @@ use crate::models::{
     CreateSkillSetReleaseRequest, EffectiveSkillSet, EffectiveSkillSetMember,
     ResolveEffectiveSkillSetRequest, SetSkillSetAssignmentActiveRequest,
     SkillSetActivationApplyResult, SkillSetActivationOperation, SkillSetActivationPlan,
-    SkillSetAssignment, SkillSetBlueprint, SkillSetMember, SkillSetMemberSnapshot, SkillSetRelease,
-    SkillSetStore, UpdateSkillSetBlueprintRequest,
+    SkillSetAssignment, SkillSetBlueprint, SkillSetDriftReport, SkillSetMember,
+    SkillSetMemberSnapshot, SkillSetRelease, SkillSetStore, UpdateSkillSetBlueprintRequest,
 };
 use crate::services::{ConfigManager, ScannerService, SkillControlService, StudioFeedbackService};
 
@@ -474,6 +474,26 @@ impl SkillSetService {
             work_scope: assignment.work_scope.clone(),
             operations,
             missing_skill_ids,
+            generated_at: Self::now(),
+        })
+    }
+
+    pub fn inspect_drift(assignment_id: &str) -> Result<SkillSetDriftReport, String> {
+        let plan = Self::preview_activation(assignment_id)?;
+        let disabled_operations = plan
+            .operations
+            .iter()
+            .filter(|operation| operation.action == ActivationPlanAction::Enable)
+            .cloned()
+            .collect::<Vec<_>>();
+        Ok(SkillSetDriftReport {
+            assignment_id: plan.assignment_id,
+            release_id: plan.release_id,
+            project_id: plan.project_id,
+            work_scope: plan.work_scope,
+            compliant: disabled_operations.is_empty() && plan.missing_skill_ids.is_empty(),
+            disabled_operations,
+            missing_skill_ids: plan.missing_skill_ids,
             generated_at: Self::now(),
         })
     }

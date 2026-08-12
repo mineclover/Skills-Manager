@@ -140,6 +140,29 @@ export interface SkillSetActivationApplyResult {
   failures: string[];
 }
 
+export interface SkillSetDriftReport {
+  assignment_id: string;
+  release_id: string;
+  project_id?: string | null;
+  work_scope: string;
+  disabled_operations: SkillSetActivationOperation[];
+  missing_skill_ids: string[];
+  compliant: boolean;
+  generated_at: number;
+}
+
+export interface ActivationRun {
+  id: string;
+  assignment_id: string;
+  release_id: string;
+  project_id?: string | null;
+  work_scope: string;
+  applied_count: number;
+  skipped_count: number;
+  failed_count: number;
+  created_at: number;
+}
+
 export interface EffectiveSkillSetMember {
   skill_id: string;
   skill_instance_id?: string | null;

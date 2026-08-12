@@ -66,8 +66,9 @@ pub use skill_packages::{
 pub use skill_sets::{
     apply_skill_set_activation, assign_skill_set_release, create_skill_set_blueprint,
     create_skill_set_release, delete_skill_set_assignment, delete_skill_set_blueprint,
-    get_skill_set_catalog, preview_skill_set_activation, resolve_effective_skill_set,
-    review_skill_set_blueprint, set_skill_set_assignment_active, update_skill_set_blueprint,
+    get_skill_set_catalog, get_skill_set_drift, preview_skill_set_activation,
+    resolve_effective_skill_set, review_skill_set_blueprint, set_skill_set_assignment_active,
+    update_skill_set_blueprint,
 };
 pub use skill_transfer::{export_skills, import_skills, preview_import_skills};
 pub use skills::{
@@ -77,7 +78,8 @@ pub use skills::{
     scan_existing_skills, scan_skills_for_scope, set_preset_all, set_preset_skill,
 };
 pub use studio_feedback::{
-    get_release_health, get_studio_review_queue, record_release_evaluation, record_studio_feedback,
+    get_release_health, get_studio_review_queue, list_activation_runs, record_release_evaluation,
+    record_studio_feedback,
 };
 pub use sync::{check_sync_status, fix_sync_issues};
 pub use tools::{

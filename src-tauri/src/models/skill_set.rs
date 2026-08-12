@@ -171,6 +171,19 @@ pub struct SkillSetActivationPlan {
     pub generated_at: i64,
 }
 
+/// Read-only comparison between an active assignment and its current provider bindings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillSetDriftReport {
+    pub assignment_id: String,
+    pub release_id: String,
+    pub project_id: Option<String>,
+    pub work_scope: String,
+    pub disabled_operations: Vec<SkillSetActivationOperation>,
+    pub missing_skill_ids: Vec<String>,
+    pub compliant: bool,
+    pub generated_at: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SkillSetActivationApplyResult {
     pub plan: SkillSetActivationPlan,

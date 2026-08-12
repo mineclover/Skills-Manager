@@ -180,6 +180,39 @@ impl StudioFeedbackService {
         Ok(run)
     }
 
+    /// Returns recent activation attempts without exposing command output or provider secrets.
+    pub fn activation_runs(release_id: Option<&str>) -> Result<Vec<ActivationRun>, String> {
+        let conn = Self::open()?;
+        let query = if release_id.is_some() {
+            "SELECT id,assignment_id,release_id,project_id,work_scope,applied_count,skipped_count,failed_count,created_at FROM studio_activation_runs WHERE release_id=?1 ORDER BY created_at DESC LIMIT 50"
+        } else {
+            "SELECT id,assignment_id,release_id,project_id,work_scope,applied_count,skipped_count,failed_count,created_at FROM studio_activation_runs ORDER BY created_at DESC LIMIT 50"
+        };
+        let mut statement = conn
+            .prepare(query)
+            .map_err(|error| format!("Failed to query activation history: {error}"))?;
+        let read_row = |row: &rusqlite::Row<'_>| {
+            Ok(ActivationRun {
+                id: row.get(0)?,
+                assignment_id: row.get(1)?,
+                release_id: row.get(2)?,
+                project_id: row.get(3)?,
+                work_scope: row.get(4)?,
+                applied_count: row.get(5)?,
+                skipped_count: row.get(6)?,
+                failed_count: row.get(7)?,
+                created_at: row.get(8)?,
+            })
+        };
+        let rows = match release_id {
+            Some(release_id) => statement.query_map(params![release_id], read_row),
+            None => statement.query_map([], read_row),
+        }
+        .map_err(|error| format!("Failed to read activation history: {error}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Failed to decode activation history: {error}"))
+    }
+
     pub fn release_health(release_id: &str) -> Result<ReleaseHealth, String> {
         let conn = Self::open()?;
         let target_kind = Self::text(&StudioFeedbackTargetKind::SkillSetRelease)?;
@@ -370,6 +403,35 @@ mod tests {
                     .status,
                 StudioHealthStatus::NeedsReview
             );
+        });
+    }
+
+    #[test]
+    fn activation_history_can_be_filtered_by_release() {
+        with_temp_home(|_| {
+            StudioFeedbackService::record_activation_run(
+                "assignment-a",
+                "release-a",
+                None,
+                "integration",
+                2,
+                1,
+                0,
+            )
+            .unwrap();
+            StudioFeedbackService::record_activation_run(
+                "assignment-b",
+                "release-b",
+                None,
+                "deployment",
+                1,
+                0,
+                0,
+            )
+            .unwrap();
+            let runs = StudioFeedbackService::activation_runs(Some("release-a")).unwrap();
+            assert_eq!(runs.len(), 1);
+            assert_eq!(runs[0].assignment_id, "assignment-a");
         });
     }
 }
