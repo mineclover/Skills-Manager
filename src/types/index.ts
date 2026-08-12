@@ -60,6 +60,7 @@ export interface SkillContractSummary {
 
 export interface SkillSetMember {
   skill_id: string;
+  scope_policy: "global" | "project" | "project_then_global" | "tool_local";
 }
 
 export interface SkillSetMemberSnapshot {
@@ -167,6 +168,7 @@ export interface ActivationRun {
 
 export interface EffectiveSkillSetMember {
   skill_id: string;
+  scope_policy: "global" | "project" | "project_then_global" | "tool_local";
   skill_instance_id?: string | null;
   included_by_release_ids: string[];
 }

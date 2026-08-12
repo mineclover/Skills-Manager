@@ -11,8 +11,8 @@ use crate::models::{
     ResolveEffectiveSkillSetRequest, SetSkillSetAssignmentActiveRequest,
     SkillSetActivationApplyResult, SkillSetActivationOperation, SkillSetActivationPlan,
     SkillSetAssignment, SkillSetAssignmentRole, SkillSetBlueprint, SkillSetDriftReport,
-    SkillSetMember, SkillSetMemberSnapshot, SkillSetRelease, SkillSetStore,
-    UpdateSkillSetBlueprintRequest,
+    SkillSetMember, SkillSetMemberScopePolicy, SkillSetMemberSnapshot, SkillSetRelease,
+    SkillSetStore, UpdateSkillSetBlueprintRequest,
 };
 use crate::services::{ConfigManager, ScannerService, SkillControlService, StudioFeedbackService};
 
@@ -36,7 +36,10 @@ impl SkillSetService {
             .unwrap_or(0)
     }
 
-    fn normalize_members(skill_ids: Vec<String>) -> Result<Vec<SkillSetMember>, String> {
+    fn normalize_members(
+        skill_ids: Vec<String>,
+        member_scope_policies: std::collections::HashMap<String, SkillSetMemberScopePolicy>,
+    ) -> Result<Vec<SkillSetMember>, String> {
         let mut members = Vec::new();
         for skill_id in skill_ids {
             let skill_id = skill_id.trim().to_string();
@@ -47,7 +50,14 @@ impl SkillSetService {
                 .iter()
                 .any(|member: &SkillSetMember| member.skill_id == skill_id)
             {
-                members.push(SkillSetMember { skill_id });
+                let scope_policy = member_scope_policies
+                    .get(&skill_id)
+                    .cloned()
+                    .unwrap_or_default();
+                members.push(SkillSetMember {
+                    skill_id,
+                    scope_policy,
+                });
             }
         }
         if members.is_empty() {
@@ -56,22 +66,37 @@ impl SkillSetService {
         Ok(members)
     }
 
+    fn resolve_member<'a>(
+        skills: &'a [crate::models::Skill],
+        member: &SkillSetMember,
+    ) -> Option<&'a crate::models::Skill> {
+        let matching = |scope| {
+            skills
+                .iter()
+                .find(|skill| skill.id == member.skill_id && skill.scope == scope)
+        };
+        match member.scope_policy {
+            SkillSetMemberScopePolicy::Global => matching(crate::models::SkillScope::Global),
+            SkillSetMemberScopePolicy::Project => matching(crate::models::SkillScope::Project),
+            SkillSetMemberScopePolicy::ProjectThenGlobal => {
+                matching(crate::models::SkillScope::Project)
+                    .or_else(|| matching(crate::models::SkillScope::Global))
+            }
+            SkillSetMemberScopePolicy::ToolLocal => matching(crate::models::SkillScope::Tool),
+        }
+    }
+
     fn snapshot_members(members: &[SkillSetMember]) -> Result<Vec<SkillSetMemberSnapshot>, String> {
         let config = ConfigManager::new().load()?;
         let skills = ScannerService::scan_scoped_skills(&config)?;
         members
             .iter()
             .map(|member| {
-                let skill = skills
-                    .iter()
-                    .find(|skill| {
-                        skill.id == member.skill_id
-                            && matches!(skill.scope, crate::models::SkillScope::Global)
-                    })
-                    .or_else(|| skills.iter().find(|skill| skill.id == member.skill_id));
+                let skill = Self::resolve_member(&skills, member);
                 let Some(skill) = skill else {
                     return Ok(SkillSetMemberSnapshot {
                         skill_id: member.skill_id.clone(),
+                        scope_policy: member.scope_policy.clone(),
                         source_path: format!("unresolved:{}", member.skill_id),
                         scope: crate::models::SkillScope::Global,
                         contract_status: crate::models::SkillContractStatus::Unmanaged,
@@ -92,6 +117,7 @@ impl SkillSetService {
                     .transpose()?;
                 Ok(SkillSetMemberSnapshot {
                     skill_id: member.skill_id.clone(),
+                    scope_policy: member.scope_policy.clone(),
                     source_path: skill.path.to_string_lossy().to_string(),
                     scope: skill.scope.clone(),
                     contract_status: skill.contract.status.clone(),
@@ -179,7 +205,7 @@ impl SkillSetService {
             id: format!("set-{}", Uuid::new_v4()),
             name,
             description: request.description.trim().to_string(),
-            members: Self::normalize_members(request.skill_ids)?,
+            members: Self::normalize_members(request.skill_ids, request.member_scope_policies)?,
             created_at: now,
             updated_at: now,
             reviewed_at: None,
@@ -195,7 +221,7 @@ impl SkillSetService {
         if name.is_empty() {
             return Err("Skill set name is required".to_string());
         }
-        let members = Self::normalize_members(request.skill_ids)?;
+        let members = Self::normalize_members(request.skill_ids, request.member_scope_policies)?;
         let mut store = Self::load()?;
         if store.blueprints.iter().any(|blueprint| {
             blueprint.id != request.blueprint_id && blueprint.name.eq_ignore_ascii_case(&name)
@@ -394,20 +420,22 @@ impl SkillSetService {
                 })?;
             release_ids.push(release.id.clone());
             for member in &release.members {
-                let instance_id = skills
-                    .iter()
-                    .find(|skill| skill.id == member.skill_id)
-                    .map(|skill| skill.instance_id.clone());
-                if instance_id.is_none() && !unresolved_skill_ids.contains(&member.skill_id) {
-                    unresolved_skill_ids.push(member.skill_id.clone());
+                let instance_id =
+                    Self::resolve_member(&skills, member).map(|skill| skill.instance_id.clone());
+                let unresolved_key =
+                    format!("{} ({:?})", member.skill_id, member.scope_policy).to_lowercase();
+                if instance_id.is_none() && !unresolved_skill_ids.contains(&unresolved_key) {
+                    unresolved_skill_ids.push(unresolved_key);
                 }
-                let entry = by_skill.entry(member.skill_id.clone()).or_insert_with(|| {
-                    EffectiveSkillSetMember {
+                let entry_key = format!("{}:{:?}", member.skill_id, member.scope_policy);
+                let entry = by_skill
+                    .entry(entry_key)
+                    .or_insert_with(|| EffectiveSkillSetMember {
                         skill_id: member.skill_id.clone(),
+                        scope_policy: member.scope_policy.clone(),
                         skill_instance_id: instance_id.clone(),
                         included_by_release_ids: Vec::new(),
-                    }
-                });
+                    });
                 if entry.skill_instance_id.is_none() {
                     entry.skill_instance_id = instance_id;
                 }
@@ -455,8 +483,10 @@ impl SkillSetService {
         let mut operations = Vec::new();
         let mut missing_skill_ids = Vec::new();
         for member in &release.members {
-            let Some(skill) = skills.iter().find(|skill| skill.id == member.skill_id) else {
-                missing_skill_ids.push(member.skill_id.clone());
+            let Some(skill) = Self::resolve_member(&skills, member) else {
+                missing_skill_ids.push(
+                    format!("{} ({:?})", member.skill_id, member.scope_policy).to_lowercase(),
+                );
                 continue;
             };
             for tool_id in &assignment.provider_ids {
@@ -574,6 +604,7 @@ mod tests {
     use super::*;
     use crate::models::ProjectBinding;
     use crate::test_support::with_temp_home;
+    use std::collections::HashMap;
 
     #[test]
     fn release_is_immutable_snapshot_of_blueprint_members() {
@@ -582,6 +613,7 @@ mod tests {
                 name: "Integration".to_string(),
                 description: String::new(),
                 skill_ids: vec!["upstream".to_string(), "testing".to_string()],
+                member_scope_policies: Default::default(),
             })
             .unwrap();
             let blueprint_id = created.blueprints[0].id.clone();
@@ -598,6 +630,7 @@ mod tests {
                 name: "Integration".to_string(),
                 description: String::new(),
                 skill_ids: vec!["upstream".to_string()],
+                member_scope_policies: Default::default(),
             })
             .unwrap();
 
@@ -612,12 +645,32 @@ mod tests {
     }
 
     #[test]
+    fn member_scope_policy_is_preserved_and_defaults_safely() {
+        let mut policies = HashMap::new();
+        policies.insert(
+            "project-only".to_string(),
+            SkillSetMemberScopePolicy::Project,
+        );
+        let members = SkillSetService::normalize_members(
+            vec!["project-only".to_string(), "fallback".to_string()],
+            policies,
+        )
+        .unwrap();
+        assert_eq!(members[0].scope_policy, SkillSetMemberScopePolicy::Project);
+        assert_eq!(
+            members[1].scope_policy,
+            SkillSetMemberScopePolicy::ProjectThenGlobal
+        );
+    }
+
+    #[test]
     fn assignment_can_be_deactivated_without_mutating_release() {
         with_temp_home(|_| {
             let store = SkillSetService::create_blueprint(CreateSkillSetBlueprintRequest {
                 name: "Review".to_string(),
                 description: String::new(),
                 skill_ids: vec!["review".to_string()],
+                member_scope_policies: Default::default(),
             })
             .unwrap();
             SkillSetService::review_blueprint(&store.blueprints[0].id).unwrap();
@@ -655,6 +708,7 @@ mod tests {
                 name: "Draft".to_string(),
                 description: String::new(),
                 skill_ids: vec!["draft-skill".to_string()],
+                member_scope_policies: Default::default(),
             })
             .unwrap();
             assert!(
@@ -686,6 +740,7 @@ mod tests {
                 name: "Global overlay".to_string(),
                 description: String::new(),
                 skill_ids: vec!["shared".to_string()],
+                member_scope_policies: Default::default(),
             })
             .unwrap();
             SkillSetService::review_blueprint(&store.blueprints[0].id).unwrap();
@@ -699,6 +754,7 @@ mod tests {
                 name: "Project overlay".to_string(),
                 description: String::new(),
                 skill_ids: vec!["shared".to_string(), "project-only".to_string()],
+                member_scope_policies: Default::default(),
             })
             .unwrap();
             let project_blueprint_id = store

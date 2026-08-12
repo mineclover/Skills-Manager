@@ -1,14 +1,33 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillSetMemberScopePolicy {
+    Global,
+    Project,
+    ProjectThenGlobal,
+    ToolLocal,
+}
+
+impl Default for SkillSetMemberScopePolicy {
+    fn default() -> Self {
+        Self::ProjectThenGlobal
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SkillSetMember {
     /// Canonical skill identity. Activation bindings remain provider- and scope-specific.
     pub skill_id: String,
+    #[serde(default)]
+    pub scope_policy: SkillSetMemberScopePolicy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SkillSetMemberSnapshot {
     pub skill_id: String,
+    #[serde(default)]
+    pub scope_policy: SkillSetMemberScopePolicy,
     pub source_path: String,
     pub scope: crate::models::SkillScope,
     pub contract_status: crate::models::SkillContractStatus,
@@ -98,6 +117,9 @@ pub struct CreateSkillSetBlueprintRequest {
     #[serde(default)]
     pub description: String,
     pub skill_ids: Vec<String>,
+    /// Per-member scope preference. Omitted members retain `project_then_global`.
+    #[serde(default)]
+    pub member_scope_policies: std::collections::HashMap<String, SkillSetMemberScopePolicy>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -107,6 +129,8 @@ pub struct UpdateSkillSetBlueprintRequest {
     #[serde(default)]
     pub description: String,
     pub skill_ids: Vec<String>,
+    #[serde(default)]
+    pub member_scope_policies: std::collections::HashMap<String, SkillSetMemberScopePolicy>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -149,6 +173,7 @@ pub struct ResolveEffectiveSkillSetRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EffectiveSkillSetMember {
     pub skill_id: String,
+    pub scope_policy: SkillSetMemberScopePolicy,
     pub skill_instance_id: Option<String>,
     pub included_by_release_ids: Vec<String>,
 }

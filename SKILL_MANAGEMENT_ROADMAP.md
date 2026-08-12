@@ -23,10 +23,10 @@ desktop application:
 - redacted feedback/evaluation records, release health, a Review Queue, and
   human-only improvement suggestions derived from repeated feedback.
 
-This does not yet mark every roadmap milestone complete. In particular, member
-scope-policy authoring, per-project/provider health breakdowns, duplicate-skill
-detection, and generated authoring drafts remain follow-up work. Existing presets
-remain separate legacy activation profiles and are never converted automatically.
+This does not yet mark every roadmap milestone complete. Per-project/provider
+health breakdowns, duplicate-skill detection, and generated authoring drafts remain
+follow-up work. Existing presets remain separate legacy activation profiles and are
+never converted automatically.
 
 ## 1. Product direction
 
