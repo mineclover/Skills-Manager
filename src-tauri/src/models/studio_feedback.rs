@@ -145,3 +145,15 @@ pub struct ReviewQueueItem {
     pub reason: ReviewReason,
     pub detail: String,
 }
+
+/// A human-actionable recommendation derived from repeated, evidence-backed outcomes.
+/// Suggestions never mutate a contract, release, or provider binding.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReleaseImprovementSuggestion {
+    pub release_id: String,
+    pub code: StudioFeedbackCode,
+    pub occurrence_count: u64,
+    pub title: String,
+    pub rationale: String,
+    pub suggested_action: String,
+}

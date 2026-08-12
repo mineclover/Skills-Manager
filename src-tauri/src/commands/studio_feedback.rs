@@ -1,6 +1,6 @@
 use crate::models::{
     ActivationRun, EvaluationRecord, RecordEvaluationRequest, RecordStudioFeedbackRequest,
-    ReleaseHealth, ReviewQueueItem, StudioFeedbackEvent,
+    ReleaseHealth, ReleaseImprovementSuggestion, ReviewQueueItem, StudioFeedbackEvent,
 };
 use crate::services::StudioFeedbackService;
 
@@ -36,4 +36,11 @@ pub fn list_activation_runs(release_id: Option<String>) -> Result<Vec<Activation
 #[tauri::command]
 pub fn list_release_evaluations(release_id: String) -> Result<Vec<EvaluationRecord>, String> {
     StudioFeedbackService::evaluation_records(&release_id)
+}
+
+#[tauri::command]
+pub fn get_release_improvement_suggestions(
+    release_id: String,
+) -> Result<Vec<ReleaseImprovementSuggestion>, String> {
+    StudioFeedbackService::improvement_suggestions(&release_id)
 }

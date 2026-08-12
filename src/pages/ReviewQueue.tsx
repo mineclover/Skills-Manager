@@ -6,6 +6,7 @@ import {
   ReleaseHealth,
   EvaluationRecord,
   EvaluationStatus,
+  ReleaseImprovementSuggestion,
   ReviewQueueItem,
   SkillSetRelease,
   SkillSetStore,
@@ -26,6 +27,7 @@ export function ReviewQueue() {
   const [evaluationStatus, setEvaluationStatus] = useState<EvaluationStatus>("passed");
   const [evaluationEvidence, setEvaluationEvidence] = useState("");
   const [evaluations, setEvaluations] = useState<EvaluationRecord[]>([]);
+  const [suggestions, setSuggestions] = useState<ReleaseImprovementSuggestion[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -118,6 +120,21 @@ export function ReviewQueue() {
         setError(String(submitError));
       } finally {
         setBusy(false);
+      }
+    })();
+
+  const loadSuggestions = (selectedReleaseId: string) =>
+    void (async () => {
+      if (!selectedReleaseId) return;
+      try {
+        setSuggestions(
+          await invoke<ReleaseImprovementSuggestion[]>(
+            "get_release_improvement_suggestions",
+            { releaseId: selectedReleaseId },
+          ),
+        );
+      } catch (loadError) {
+        setError(String(loadError));
       }
     })();
 
@@ -283,6 +300,10 @@ export function ReviewQueue() {
               </p>
             </div>
           )}
+          <div className="mt-4 rounded-md border border-border p-3 text-xs">
+            <div className="flex items-center justify-between gap-3"><div><strong>Feedback-informed suggestions</strong><p className="mt-1 text-muted-foreground">Repeated, evidence-backed outcomes only. Suggestions never edit a release or binding.</p></div><button type="button" onClick={() => loadSuggestions(releaseId)} disabled={busy || !releaseId} className="rounded border border-border px-2 py-1">Generate</button></div>
+            {suggestions.length > 0 && <div className="mt-3 space-y-2">{suggestions.map((suggestion) => <article key={suggestion.code} className="rounded bg-muted/50 p-2"><p className="font-medium">{suggestion.title} <span className="text-muted-foreground">({suggestion.occurrence_count})</span></p><p className="mt-1 text-muted-foreground">{suggestion.rationale}</p><p className="mt-1">Next: {suggestion.suggested_action}</p></article>)}</div>}
+          </div>
           <div className="mt-5 border-t border-border pt-4">
             <h3 className="text-sm font-semibold">Run a frozen evaluation case</h3>
             <p className="mt-1 text-xs text-muted-foreground">Cases are copied from the contract when the release is frozen. Record a redacted assertion after running the case in the intended environment.</p>

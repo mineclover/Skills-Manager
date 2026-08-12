@@ -343,6 +343,71 @@ impl StudioFeedbackService {
         })
     }
 
+    pub fn improvement_suggestions(
+        release_id: &str,
+    ) -> Result<Vec<crate::models::ReleaseImprovementSuggestion>, String> {
+        let release_id = release_id.trim();
+        if release_id.is_empty() {
+            return Err("Release id is required to generate improvement suggestions".to_string());
+        }
+        let conn = Self::open()?;
+        let target_kind = Self::text(&StudioFeedbackTargetKind::SkillSetRelease)?;
+        let mut statement = conn
+            .prepare("SELECT code, COUNT(*) FROM studio_feedback_events WHERE target_kind=?1 AND target_id=?2 GROUP BY code")
+            .map_err(|error| format!("Failed to query improvement suggestions: {error}"))?;
+        let rows = statement
+            .query_map(params![target_kind, release_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
+            })
+            .map_err(|error| format!("Failed to read improvement suggestions: {error}"))?;
+        let mut suggestions = Vec::new();
+        for row in rows {
+            let (raw_code, occurrence_count) =
+                row.map_err(|error| format!("Failed to decode improvement suggestions: {error}"))?;
+            let code = serde_json::from_value(serde_json::Value::String(raw_code))
+                .map_err(|error| format!("Invalid feedback code in Studio history: {error}"))?;
+            let details = match code {
+                StudioFeedbackCode::InstructionGap if occurrence_count >= 2 => Some((
+                    "Clarify the usage guide",
+                    "Repeated instruction gaps indicate the documented procedure is ambiguous or incomplete.",
+                    "Review the skill guide and add an explicit decision point, prerequisite, or verification step.",
+                )),
+                StudioFeedbackCode::DependencyGap if occurrence_count >= 2 => Some((
+                    "Document missing requirements",
+                    "Repeated dependency gaps indicate an undeclared runtime, library, provider, or project signal.",
+                    "Update requirements and verification guidance, then create a reviewed replacement release.",
+                )),
+                StudioFeedbackCode::WrongScope if occurrence_count >= 2 => Some((
+                    "Refine scope boundaries",
+                    "Repeated scope mismatches indicate the set is being selected for work it should not own.",
+                    "Tighten use_when and avoid_when guidance, or split this workflow into a separate skill set.",
+                )),
+                StudioFeedbackCode::Failed if occurrence_count >= 2 => Some((
+                    "Strengthen evaluation coverage",
+                    "Repeated failures require an explicit reproduction and regression case before further recommendation.",
+                    "Add a failing evaluation case and verification evidence, then review a new release.",
+                )),
+                StudioFeedbackCode::SafetyConcern if occurrence_count >= 1 => Some((
+                    "Resolve safety concern before reuse",
+                    "A safety concern is never hidden by aggregate health metrics.",
+                    "Pause recommendation, review the safety boundary, and capture human confirmation before creating a successor release.",
+                )),
+                _ => None,
+            };
+            if let Some((title, rationale, suggested_action)) = details {
+                suggestions.push(crate::models::ReleaseImprovementSuggestion {
+                    release_id: release_id.to_string(),
+                    code,
+                    occurrence_count,
+                    title: title.to_string(),
+                    rationale: rationale.to_string(),
+                    suggested_action: suggested_action.to_string(),
+                });
+            }
+        }
+        Ok(suggestions)
+    }
+
     pub fn review_queue() -> Result<Vec<ReviewQueueItem>, String> {
         let catalog = SkillSetService::catalog()?;
         let mut queue = Vec::new();
@@ -497,6 +562,23 @@ mod tests {
             let records = StudioFeedbackService::evaluation_records("release-a").unwrap();
             assert_eq!(records.len(), 1);
             assert_eq!(records[0].case_id, "skill-a::evaluations/happy-path.md");
+        });
+    }
+
+    #[test]
+    fn repeated_feedback_generates_human_review_suggestions() {
+        with_temp_home(|_| {
+            for _ in 0..2 {
+                StudioFeedbackService::record_feedback(request(
+                    StudioFeedbackCode::InstructionGap,
+                    "missing decision branch",
+                ))
+                .unwrap();
+            }
+            let suggestions = StudioFeedbackService::improvement_suggestions("release-a").unwrap();
+            assert_eq!(suggestions.len(), 1);
+            assert_eq!(suggestions[0].code, StudioFeedbackCode::InstructionGap);
+            assert_eq!(suggestions[0].occurrence_count, 2);
         });
     }
 }

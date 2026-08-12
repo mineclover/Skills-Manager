@@ -202,6 +202,15 @@ export interface ReleaseHealth {
 
 export interface ReviewQueueItem { release_id: string; reason: ReviewReason; detail: string; }
 
+export interface ReleaseImprovementSuggestion {
+  release_id: string;
+  code: StudioFeedbackCode;
+  occurrence_count: number;
+  title: string;
+  rationale: string;
+  suggested_action: string;
+}
+
 export type EvaluationStatus = "passed" | "failed" | "blocked";
 
 export interface EvaluationRecord {
