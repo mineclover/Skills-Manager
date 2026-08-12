@@ -11,6 +11,7 @@ import {
   SkillSetBlueprint,
   SkillSetRelease,
   SkillSetStore,
+  EffectiveSkillSet,
 } from "@/types";
 
 const emptyStore: SkillSetStore = {
@@ -31,6 +32,7 @@ export function SkillSets() {
   const [assignmentProjectId, setAssignmentProjectId] = useState("");
   const [providerIds, setProviderIds] = useState("");
   const [plan, setPlan] = useState<SkillSetActivationPlan | null>(null);
+  const [effectiveSet, setEffectiveSet] = useState<EffectiveSkillSet | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -118,6 +120,13 @@ export function SkillSets() {
     finally { setBusy(false); }
   })();
 
+  const resolveEffectiveSet = () => void (async () => {
+    setBusy(true); setError(null);
+    try { setEffectiveSet(await invoke<EffectiveSkillSet>("resolve_effective_skill_set", { request: { project_id: assignmentProjectId || null, work_scope: assignmentScope } })); }
+    catch (resolveError) { setError(String(resolveError)); }
+    finally { setBusy(false); }
+  })();
+
   return (
     <div className="h-full overflow-auto px-6 py-5">
       <PageHeader
@@ -178,6 +187,7 @@ export function SkillSets() {
           <div className="rounded-lg border border-border bg-card p-4">
             <h2 className="text-sm font-semibold">Frozen releases and assignments</h2>
             <div className="mt-3 grid gap-2 sm:grid-cols-3"><label className="text-xs font-medium">Project<select value={assignmentProjectId} onChange={(event) => setAssignmentProjectId(event.target.value)} className="mt-1 w-full rounded-md border border-input bg-background px-2 py-2 text-sm"><option value="">Global / no project</option>{(config?.projects ?? []).map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><label className="text-xs font-medium">Work scope<input value={assignmentScope} onChange={(event) => setAssignmentScope(event.target.value)} className="mt-1 w-full rounded-md border border-input bg-background px-2 py-2 text-sm" placeholder="upstream-integration" /></label><label className="text-xs font-medium">Tool providers<input value={providerIds} onChange={(event) => setProviderIds(event.target.value)} className="mt-1 w-full rounded-md border border-input bg-background px-2 py-2 text-sm" placeholder="codex, claude-code" /></label></div>
+            <button type="button" onClick={resolveEffectiveSet} disabled={busy || !assignmentScope.trim()} className="mt-2 rounded border border-border px-2 py-1 text-xs">Resolve active set</button>
             <div className="mt-3 space-y-2">
               {store.releases.map((release) => (
                 <article key={release.id} className="rounded-md border border-border p-3"><div className="flex flex-wrap items-start justify-between gap-2"><div><h3 className="text-sm font-medium">{release.blueprint_name} <span className="text-muted-foreground">{release.label}</span></h3><p className="mt-1 text-xs text-muted-foreground">{release.members.length} members · digest {release.content_digest.slice(0, 12)}</p>{release.member_snapshots.length > 0 && <p className="mt-1 text-[11px] text-muted-foreground">{release.member_snapshots.filter((item) => item.contract_status === "managed").length}/{release.member_snapshots.length} managed contracts frozen</p>}</div><button type="button" onClick={() => assignRelease(release)} disabled={busy || !assignmentScope.trim() || !providerIds.trim()} className="rounded border border-border px-2 py-1 text-xs">Assign</button></div></article>
@@ -186,6 +196,7 @@ export function SkillSets() {
             </div>
             {store.assignments.length > 0 && <div className="mt-4 border-t border-border pt-3"><h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Assignments</h3><div className="mt-2 space-y-2">{store.assignments.map((assignment) => { const release = assignmentRelease(assignment); const project = (config?.projects ?? []).find((item) => item.id === assignment.project_id); return <div key={assignment.id} className="flex items-center gap-3 rounded-md bg-muted/40 px-3 py-2 text-xs"><span className="min-w-0 flex-1 truncate">{release?.blueprint_name ?? "Unknown release"} → {project?.name ?? "Global"} / {assignment.work_scope}</span><button type="button" onClick={() => previewActivation(assignment.id)} disabled={busy || !assignment.active} className="rounded border border-border px-2 py-1">Preview</button><button type="button" onClick={() => applyActivation(assignment.id)} disabled={busy || !assignment.active} className="rounded border border-primary/50 px-2 py-1 text-primary">Apply</button><button type="button" onClick={() => void updateStore(() => invoke<SkillSetStore>("set_skill_set_assignment_active", { request: { assignment_id: assignment.id, active: !assignment.active } }))} className="rounded border border-border px-2 py-1">{assignment.active ? "Active" : "Inactive"}</button><button type="button" onClick={() => void updateStore(() => invoke<SkillSetStore>("delete_skill_set_assignment", { assignmentId: assignment.id }))} className="text-muted-foreground"><Trash2 size={14} /></button></div>; })}</div></div>}
             {plan && <div className="mt-4 rounded-md border border-border bg-muted/30 p-3 text-xs"><div className="flex justify-between"><strong>Activation preview: {plan.work_scope}</strong><span>{plan.operations.filter((item) => item.action === "enable").length} enable · {plan.operations.filter((item) => item.action === "unchanged").length} unchanged</span></div>{plan.missing_skill_ids.length > 0 && <p className="mt-2 text-destructive">Missing: {plan.missing_skill_ids.join(", ")}</p>}<div className="mt-2 space-y-1">{plan.operations.map((operation) => <p key={`${operation.skill_instance_id}:${operation.tool_id}`}>{operation.action} {operation.skill_id} → {operation.tool_id} <span className="text-muted-foreground">({operation.reason})</span></p>)}</div></div>}
+            {effectiveSet && <div className="mt-3 rounded-md border border-border bg-muted/30 p-3 text-xs"><div className="flex justify-between"><strong>Effective set: {effectiveSet.work_scope}</strong><span>{effectiveSet.release_ids.length} releases · {effectiveSet.members.length} skills</span></div>{effectiveSet.unresolved_skill_ids.length > 0 && <p className="mt-2 text-destructive">Preview blocked — unresolved: {effectiveSet.unresolved_skill_ids.join(", ")}</p>}<div className="mt-2 space-y-1">{effectiveSet.members.map((member) => <p key={member.skill_id}>{member.skill_id} <span className="text-muted-foreground">← {member.included_by_release_ids.length} release(s){member.skill_instance_id ? ` · ${member.skill_instance_id}` : " · unresolved"}</span></p>)}</div></div>}
           </div>
         </div>
       </section>

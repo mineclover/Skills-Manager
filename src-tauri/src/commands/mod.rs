@@ -66,8 +66,8 @@ pub use skill_packages::{
 pub use skill_sets::{
     apply_skill_set_activation, assign_skill_set_release, create_skill_set_blueprint,
     create_skill_set_release, delete_skill_set_assignment, delete_skill_set_blueprint,
-    get_skill_set_catalog, preview_skill_set_activation, review_skill_set_blueprint,
-    set_skill_set_assignment_active, update_skill_set_blueprint,
+    get_skill_set_catalog, preview_skill_set_activation, resolve_effective_skill_set,
+    review_skill_set_blueprint, set_skill_set_assignment_active, update_skill_set_blueprint,
 };
 pub use skill_transfer::{export_skills, import_skills, preview_import_skills};
 pub use skills::{

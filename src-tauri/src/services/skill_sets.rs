@@ -7,7 +7,8 @@ use uuid::Uuid;
 
 use crate::models::{
     home_dir, ActivationPlanAction, AssignSkillSetReleaseRequest, CreateSkillSetBlueprintRequest,
-    CreateSkillSetReleaseRequest, SetSkillSetAssignmentActiveRequest,
+    CreateSkillSetReleaseRequest, EffectiveSkillSet, EffectiveSkillSetMember,
+    ResolveEffectiveSkillSetRequest, SetSkillSetAssignmentActiveRequest,
     SkillSetActivationApplyResult, SkillSetActivationOperation, SkillSetActivationPlan,
     SkillSetAssignment, SkillSetBlueprint, SkillSetMember, SkillSetMemberSnapshot, SkillSetRelease,
     SkillSetStore, UpdateSkillSetBlueprintRequest,
@@ -342,6 +343,76 @@ impl SkillSetService {
         Ok(store)
     }
 
+    pub fn resolve_effective_set(
+        request: ResolveEffectiveSkillSetRequest,
+    ) -> Result<EffectiveSkillSet, String> {
+        let work_scope = request.work_scope.trim().to_string();
+        if work_scope.is_empty() {
+            return Err("Work scope is required to resolve an effective skill set".to_string());
+        }
+        let project_id = request.project_id.filter(|value| !value.trim().is_empty());
+        let store = Self::load()?;
+        let assignments = store
+            .assignments
+            .iter()
+            .filter(|assignment| {
+                assignment.active
+                    && assignment.work_scope == work_scope
+                    && (assignment.project_id.is_none() || assignment.project_id == project_id)
+            })
+            .collect::<Vec<_>>();
+        let config = ConfigManager::new().load()?;
+        let skills = ScannerService::scan_skills_for_scope(&config, project_id.as_deref())?;
+        let mut by_skill = std::collections::BTreeMap::<String, EffectiveSkillSetMember>::new();
+        let mut unresolved_skill_ids = Vec::new();
+        let mut release_ids = Vec::new();
+        for assignment in &assignments {
+            let release = store
+                .releases
+                .iter()
+                .find(|release| release.id == assignment.release_id)
+                .ok_or_else(|| {
+                    format!(
+                        "Assignment references missing release: {}",
+                        assignment.release_id
+                    )
+                })?;
+            release_ids.push(release.id.clone());
+            for member in &release.members {
+                let instance_id = skills
+                    .iter()
+                    .find(|skill| skill.id == member.skill_id)
+                    .map(|skill| skill.instance_id.clone());
+                if instance_id.is_none() && !unresolved_skill_ids.contains(&member.skill_id) {
+                    unresolved_skill_ids.push(member.skill_id.clone());
+                }
+                let entry = by_skill.entry(member.skill_id.clone()).or_insert_with(|| {
+                    EffectiveSkillSetMember {
+                        skill_id: member.skill_id.clone(),
+                        skill_instance_id: instance_id.clone(),
+                        included_by_release_ids: Vec::new(),
+                    }
+                });
+                if entry.skill_instance_id.is_none() {
+                    entry.skill_instance_id = instance_id;
+                }
+                entry.included_by_release_ids.push(release.id.clone());
+            }
+        }
+        Ok(EffectiveSkillSet {
+            project_id,
+            work_scope,
+            assignment_ids: assignments
+                .into_iter()
+                .map(|assignment| assignment.id.clone())
+                .collect(),
+            release_ids,
+            members: by_skill.into_values().collect(),
+            unresolved_skill_ids,
+            generated_at: Self::now(),
+        })
+    }
+
     pub fn preview_activation(assignment_id: &str) -> Result<SkillSetActivationPlan, String> {
         let store = Self::load()?;
         let assignment = store
@@ -466,6 +537,7 @@ impl SkillSetService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::ProjectBinding;
     use crate::test_support::with_temp_home;
 
     #[test]
@@ -556,6 +628,91 @@ mod tests {
                 })
                 .is_err()
             );
+        });
+    }
+
+    #[test]
+    fn effective_set_merges_global_and_project_overlays_without_duplicate_members() {
+        with_temp_home(|home| {
+            let project_root = home.join("project-a");
+            let project_skills = project_root.join(".claude").join("skills");
+            fs::create_dir_all(&project_skills).unwrap();
+            let mut config = ConfigManager::new().load().unwrap();
+            config.projects.push(ProjectBinding {
+                id: "project-a".to_string(),
+                name: "Project A".to_string(),
+                skills_dir: project_skills,
+                root_path: Some(project_root),
+            });
+            ConfigManager::new().save(&config).unwrap();
+
+            let store = SkillSetService::create_blueprint(CreateSkillSetBlueprintRequest {
+                name: "Global overlay".to_string(),
+                description: String::new(),
+                skill_ids: vec!["shared".to_string()],
+            })
+            .unwrap();
+            SkillSetService::review_blueprint(&store.blueprints[0].id).unwrap();
+            let store = SkillSetService::create_release(CreateSkillSetReleaseRequest {
+                blueprint_id: store.blueprints[0].id.clone(),
+                label: String::new(),
+            })
+            .unwrap();
+            let global_release_id = store.releases[0].id.clone();
+            let store = SkillSetService::create_blueprint(CreateSkillSetBlueprintRequest {
+                name: "Project overlay".to_string(),
+                description: String::new(),
+                skill_ids: vec!["shared".to_string(), "project-only".to_string()],
+            })
+            .unwrap();
+            let project_blueprint_id = store
+                .blueprints
+                .iter()
+                .find(|item| item.name == "Project overlay")
+                .unwrap()
+                .id
+                .clone();
+            SkillSetService::review_blueprint(&project_blueprint_id).unwrap();
+            let store = SkillSetService::create_release(CreateSkillSetReleaseRequest {
+                blueprint_id: project_blueprint_id,
+                label: String::new(),
+            })
+            .unwrap();
+            let project_release_id = store.releases.last().unwrap().id.clone();
+            SkillSetService::assign_release(AssignSkillSetReleaseRequest {
+                release_id: global_release_id,
+                project_id: None,
+                work_scope: "integration".to_string(),
+                provider_ids: vec![],
+            })
+            .unwrap();
+            SkillSetService::assign_release(AssignSkillSetReleaseRequest {
+                release_id: project_release_id,
+                project_id: Some("project-a".to_string()),
+                work_scope: "integration".to_string(),
+                provider_ids: vec![],
+            })
+            .unwrap();
+
+            let effective =
+                SkillSetService::resolve_effective_set(ResolveEffectiveSkillSetRequest {
+                    project_id: Some("project-a".to_string()),
+                    work_scope: "integration".to_string(),
+                })
+                .unwrap();
+            assert_eq!(effective.assignment_ids.len(), 2);
+            assert_eq!(effective.members.len(), 2);
+            assert_eq!(
+                effective
+                    .members
+                    .iter()
+                    .find(|item| item.skill_id == "shared")
+                    .unwrap()
+                    .included_by_release_ids
+                    .len(),
+                2
+            );
+            assert_eq!(effective.unresolved_skill_ids.len(), 2);
         });
     }
 }

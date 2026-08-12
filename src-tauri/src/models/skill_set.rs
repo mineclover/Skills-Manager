@@ -118,6 +118,31 @@ pub struct SetSkillSetAssignmentActiveRequest {
     pub active: bool,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResolveEffectiveSkillSetRequest {
+    #[serde(default)]
+    pub project_id: Option<String>,
+    pub work_scope: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EffectiveSkillSetMember {
+    pub skill_id: String,
+    pub skill_instance_id: Option<String>,
+    pub included_by_release_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EffectiveSkillSet {
+    pub project_id: Option<String>,
+    pub work_scope: String,
+    pub assignment_ids: Vec<String>,
+    pub release_ids: Vec<String>,
+    pub members: Vec<EffectiveSkillSetMember>,
+    pub unresolved_skill_ids: Vec<String>,
+    pub generated_at: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ActivationPlanAction {

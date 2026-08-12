@@ -140,6 +140,22 @@ export interface SkillSetActivationApplyResult {
   failures: string[];
 }
 
+export interface EffectiveSkillSetMember {
+  skill_id: string;
+  skill_instance_id?: string | null;
+  included_by_release_ids: string[];
+}
+
+export interface EffectiveSkillSet {
+  project_id?: string | null;
+  work_scope: string;
+  assignment_ids: string[];
+  release_ids: string[];
+  members: EffectiveSkillSetMember[];
+  unresolved_skill_ids: string[];
+  generated_at: number;
+}
+
 export type StudioFeedbackTargetKind = "skill" | "skill_set_release" | "activation_run";
 export type StudioFeedbackCode = "completed" | "partial" | "failed" | "wrong_scope" | "instruction_gap" | "dependency_gap" | "safety_concern";
 export type StudioEvidenceType = "command_result" | "evaluation_assertion" | "human_confirmation";

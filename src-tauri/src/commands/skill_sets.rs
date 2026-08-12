@@ -1,8 +1,8 @@
 use crate::models::{
     AssignSkillSetReleaseRequest, CreateSkillSetBlueprintRequest, CreateSkillSetReleaseRequest,
-    ReviewSkillSetBlueprintRequest, SetSkillSetAssignmentActiveRequest,
-    SkillSetActivationApplyResult, SkillSetActivationPlan, SkillSetStore,
-    UpdateSkillSetBlueprintRequest,
+    EffectiveSkillSet, ResolveEffectiveSkillSetRequest, ReviewSkillSetBlueprintRequest,
+    SetSkillSetAssignmentActiveRequest, SkillSetActivationApplyResult, SkillSetActivationPlan,
+    SkillSetStore, UpdateSkillSetBlueprintRequest,
 };
 use crate::services::SkillSetService;
 
@@ -61,6 +61,13 @@ pub fn set_skill_set_assignment_active(
 #[tauri::command]
 pub fn delete_skill_set_assignment(assignment_id: String) -> Result<SkillSetStore, String> {
     SkillSetService::delete_assignment(&assignment_id)
+}
+
+#[tauri::command]
+pub fn resolve_effective_skill_set(
+    request: ResolveEffectiveSkillSetRequest,
+) -> Result<EffectiveSkillSet, String> {
+    SkillSetService::resolve_effective_set(request)
 }
 
 #[tauri::command]
