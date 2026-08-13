@@ -975,6 +975,15 @@ export const en = {
     reportSkipped: "Skipped {count}",
     reportFailed: "Failed {count}",
     reportImpacts: "Affected providers: {providers}",
+    applyingProgress: "Applying {processed} / {total}",
+    applyingCurrent: "Current: {skill}",
+    applyingSummary: "Applied {applied} · Skipped {skipped} · Failed {failed}",
+    preparing: "Preparing skill changes…",
+    pristineDescription: "Pristine is a saved clean baseline. Applying it disables all managed and agent-local skills for the selected agent in this project or worktree.",
+    copySystemPrompt: "Copy system prompt",
+    copySystemPromptHint: "Copy the full SKILL.md prompt text for skills currently enabled for this agent and scope.",
+    systemPromptCopied: "Copied {count} enabled skill prompt(s) to the clipboard.",
+    systemPromptCopyFailed: "Could not copy the system prompt.",
   },
 } as const;
 

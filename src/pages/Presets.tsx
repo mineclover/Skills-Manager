@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useTranslation } from "@/i18n";
 import { useToast } from "@/components/ui/toast";
 import { PageHeader } from "@/components/ui/page-header";
@@ -10,8 +11,10 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { ScopeSelector } from "@/components/ScopeSelector";
 import { OperationReportCard } from "@/components/skills/OperationReportCard";
-import { AppConfig, Tool, Skill, SkillActivationPreset, SkillOperationReport } from "@/types";
-import { Sliders, Plus, Trash2, Play, Check, AlertTriangle, Layers, Download } from "lucide-react";
+import { AppConfig, Tool, Skill, SkillActivationPreset, SkillOperationReport, PresetApplyProgress, SkillSystemPrompt } from "@/types";
+import { Sliders, Plus, Trash2, Play, Check, AlertTriangle, Layers, Download, Copy } from "lucide-react";
+
+const PRISTINE_PRESET_ID = "builtin-pristine";
 
 export function Presets() {
   const { t } = useTranslation();
@@ -32,10 +35,21 @@ export function Presets() {
   const [targetToolId, setTargetToolId] = useState("");
   const [scopeLoading, setScopeLoading] = useState(false);
   const [lastReport, setLastReport] = useState<SkillOperationReport | null>(null);
+  const [applyProgress, setApplyProgress] = useState<PresetApplyProgress | null>(null);
 
   // Load all data on mount
   useEffect(() => {
     fetchData();
+  }, []);
+
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    void listen<PresetApplyProgress>("preset-apply-progress", (event) => {
+      setApplyProgress(event.payload);
+    }).then((dispose) => {
+      unlisten = dispose;
+    });
+    return () => unlisten?.();
   }, []);
 
   async function fetchData() {
@@ -106,12 +120,13 @@ export function Presets() {
 
   const presetsList = config?.presets || [];
   const selectedPreset = presetsList.find((p) => p.id === selectedPresetId);
-  const selectedPresetIsBuiltin = selectedPreset?.id.startsWith("builtin-matt-") ?? false;
+  const selectedPresetIsBuiltin = selectedPreset?.id.startsWith("builtin-") ?? false;
+  const selectedPresetIsPristine = selectedPreset?.id === PRISTINE_PRESET_ID;
   const targetTool = tools.find((tool) => tool.id === targetToolId);
   const targetActivation = selectedPreset?.activations.find(
     (activation) => activation.tool_id === targetToolId,
   );
-  const targetConfigured = Boolean(targetActivation);
+  const targetConfigured = Boolean(targetActivation) || selectedPresetIsPristine;
   // A preset controls all manager-owned skills plus direct skills belonging
   // to the selected agent. Direct skills owned by other agents stay isolated.
   const targetSkills = targetTool
@@ -273,6 +288,17 @@ export function Presets() {
     }
 
     setApplyingPresetId(presetId);
+    setApplyProgress({
+      preset_id: presetId,
+      project_id: selectedProjectId,
+      tool_id: targetToolId,
+      total_count: targetSkills.length,
+      processed_count: 0,
+      applied_count: 0,
+      skipped_count: 0,
+      failed_count: 0,
+      completed: false,
+    });
     try {
       const report = await invoke<SkillOperationReport>("apply_preset_for_target", {
         presetId,
@@ -308,6 +334,26 @@ export function Presets() {
       addToast(message, "error");
     } finally {
       setApplyingPresetId(null);
+    }
+  }
+
+  async function handleCopySystemPrompt() {
+    if (!targetToolId) {
+      addToast(t("presets.selectAgent"), "error");
+      return;
+    }
+    try {
+      const prompt = await invoke<SkillSystemPrompt>("build_skill_system_prompt", {
+        projectId: selectedProjectId,
+        toolId: targetToolId,
+      });
+      await navigator.clipboard.writeText(prompt.content);
+      addToast(
+        t("presets.systemPromptCopied").replace("{count}", String(prompt.included_skill_instance_ids.length)),
+        "success",
+      );
+    } catch (err) {
+      addToast(err instanceof Error ? err.message : t("presets.systemPromptCopyFailed"), "error");
     }
   }
 
@@ -347,7 +393,10 @@ export function Presets() {
             size="sm"
             variant="ghost"
             className="h-7 w-7 p-0 rounded-md"
-            onClick={() => setIsNewPresetDialogOpen(true)}
+            onClick={() => {
+              setCopyCurrentState(!selectedPresetIsPristine);
+              setIsNewPresetDialogOpen(true);
+            }}
             title={t("presets.newPreset")}
           >
             <Plus size={16} />
@@ -429,7 +478,7 @@ export function Presets() {
                         ACTIVE
                       </span>
                     )}
-                    {preset.id.startsWith("builtin-matt-") && (
+                    {preset.id.startsWith("builtin-") && (
                       <span className="text-[9px] border border-border px-1 py-0.5 rounded font-mono font-medium opacity-70">
                         {t("presets.builtinPreset")}
                       </span>
@@ -528,7 +577,20 @@ export function Presets() {
                 <Button
                   size="sm"
                   variant="outline"
+                  onClick={handleCopySystemPrompt}
+                  disabled={!targetToolId || applyingPresetId !== null}
+                  className="h-8 text-xs"
+                  title={t("presets.copySystemPromptHint")}
+                >
+                  <Copy size={14} />
+                  <span>{t("presets.copySystemPrompt")}</span>
+                </Button>
+
+                <Button
+                  size="sm"
+                  variant="outline"
                   onClick={() => handleCaptureCurrentToPreset(selectedPreset.id)}
+                  disabled={selectedPresetIsPristine}
                   className="h-8 text-xs"
                 >
                   <Download size={14} />
@@ -575,6 +637,38 @@ export function Presets() {
               </div>
             </div>
 
+            {applyingPresetId === selectedPreset.id && applyProgress && (
+              <div className="border-b border-border bg-primary/5 px-6 py-3">
+                <div className="flex items-center justify-between gap-3 text-xs">
+                  <span className="font-medium text-foreground">
+                    {t("presets.applyingProgress")
+                      .replace("{processed}", String(applyProgress.processed_count))
+                      .replace("{total}", String(applyProgress.total_count))}
+                  </span>
+                  <span className="text-muted-foreground">
+                    {t("presets.applyingCurrent").replace(
+                      "{skill}",
+                      applyProgress.current_skill_name || t("presets.preparing"),
+                    )}
+                  </span>
+                </div>
+                <div className="mt-2 h-2 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-primary transition-[width] duration-200"
+                    style={{
+                      width: `${applyProgress.total_count === 0 ? 100 : Math.round((applyProgress.processed_count / applyProgress.total_count) * 100)}%`,
+                    }}
+                  />
+                </div>
+                <p className="mt-2 text-[11px] text-muted-foreground">
+                  {t("presets.applyingSummary")
+                    .replace("{applied}", String(applyProgress.applied_count))
+                    .replace("{skipped}", String(applyProgress.skipped_count))
+                    .replace("{failed}", String(applyProgress.failed_count))}
+                </p>
+              </div>
+            )}
+
             {/* Description & Explicit Deactivation note */}
             <div className="px-6 py-3 bg-muted/20 border-b border-border flex items-center gap-2 text-[11px] text-muted-foreground">
               <AlertTriangle size={13} className="text-amber" />
@@ -584,7 +678,9 @@ export function Presets() {
                       "{agent}",
                       targetTool.name,
                     )
-                  : t("presets.description")}
+                  : selectedPresetIsPristine
+                    ? t("presets.pristineDescription")
+                    : t("presets.description")}
               </span>
             </div>
 
@@ -635,7 +731,7 @@ export function Presets() {
                         size="sm"
                         variant="ghost"
                         className="h-7 text-[10px] px-2"
-                        disabled={targetSkills.length === 0}
+                        disabled={targetSkills.length === 0 || selectedPresetIsPristine}
                         onClick={() => handleSelectAllForTool(!isAllSelected)}
                       >
                         {isAllSelected ? t("welcome.selectNone") : t("welcome.selectAll")}
@@ -676,6 +772,7 @@ export function Presets() {
                                   </span>
                                   <Switch
                                     checked={isActive}
+                                    disabled={selectedPresetIsPristine}
                                     onCheckedChange={(checked) =>
                                       handleToggleSkill(skill.instance_id, checked)
                                     }

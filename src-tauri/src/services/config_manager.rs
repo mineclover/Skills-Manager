@@ -829,7 +829,7 @@ mod tests {
             let saved: serde_json::Value =
                 serde_json::from_str(&fs::read_to_string(&config_path).expect("read config"))
                     .expect("parse saved config");
-            assert_eq!(saved["presets"].as_array().map(Vec::len), Some(7));
+            assert_eq!(saved["presets"].as_array().map(Vec::len), Some(8));
         });
     }
 

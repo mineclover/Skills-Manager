@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -15,6 +16,32 @@ use crate::services::{
     ScannerService, SkillPackageService, WorkspaceService,
 };
 use serde::{Deserialize, Serialize};
+
+pub const PRISTINE_PRESET_ID: &str = "builtin-pristine";
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PresetApplyProgress {
+    pub preset_id: String,
+    pub project_id: Option<String>,
+    pub tool_id: String,
+    pub total_count: usize,
+    pub processed_count: usize,
+    pub applied_count: usize,
+    pub skipped_count: usize,
+    pub failed_count: usize,
+    pub current_skill_instance_id: Option<String>,
+    pub current_skill_name: Option<String>,
+    pub completed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SkillSystemPrompt {
+    pub project_id: Option<String>,
+    pub tool_id: String,
+    pub included_skill_instance_ids: Vec<String>,
+    pub skipped_skill_instance_ids: Vec<String>,
+    pub content: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -305,6 +332,67 @@ impl SkillControlService {
         let config = manager.load()?;
         let skills = ScannerService::scan_skills_for_scope(&config, project_id)?;
         apply_preset_to_target_with_skills(preset_id, tool_id, config, skills, project_id)
+    }
+
+    pub fn apply_preset_for_target_with_progress<F>(
+        preset_id: &str,
+        project_id: Option<&str>,
+        tool_id: &str,
+        on_progress: F,
+    ) -> Result<SkillOperationReport, String>
+    where
+        F: FnMut(PresetApplyProgress),
+    {
+        let manager = ConfigManager::new();
+        let config = manager.load()?;
+        let skills = ScannerService::scan_skills_for_scope(&config, project_id)?;
+        apply_preset_to_target_with_skills_and_progress(
+            preset_id,
+            tool_id,
+            config,
+            skills,
+            project_id,
+            on_progress,
+        )
+    }
+
+    pub fn build_skill_system_prompt(
+        project_id: Option<&str>,
+        tool_id: &str,
+    ) -> Result<SkillSystemPrompt, String> {
+        let config = ConfigManager::new().load()?;
+        if config.get_tool_config(tool_id).is_none() {
+            return Err(format!("Tool not found: {tool_id}"));
+        }
+        let skills = ScannerService::scan_skills_for_scope(&config, project_id)?;
+        let mut included_skill_instance_ids = Vec::new();
+        let mut skipped_skill_instance_ids = Vec::new();
+        let mut sections = Vec::new();
+        for skill in skills.into_iter().filter(|skill| {
+            (skill.scope != SkillScope::Tool || skill.tool_id.as_deref() == Some(tool_id))
+                && skill.is_enabled_for(tool_id)
+        }) {
+            let skill_file = skill.path.join("SKILL.md");
+            match fs::read_to_string(&skill_file) {
+                Ok(content) if !content.trim().is_empty() => {
+                    included_skill_instance_ids.push(skill.instance_id.clone());
+                    sections.push(format!(
+                        "<!-- skill:{} source:{} -->\n{}",
+                        skill.instance_id,
+                        skill_file.display(),
+                        content.trim()
+                    ));
+                }
+                _ => skipped_skill_instance_ids.push(skill.instance_id),
+            }
+        }
+        Ok(SkillSystemPrompt {
+            project_id: project_id.map(ToString::to_string),
+            tool_id: tool_id.to_string(),
+            included_skill_instance_ids,
+            skipped_skill_instance_ids,
+            content: sections.join("\n\n"),
+        })
     }
 
     pub fn clear_active_preset() -> Result<(), String> {
@@ -1108,7 +1196,11 @@ fn apply_preset_with_skills(
             continue;
         }
 
-        let Some(active_set) = active_mappings.get(&tool_id) else {
+        let empty_active_set = HashSet::new();
+        let Some(active_set) = active_mappings
+            .get(&tool_id)
+            .or_else(|| (preset.id == PRISTINE_PRESET_ID).then_some(&empty_active_set))
+        else {
             // A preset is agent-specific. An absent mapping means that this
             // preset does not target the tool, not that every skill should be
             // disabled for it.
@@ -1167,10 +1259,31 @@ fn apply_preset_with_skills(
 pub fn apply_preset_to_target_with_skills(
     preset_id: &str,
     target_tool_id: &str,
-    mut config: AppConfig,
+    config: AppConfig,
     skills: Vec<Skill>,
     project_id: Option<&str>,
 ) -> Result<SkillOperationReport, String> {
+    apply_preset_to_target_with_skills_and_progress(
+        preset_id,
+        target_tool_id,
+        config,
+        skills,
+        project_id,
+        |_| {},
+    )
+}
+
+pub fn apply_preset_to_target_with_skills_and_progress<F>(
+    preset_id: &str,
+    target_tool_id: &str,
+    mut config: AppConfig,
+    skills: Vec<Skill>,
+    project_id: Option<&str>,
+    mut on_progress: F,
+) -> Result<SkillOperationReport, String>
+where
+    F: FnMut(PresetApplyProgress),
+{
     let manager = ConfigManager::new();
     let tool_config = config
         .get_tool_config(target_tool_id)
@@ -1188,16 +1301,20 @@ pub fn apply_preset_to_target_with_skills(
         .find(|preset| preset.id == preset_id)
         .ok_or_else(|| format!("Preset not found: {preset_id}"))?
         .clone();
-    let active_set = preset
-        .activations
-        .iter()
-        .find(|activation| activation.tool_id == target_tool_id)
-        .map(|activation| activation.skill_ids.iter().cloned().collect::<HashSet<_>>())
-        .ok_or_else(|| {
-            format!(
-                "Preset is not configured for tool: {target_tool_id}. Configure this agent in the preset before applying it."
-            )
-        })?;
+    let active_set = if preset.id == PRISTINE_PRESET_ID {
+        HashSet::new()
+    } else {
+        preset
+            .activations
+            .iter()
+            .find(|activation| activation.tool_id == target_tool_id)
+            .map(|activation| activation.skill_ids.iter().cloned().collect::<HashSet<_>>())
+            .ok_or_else(|| {
+                format!(
+                    "Preset is not configured for tool: {target_tool_id}. Configure this agent in the preset before applying it."
+                )
+            })?
+    };
     let mut report = SkillOperationReport {
         operation_id: new_operation_id(),
         action: SkillOperationAction::PresetApply,
@@ -1214,14 +1331,39 @@ pub fn apply_preset_to_target_with_skills(
         completed_at: current_timestamp(),
     };
 
-    for skill in skills.iter().filter(|skill| {
-        skill.scope != SkillScope::Tool || skill.tool_id.as_deref() == Some(target_tool_id)
-    }) {
+    let target_skills = skills
+        .iter()
+        .filter(|skill| {
+            skill.scope != SkillScope::Tool || skill.tool_id.as_deref() == Some(target_tool_id)
+        })
+        .collect::<Vec<_>>();
+    let total_count = target_skills.len();
+    let progress = |processed_count,
+                    current_skill: Option<&Skill>,
+                    completed,
+                    report: &SkillOperationReport| {
+        PresetApplyProgress {
+            preset_id: preset_id.to_string(),
+            project_id: project_id.map(ToString::to_string),
+            tool_id: target_tool_id.to_string(),
+            total_count,
+            processed_count,
+            applied_count: report.applied_count,
+            skipped_count: report.skipped_count,
+            failed_count: report.failed_count,
+            current_skill_instance_id: current_skill.map(|skill| skill.instance_id.clone()),
+            current_skill_name: current_skill.map(|skill| skill.name.clone()),
+            completed,
+        }
+    };
+    on_progress(progress(0, None, false, &report));
+    for (index, skill) in target_skills.into_iter().enumerate() {
         let should_be_enabled =
             active_set.contains(&skill.instance_id) || active_set.contains(&skill.id);
         report.requested_count += 1;
         if skill.is_enabled_for(target_tool_id) == should_be_enabled {
             report.skipped_count += 1;
+            on_progress(progress(index + 1, Some(skill), false, &report));
             continue;
         }
         report.attempted_count += 1;
@@ -1253,19 +1395,22 @@ pub fn apply_preset_to_target_with_skills(
                 });
             }
         }
+        on_progress(progress(index + 1, Some(skill), false, &report));
     }
 
     config.active_preset_id = Some(preset_id.to_string());
     manager.save(&config)?;
     report.completed_at = current_timestamp();
+    on_progress(progress(total_count, None, true, &report));
     Ok(report)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_preset_to_target_with_skills, apply_skill_tool_enabled_from_skills,
-        SkillControlService,
+        apply_preset_to_target_with_skills, apply_preset_to_target_with_skills_and_progress,
+        apply_skill_tool_enabled_from_skills, PresetApplyProgress, SkillControlService,
+        PRISTINE_PRESET_ID,
     };
     use crate::models::{
         AppConfig, PresetActivation, ProjectBinding, SaveLocalSkillContractRequest, Skill,
@@ -1313,6 +1458,99 @@ mod tests {
                 })
                 .expect_err("portable sidecar must take precedence");
             assert!(error.contains("takes precedence"));
+        });
+    }
+
+    #[test]
+    fn pristine_preset_is_a_targetable_empty_baseline() {
+        with_temp_home(|home| {
+            let mut config = AppConfig::default();
+            config.tools.insert(
+                "codex".to_string(),
+                ToolConfig {
+                    enabled: true,
+                    detected: true,
+                    skills_path: home.join(".codex").join("skills"),
+                    config_path: home.join(".codex"),
+                },
+            );
+            let skill = Skill::new(
+                "clean-slate".to_string(),
+                "Clean slate".to_string(),
+                home.join(".codex").join("skills").join("clean-slate"),
+            )
+            .with_tool_scope("codex".to_string());
+
+            let report = apply_preset_to_target_with_skills(
+                PRISTINE_PRESET_ID,
+                "codex",
+                config,
+                vec![skill],
+                None,
+            )
+            .expect("pristine preset should target every configured agent");
+            assert_eq!(report.requested_count, 1);
+            assert_eq!(report.skipped_count, 1);
+            assert_eq!(report.failed_count, 0);
+        });
+    }
+
+    #[test]
+    fn target_preset_reports_progress_for_every_skill_including_skips() {
+        with_temp_home(|home| {
+            let mut config = AppConfig::default();
+            config.tools.insert(
+                "codex".to_string(),
+                ToolConfig {
+                    enabled: true,
+                    detected: true,
+                    skills_path: home.join(".codex").join("skills"),
+                    config_path: home.join(".codex"),
+                },
+            );
+            config.presets.push(SkillActivationPreset {
+                id: "progress".to_string(),
+                name: "Progress".to_string(),
+                description: None,
+                activations: vec![PresetActivation {
+                    tool_id: "codex".to_string(),
+                    skill_ids: vec![
+                        "tool:codex:first".to_string(),
+                        "tool:codex:second".to_string(),
+                    ],
+                }],
+            });
+            let mut first = Skill::new(
+                "first".to_string(),
+                "First".to_string(),
+                home.join(".codex").join("skills").join("first"),
+            )
+            .with_tool_scope("codex".to_string());
+            first.enabled.insert("codex".to_string(), true);
+            let mut second = Skill::new(
+                "second".to_string(),
+                "Second".to_string(),
+                home.join(".codex").join("skills").join("second"),
+            )
+            .with_tool_scope("codex".to_string());
+            second.enabled.insert("codex".to_string(), true);
+            let mut progress = Vec::<PresetApplyProgress>::new();
+
+            let report = apply_preset_to_target_with_skills_and_progress(
+                "progress",
+                "codex",
+                config,
+                vec![first, second],
+                None,
+                |event| progress.push(event),
+            )
+            .expect("apply preset with progress");
+
+            assert_eq!(report.skipped_count, 2);
+            assert_eq!(progress.first().map(|event| event.processed_count), Some(0));
+            assert_eq!(progress.iter().filter(|event| !event.completed).count(), 3);
+            assert_eq!(progress.last().map(|event| event.processed_count), Some(2));
+            assert_eq!(progress.last().map(|event| event.completed), Some(true));
         });
     }
 

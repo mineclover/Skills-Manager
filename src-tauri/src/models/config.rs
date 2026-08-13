@@ -223,6 +223,15 @@ fn matt_preset(id: &str, name: &str, description: &str, skills: &[&str]) -> Skil
 /// different agent requires an explicit membership selection first.
 pub fn builtin_skill_activation_presets() -> Vec<SkillActivationPreset> {
     vec![
+        SkillActivationPreset {
+            id: "builtin-pristine".to_string(),
+            name: "Pristine · No managed skills".to_string(),
+            description: Some(
+                "A saved clean baseline that disables every managed and direct skill for the selected agent."
+                    .to_string(),
+            ),
+            activations: Vec::new(),
+        },
         matt_preset(
             "builtin-matt-planning",
             "Matt · Planning",
@@ -263,7 +272,7 @@ pub fn builtin_skill_activation_presets() -> Vec<SkillActivationPreset> {
 }
 
 pub fn is_builtin_skill_activation_preset_id(id: &str) -> bool {
-    id.starts_with("builtin-matt-")
+    id == "builtin-pristine" || id.starts_with("builtin-matt-")
 }
 
 /// 收藏时的市场 skill 快照，断网也能展示基本信息
@@ -634,7 +643,11 @@ mod tests {
             .map(|preset| preset.id.as_str())
             .collect::<HashSet<_>>();
 
-        assert_eq!(presets.len(), 6);
+        assert_eq!(presets.len(), 7);
+        assert!(
+            ids.contains("builtin-pristine"),
+            "missing pristine baseline preset"
+        );
         for id in [
             "builtin-matt-planning",
             "builtin-matt-build",

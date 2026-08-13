@@ -60,6 +60,28 @@ export interface SkillContractSummary {
   source?: SkillContractSource | null;
 }
 
+export interface PresetApplyProgress {
+  preset_id: string;
+  project_id?: string | null;
+  tool_id: string;
+  total_count: number;
+  processed_count: number;
+  applied_count: number;
+  skipped_count: number;
+  failed_count: number;
+  current_skill_instance_id?: string | null;
+  current_skill_name?: string | null;
+  completed: boolean;
+}
+
+export interface SkillSystemPrompt {
+  project_id?: string | null;
+  tool_id: string;
+  included_skill_instance_ids: string[];
+  skipped_skill_instance_ids: string[];
+  content: string;
+}
+
 export interface SkillSetMember {
   skill_id: string;
   scope_policy: "global" | "project" | "project_then_global" | "tool_local";

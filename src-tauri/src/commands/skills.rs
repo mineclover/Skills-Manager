@@ -16,7 +16,7 @@ use crate::services::LinkerService;
 #[cfg(test)]
 use crate::services::ScannerService;
 use crate::services::{AppCache, SkillControlService};
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::services::skill_control::{BatchSetSkillToolsRequest, BatchSetSkillToolsResponse};
 
@@ -923,15 +923,30 @@ pub fn apply_preset_for_scope(
 
 #[tauri::command]
 pub fn apply_preset_for_target(
+    app: AppHandle,
     preset_id: String,
     project_id: Option<String>,
     tool_id: String,
     cache: State<AppCache>,
 ) -> Result<SkillOperationReport, String> {
-    let report =
-        SkillControlService::apply_preset_for_target(&preset_id, project_id.as_deref(), &tool_id)?;
+    let report = SkillControlService::apply_preset_for_target_with_progress(
+        &preset_id,
+        project_id.as_deref(),
+        &tool_id,
+        |progress| {
+            let _ = app.emit("preset-apply-progress", progress);
+        },
+    )?;
     cache.invalidate_skills();
     Ok(report)
+}
+
+#[tauri::command]
+pub fn build_skill_system_prompt(
+    project_id: Option<String>,
+    tool_id: String,
+) -> Result<crate::services::skill_control::SkillSystemPrompt, String> {
+    SkillControlService::build_skill_system_prompt(project_id.as_deref(), &tool_id)
 }
 
 #[tauri::command]

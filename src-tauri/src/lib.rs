@@ -6,7 +6,7 @@ mod test_support;
 
 use commands::{
     apply_preset, apply_preset_for_scope, apply_preset_for_target, apply_skill_set_activation,
-    assign_skill_set_release, batch_set_skill_tools, capture_preset,
+    assign_skill_set_release, batch_set_skill_tools, build_skill_system_prompt, capture_preset,
     check_marketplace_updates_if_stale, check_sync_status, check_update, clear_active_preset,
     clear_llm_provider, clear_risk_cache_command, clear_translation_cache, clear_usage_stats,
     create_custom_tool, create_directory, create_file, create_preset, create_skill,
@@ -130,6 +130,7 @@ pub fn run() {
             apply_preset,
             apply_preset_for_scope,
             apply_preset_for_target,
+            build_skill_system_prompt,
             capture_preset,
             create_preset,
             delete_preset,
