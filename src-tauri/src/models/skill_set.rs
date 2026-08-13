@@ -60,6 +60,9 @@ pub struct SkillSetRelease {
     pub blueprint_name: String,
     #[serde(default)]
     pub label: String,
+    /// Human-authored change intent frozen with the release manifest.
+    #[serde(default)]
+    pub release_notes: String,
     /// SHA-256 digest of the frozen release content.
     pub content_digest: String,
     pub members: Vec<SkillSetMember>,
@@ -146,6 +149,8 @@ pub struct CreateSkillSetReleaseRequest {
     pub blueprint_id: String,
     #[serde(default)]
     pub label: String,
+    #[serde(default)]
+    pub release_notes: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -103,6 +103,16 @@ pub struct EvaluationRecord {
     pub created_at: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReleaseEvaluationSummary {
+    pub release_id: String,
+    pub total_count: u64,
+    pub passed_count: u64,
+    pub failed_count: u64,
+    pub blocked_count: u64,
+    pub last_evaluated_at: Option<i64>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct RecordEvaluationRequest {
     pub release_id: String,

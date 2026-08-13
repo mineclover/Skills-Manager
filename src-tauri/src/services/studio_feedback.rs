@@ -7,9 +7,9 @@ use uuid::Uuid;
 
 use crate::models::{
     ActivationProviderOutcome, ActivationRun, EvaluationRecord, RecordEvaluationRequest,
-    RecordStudioFeedbackRequest, ReleaseHealth, ReleaseHealthContextRequest, ReviewQueueItem,
-    ReviewReason, StudioFeedbackCode, StudioFeedbackEvent, StudioFeedbackTargetKind,
-    StudioHealthStatus,
+    RecordStudioFeedbackRequest, ReleaseEvaluationSummary, ReleaseHealth,
+    ReleaseHealthContextRequest, ReviewQueueItem, ReviewReason, StudioFeedbackCode,
+    StudioFeedbackEvent, StudioFeedbackTargetKind, StudioHealthStatus,
 };
 use crate::services::SkillSetService;
 
@@ -303,6 +303,50 @@ impl StudioFeedbackService {
             .map_err(|error| format!("Failed to decode evaluation records: {error}"))
     }
 
+    pub fn evaluation_summary(release_id: &str) -> Result<ReleaseEvaluationSummary, String> {
+        let release_id = release_id.trim();
+        if release_id.is_empty() {
+            return Err("Release id is required to query an evaluation summary".to_string());
+        }
+        let conn = Self::open()?;
+        let mut statement = conn
+            .prepare("SELECT status, COUNT(*), MAX(created_at) FROM studio_evaluation_records WHERE release_id=?1 GROUP BY status")
+            .map_err(|error| format!("Failed to query evaluation summary: {error}"))?;
+        let rows = statement
+            .query_map(params![release_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, u64>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                ))
+            })
+            .map_err(|error| format!("Failed to read evaluation summary: {error}"))?;
+        let mut summary = ReleaseEvaluationSummary {
+            release_id: release_id.to_string(),
+            total_count: 0,
+            passed_count: 0,
+            failed_count: 0,
+            blocked_count: 0,
+            last_evaluated_at: None,
+        };
+        for row in rows.flatten() {
+            let (status, count, latest) = row;
+            summary.total_count += count;
+            match status.as_str() {
+                "passed" => summary.passed_count += count,
+                "failed" => summary.failed_count += count,
+                "blocked" => summary.blocked_count += count,
+                _ => {}
+            }
+            summary.last_evaluated_at = match (summary.last_evaluated_at, latest) {
+                (Some(current), Some(candidate)) => Some(current.max(candidate)),
+                (current, None) => current,
+                (None, candidate) => candidate,
+            };
+        }
+        Ok(summary)
+    }
+
     pub fn release_health(release_id: &str) -> Result<ReleaseHealth, String> {
         Self::release_health_for_context(release_id, None, None, None)
     }
@@ -552,7 +596,7 @@ impl StudioFeedbackService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::StudioEvidenceType;
+    use crate::models::{EvaluationStatus, StudioEvidenceType};
     use crate::test_support::with_temp_home;
 
     fn request(code: StudioFeedbackCode, evidence: &str) -> RecordStudioFeedbackRequest {
@@ -716,6 +760,45 @@ mod tests {
             let records = StudioFeedbackService::evaluation_records("release-a").unwrap();
             assert_eq!(records.len(), 1);
             assert_eq!(records[0].case_id, "skill-a::evaluations/happy-path.md");
+        });
+    }
+
+    #[test]
+    fn evaluation_summary_counts_only_the_selected_release() {
+        with_temp_home(|_| {
+            for status in [
+                EvaluationStatus::Passed,
+                EvaluationStatus::Failed,
+                EvaluationStatus::Blocked,
+            ] {
+                StudioFeedbackService::record_evaluation(RecordEvaluationRequest {
+                    release_id: "release-a".to_string(),
+                    case_id: format!("case-{status:?}"),
+                    status,
+                    evidence_type: StudioEvidenceType::EvaluationAssertion,
+                    evidence_summary: "retained assertion".to_string(),
+                    project_id: None,
+                    work_scope: None,
+                    provider_id: None,
+                })
+                .unwrap();
+            }
+            StudioFeedbackService::record_evaluation(RecordEvaluationRequest {
+                release_id: "release-b".to_string(),
+                case_id: "other".to_string(),
+                status: EvaluationStatus::Passed,
+                evidence_type: StudioEvidenceType::EvaluationAssertion,
+                evidence_summary: "other release".to_string(),
+                project_id: None,
+                work_scope: None,
+                provider_id: None,
+            })
+            .unwrap();
+            let summary = StudioFeedbackService::evaluation_summary("release-a").unwrap();
+            assert_eq!(summary.total_count, 3);
+            assert_eq!(summary.passed_count, 1);
+            assert_eq!(summary.failed_count, 1);
+            assert_eq!(summary.blocked_count, 1);
         });
     }
 

@@ -293,14 +293,17 @@ impl SkillSetService {
         let member_snapshots = Self::snapshot_members(&blueprint.members)?;
         let created_at = Self::now();
         let label = request.label.trim().to_string();
-        let digest_input = serde_json::to_vec(&(&blueprint.id, &label, &blueprint.members))
-            .map_err(|error| format!("Failed to digest release: {error}"))?;
+        let release_notes = request.release_notes.trim().to_string();
+        let digest_input =
+            serde_json::to_vec(&(&blueprint.id, &label, &release_notes, &blueprint.members))
+                .map_err(|error| format!("Failed to digest release: {error}"))?;
         let content_digest = format!("{:x}", Sha256::digest(digest_input));
         store.releases.push(SkillSetRelease {
             id: format!("release-{}", Uuid::new_v4()),
             blueprint_id: blueprint.id,
             blueprint_name: blueprint.name,
             label,
+            release_notes,
             content_digest,
             members: blueprint.members,
             member_snapshots,
@@ -663,6 +666,7 @@ mod tests {
             let released = SkillSetService::create_release(CreateSkillSetReleaseRequest {
                 blueprint_id: blueprint_id.clone(),
                 label: "v1".to_string(),
+                release_notes: "Initial reviewed snapshot".to_string(),
             })
             .unwrap();
             let release = released.releases[0].clone();
@@ -719,6 +723,7 @@ mod tests {
             let store = SkillSetService::create_release(CreateSkillSetReleaseRequest {
                 blueprint_id: store.blueprints[0].id.clone(),
                 label: String::new(),
+                release_notes: String::new(),
             })
             .unwrap();
             let store = SkillSetService::assign_release(AssignSkillSetReleaseRequest {
@@ -757,7 +762,8 @@ mod tests {
             assert!(
                 SkillSetService::create_release(CreateSkillSetReleaseRequest {
                     blueprint_id: store.blueprints[0].id.clone(),
-                    label: String::new()
+                    label: String::new(),
+                    release_notes: String::new(),
                 })
                 .is_err()
             );
@@ -790,6 +796,7 @@ mod tests {
             let store = SkillSetService::create_release(CreateSkillSetReleaseRequest {
                 blueprint_id: store.blueprints[0].id.clone(),
                 label: String::new(),
+                release_notes: String::new(),
             })
             .unwrap();
             let global_release_id = store.releases[0].id.clone();
@@ -811,6 +818,7 @@ mod tests {
             let store = SkillSetService::create_release(CreateSkillSetReleaseRequest {
                 blueprint_id: project_blueprint_id,
                 label: String::new(),
+                release_notes: String::new(),
             })
             .unwrap();
             let project_release_id = store.releases.last().unwrap().id.clone();

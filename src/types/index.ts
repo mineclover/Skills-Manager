@@ -88,10 +88,20 @@ export interface SkillSetRelease {
   blueprint_id: string;
   blueprint_name: string;
   label: string;
+  release_notes: string;
   content_digest: string;
   members: SkillSetMember[];
   member_snapshots: SkillSetMemberSnapshot[];
   created_at: number;
+}
+
+export interface ReleaseEvaluationSummary {
+  release_id: string;
+  total_count: number;
+  passed_count: number;
+  failed_count: number;
+  blocked_count: number;
+  last_evaluated_at?: number | null;
 }
 
 export interface SkillSetAssignment {

@@ -56,7 +56,7 @@ pub use skill_set::{
 };
 pub use studio_feedback::{
     ActivationProviderOutcome, ActivationRun, EvaluationRecord, EvaluationStatus,
-    RecordEvaluationRequest, RecordStudioFeedbackRequest, ReleaseHealth,
+    RecordEvaluationRequest, RecordStudioFeedbackRequest, ReleaseEvaluationSummary, ReleaseHealth,
     ReleaseHealthContextRequest, ReleaseImprovementSuggestion, ReviewQueueItem, ReviewReason,
     StudioEvidenceType, StudioFeedbackCode, StudioFeedbackEvent, StudioFeedbackTargetKind,
     StudioHealthStatus,

@@ -14,6 +14,7 @@ import {
   EffectiveSkillSet,
   ActivationRun,
   SkillSetDriftReport,
+  ReleaseEvaluationSummary,
 } from "@/types";
 
 const emptyStore: SkillSetStore = {
@@ -29,6 +30,7 @@ export function SkillSets() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [releaseNotes, setReleaseNotes] = useState("");
   const [memberIds, setMemberIds] = useState<Set<string>>(new Set());
   const [memberScopePolicies, setMemberScopePolicies] = useState<Record<string, "global" | "project" | "project_then_global" | "tool_local">>({});
   const [assignmentScope, setAssignmentScope] = useState("");
@@ -41,6 +43,7 @@ export function SkillSets() {
   const [drift, setDrift] = useState<SkillSetDriftReport | null>(null);
   const [activationRuns, setActivationRuns] = useState<ActivationRun[]>([]);
   const [historyReleaseId, setHistoryReleaseId] = useState<string | null>(null);
+  const [evaluationSummary, setEvaluationSummary] = useState<ReleaseEvaluationSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -105,11 +108,13 @@ export function SkillSets() {
     return catalog;
   });
 
-  const createRelease = (blueprint: SkillSetBlueprint) => void updateStore(() =>
-    invoke<SkillSetStore>("create_skill_set_release", {
-      request: { blueprint_id: blueprint.id, label: `snapshot-${new Date().toISOString().slice(0, 10)}` },
-    }),
-  );
+  const createRelease = (blueprint: SkillSetBlueprint) => void updateStore(async () => {
+    const next = await invoke<SkillSetStore>("create_skill_set_release", {
+      request: { blueprint_id: blueprint.id, label: `snapshot-${new Date().toISOString().slice(0, 10)}`, release_notes: releaseNotes },
+    });
+    setReleaseNotes("");
+    return next;
+  });
 
   const assignRelease = (release: SkillSetRelease) => void updateStore(() =>
     invoke<SkillSetStore>("assign_skill_set_release", {
@@ -152,6 +157,13 @@ export function SkillSets() {
     setBusy(true); setError(null);
     try { setHistoryReleaseId(releaseId); setActivationRuns(await invoke<ActivationRun[]>("list_activation_runs", { releaseId })); }
     catch (historyError) { setError(String(historyError)); }
+    finally { setBusy(false); }
+  })();
+
+  const loadEvaluationSummary = (releaseId: string) => void (async () => {
+    setBusy(true); setError(null);
+    try { setEvaluationSummary(await invoke<ReleaseEvaluationSummary>("get_release_evaluation_summary", { releaseId })); }
+    catch (summaryError) { setError(String(summaryError)); }
     finally { setBusy(false); }
   })();
 
@@ -223,11 +235,12 @@ export function SkillSets() {
 
           <div className="rounded-lg border border-border bg-card p-4">
             <h2 className="text-sm font-semibold">Frozen releases and assignments</h2>
+            <label className="mt-3 block text-xs font-medium">Release notes<textarea value={releaseNotes} onChange={(event) => setReleaseNotes(event.target.value)} className="mt-1 min-h-16 w-full rounded-md border border-input bg-background px-2 py-2 text-sm" placeholder="What changed, why it is ready, and what should be evaluated" /></label>
             <div className="mt-3 grid gap-2 sm:grid-cols-5"><label className="text-xs font-medium">Project<select value={assignmentProjectId} onChange={(event) => setAssignmentProjectId(event.target.value)} className="mt-1 w-full rounded-md border border-input bg-background px-2 py-2 text-sm"><option value="">Global / no project</option>{(config?.projects ?? []).map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><label className="text-xs font-medium">Role<select value={assignmentRole} onChange={(event) => setAssignmentRole(event.target.value as "default" | "recommended")} className="mt-1 w-full rounded-md border border-input bg-background px-2 py-2 text-sm"><option value="default">Default baseline</option><option value="recommended">Recommended overlay</option></select></label><label className="text-xs font-medium">Work scope<input value={assignmentScope} onChange={(event) => setAssignmentScope(event.target.value)} className="mt-1 w-full rounded-md border border-input bg-background px-2 py-2 text-sm" placeholder={assignmentRole === "default" ? "optional" : "upstream-integration"} /></label><label className="text-xs font-medium">Priority<input type="number" value={assignmentPriority} onChange={(event) => setAssignmentPriority(Number(event.target.value) || 0)} className="mt-1 w-full rounded-md border border-input bg-background px-2 py-2 text-sm" /></label><label className="text-xs font-medium">Tool providers<input value={providerIds} onChange={(event) => setProviderIds(event.target.value)} className="mt-1 w-full rounded-md border border-input bg-background px-2 py-2 text-sm" placeholder="codex, claude-code" /></label></div>
             <button type="button" onClick={resolveEffectiveSet} disabled={busy || !assignmentScope.trim()} className="mt-2 rounded border border-border px-2 py-1 text-xs">Resolve active set</button>
             <div className="mt-3 space-y-2">
               {store.releases.map((release) => (
-                <article key={release.id} className="rounded-md border border-border p-3"><div className="flex flex-wrap items-start justify-between gap-2"><div><h3 className="text-sm font-medium">{release.blueprint_name} <span className="text-muted-foreground">{release.label}</span></h3><p className="mt-1 text-xs text-muted-foreground">{release.members.length} members · digest {release.content_digest.slice(0, 12)}</p>{release.member_snapshots.length > 0 && <p className="mt-1 text-[11px] text-muted-foreground">{release.member_snapshots.filter((item) => item.contract_status === "managed").length}/{release.member_snapshots.length} managed contracts frozen</p>}</div><div className="flex gap-2"><button type="button" onClick={() => loadActivationHistory(release.id)} disabled={busy} className="rounded border border-border px-2 py-1 text-xs">History</button><button type="button" onClick={() => assignRelease(release)} disabled={busy || (assignmentRole === "recommended" && !assignmentScope.trim()) || !providerIds.trim()} className="rounded border border-border px-2 py-1 text-xs">Assign</button></div></div></article>
+                <article key={release.id} className="rounded-md border border-border p-3"><div className="flex flex-wrap items-start justify-between gap-2"><div><h3 className="text-sm font-medium">{release.blueprint_name} <span className="text-muted-foreground">{release.label}</span></h3><p className="mt-1 text-xs text-muted-foreground">{release.members.length} members · digest {release.content_digest.slice(0, 12)}</p>{release.release_notes && <p className="mt-1 text-xs text-muted-foreground">{release.release_notes}</p>}{release.member_snapshots.length > 0 && <p className="mt-1 text-[11px] text-muted-foreground">{release.member_snapshots.filter((item) => item.contract_status === "managed").length}/{release.member_snapshots.length} managed contracts frozen</p>}</div><div className="flex gap-2"><button type="button" onClick={() => loadEvaluationSummary(release.id)} disabled={busy} className="rounded border border-border px-2 py-1 text-xs">Evaluations</button><button type="button" onClick={() => loadActivationHistory(release.id)} disabled={busy} className="rounded border border-border px-2 py-1 text-xs">History</button><button type="button" onClick={() => assignRelease(release)} disabled={busy || (assignmentRole === "recommended" && !assignmentScope.trim()) || !providerIds.trim()} className="rounded border border-border px-2 py-1 text-xs">Assign</button></div></div></article>
               ))}
               {store.releases.length === 0 && <p className="py-2 text-sm text-muted-foreground">Freeze a blueprint to create an immutable release.</p>}
             </div>
@@ -236,6 +249,7 @@ export function SkillSets() {
             {effectiveSet && <div className="mt-3 rounded-md border border-border bg-muted/30 p-3 text-xs"><div className="flex justify-between"><strong>Effective set: {effectiveSet.work_scope}</strong><span>{effectiveSet.release_ids.length} releases · {effectiveSet.members.length} skills</span></div>{effectiveSet.unresolved_skill_ids.length > 0 && <p className="mt-2 text-destructive">Preview blocked — unresolved: {effectiveSet.unresolved_skill_ids.join(", ")}</p>}<div className="mt-2 space-y-1">{effectiveSet.members.map((member) => <p key={`${member.skill_id}:${member.scope_policy}`}>{member.skill_id} <span className="text-muted-foreground">[{member.scope_policy.replace(/_/g, " ")}] ← {member.included_by_release_ids.length} release(s){member.skill_instance_id ? ` · ${member.skill_instance_id}` : " · unresolved"}</span></p>)}</div></div>}
             {drift && <div className="mt-3 rounded-md border border-border bg-muted/30 p-3 text-xs"><div className="flex justify-between"><strong>Binding drift: {drift.work_scope}</strong><span className={drift.compliant ? "text-primary" : "text-destructive"}>{drift.compliant ? "Compliant" : "Action needed"}</span></div>{drift.missing_skill_ids.length > 0 && <p className="mt-2 text-destructive">Missing: {drift.missing_skill_ids.join(", ")}</p>}{drift.disabled_operations.map((operation) => <p key={`${operation.skill_instance_id}:${operation.tool_id}`} className="mt-1">Enable {operation.skill_id} → {operation.tool_id}</p>)}{drift.compliant && <p className="mt-2 text-muted-foreground">All required provider bindings are active.</p>}</div>}
             {historyReleaseId && <div className="mt-3 rounded-md border border-border bg-muted/30 p-3 text-xs"><div className="flex justify-between"><strong>Activation history</strong><span>{activationRuns.length} recent run(s)</span></div><div className="mt-2 space-y-2">{activationRuns.map((run) => <div key={run.id}><p>{new Date(run.created_at * 1000).toLocaleString()} · applied {run.applied_count}, skipped {run.skipped_count}, failed {run.failed_count} <span className="text-muted-foreground">({run.work_scope})</span></p>{run.provider_outcomes.length > 0 && <p className="ml-2 mt-1 text-muted-foreground">{run.provider_outcomes.map((outcome) => `${outcome.provider_id}: +${outcome.applied_count} / =${outcome.skipped_count} / !${outcome.failed_count}`).join(" · ")}</p>}</div>)}{activationRuns.length === 0 && <p className="text-muted-foreground">No activation runs recorded for this release.</p>}</div></div>}
+            {evaluationSummary && <div className="mt-3 rounded-md border border-border bg-muted/30 p-3 text-xs"><strong>Evaluation summary</strong><p className="mt-1">{evaluationSummary.total_count} recorded · passed {evaluationSummary.passed_count} · failed {evaluationSummary.failed_count} · blocked {evaluationSummary.blocked_count}</p><p className="mt-1 text-muted-foreground">Only evidence-backed evaluation records are counted.</p></div>}
           </div>
         </div>
       </section>
