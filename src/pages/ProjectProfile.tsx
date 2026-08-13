@@ -27,6 +27,7 @@ export function ProjectProfile() {
   const [projectId, setProjectId] = useState("");
   const [workScope, setWorkScope] = useState("");
   const [effectiveSet, setEffectiveSet] = useState<EffectiveSkillSet | null>(null);
+  const [draftCreated, setDraftCreated] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -84,6 +85,29 @@ export function ProjectProfile() {
     }
   })();
 
+  const createContextDraft = () => void (async () => {
+    if (!effectiveSet) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const projectName = (config?.projects ?? []).find((project) => project.id === projectId)?.name ?? "Global";
+      const catalog = await invoke<SkillSetStore>("create_skill_set_blueprint", {
+        request: {
+          name: `${projectName} ${effectiveSet.work_scope} draft`,
+          description: `Drafted from the ${projectName} project profile for ${effectiveSet.work_scope}. Review the purpose, requirements, and members before releasing.`,
+          skill_ids: effectiveSet.members.map((member) => member.skill_id),
+          member_scope_policies: Object.fromEntries(effectiveSet.members.map((member) => [member.skill_id, member.scope_policy])),
+        },
+      });
+      setStore(catalog);
+      setDraftCreated("Editable blueprint created. It remains unreleased until a human reviews it.");
+    } catch (draftError) {
+      setError(String(draftError));
+    } finally {
+      setBusy(false);
+    }
+  })();
+
   const changePriority = (assignment: SkillSetAssignment, delta: number) =>
     void (async () => {
       setBusy(true);
@@ -122,14 +146,14 @@ export function ProjectProfile() {
           <h2 className="text-sm font-semibold">Default and recommended releases</h2>
           <p className="mt-1 text-xs text-muted-foreground">Higher priority is considered first. Project assignments and global baselines are both visible.</p>
           <div className="mt-3 space-y-2">
-            {projectAssignments.map((assignment) => <article key={assignment.id} className="rounded-md border border-border p-3 text-xs"><div className="flex items-start gap-3"><div className="min-w-0 flex-1"><strong>{releaseLabel(releases.get(assignment.release_id))}</strong><p className="mt-1 text-muted-foreground">{assignment.project_id ? "Project" : "Global baseline"} · {assignment.role === "default" ? "Default for every work scope" : `Recommended for ${assignment.work_scope}`} · {assignment.active ? "Active" : "Inactive"}</p><p className="mt-1 text-muted-foreground">Providers: {assignment.provider_ids.join(", ") || "Not selected"}</p></div><div className="flex items-center gap-1"><span className="mr-1 rounded bg-muted px-2 py-1">P{assignment.priority}</span><button type="button" onClick={() => changePriority(assignment, 1)} disabled={busy} className="rounded border border-border px-2 py-1">↑</button><button type="button" onClick={() => changePriority(assignment, -1)} disabled={busy} className="rounded border border-border px-2 py-1">↓</button></div></div></article>)}
+            {projectAssignments.map((assignment) => { const release = releases.get(assignment.release_id); const missingContracts = release?.member_snapshots.filter((member) => member.contract_status !== "managed") ?? []; return <article key={assignment.id} className="rounded-md border border-border p-3 text-xs"><div className="flex items-start gap-3"><div className="min-w-0 flex-1"><strong>{releaseLabel(release)}</strong><p className="mt-1 text-muted-foreground">{assignment.project_id ? "Project" : "Global baseline"} · {assignment.role === "default" ? "Default for every work scope" : `Recommended for ${assignment.work_scope}`} · {assignment.active ? "Active" : "Inactive"}</p><p className="mt-1 text-muted-foreground">Providers: {assignment.provider_ids.join(", ") || "Not selected"}</p>{missingContracts.length > 0 && <p className="mt-1 text-warning">Missing managed contract: {missingContracts.map((member) => member.skill_id).join(", ")}</p>}</div><div className="flex items-center gap-1"><span className="mr-1 rounded bg-muted px-2 py-1">P{assignment.priority}</span><button type="button" onClick={() => changePriority(assignment, 1)} disabled={busy} className="rounded border border-border px-2 py-1">↑</button><button type="button" onClick={() => changePriority(assignment, -1)} disabled={busy} className="rounded border border-border px-2 py-1">↓</button></div></div></article>; })}
             {projectAssignments.length === 0 && <p className="py-5 text-center text-sm text-muted-foreground">No default or recommended releases are assigned to this project yet.</p>}
           </div>
         </section>
         <section className="rounded-lg border border-border bg-card p-4">
           <h2 className="text-sm font-semibold">Resolved configuration</h2>
           {!effectiveSet && <p className="mt-3 text-sm text-muted-foreground">Select a work scope to see the exact skill instances that would be used. This step is read-only.</p>}
-          {effectiveSet && <div className="mt-3 text-xs"><p><strong>{effectiveSet.release_ids.length} releases · {effectiveSet.members.length} skills</strong></p>{effectiveSet.unresolved_skill_ids.length > 0 && <p className="mt-2 text-destructive">Preview blocked — unresolved: {effectiveSet.unresolved_skill_ids.join(", ")}</p>}<div className="mt-3 space-y-2">{effectiveSet.members.map((member) => <div key={`${member.skill_id}:${member.scope_policy}`} className="rounded bg-muted/50 p-2"><strong>{member.skill_id}</strong><p className="mt-1 text-muted-foreground">{member.scope_policy.replace(/_/g, " ")} · {member.skill_instance_id ?? "unresolved"}</p></div>)}</div></div>}
+          {effectiveSet && <div className="mt-3 text-xs"><div className="flex items-center justify-between gap-3"><p><strong>{effectiveSet.release_ids.length} releases · {effectiveSet.members.length} skills</strong></p><button type="button" onClick={createContextDraft} disabled={busy || effectiveSet.members.length === 0} className="rounded border border-border px-2 py-1">Create editable draft</button></div>{draftCreated && <p className="mt-2 text-primary">{draftCreated}</p>}{effectiveSet.unresolved_skill_ids.length > 0 && <p className="mt-2 text-destructive">Preview blocked — missing required instance: {effectiveSet.unresolved_skill_ids.join(", ")}</p>}<div className="mt-3 space-y-2">{effectiveSet.members.map((member) => <div key={`${member.skill_id}:${member.scope_policy}`} className="rounded bg-muted/50 p-2"><strong>{member.skill_id}</strong><p className="mt-1 text-muted-foreground">{member.scope_policy.replace(/_/g, " ")} · {member.skill_instance_id ?? "unresolved"}</p></div>)}</div></div>}
         </section>
       </div>
     </div>
