@@ -1,0 +1,3 @@
+[submodule "references/skills-sh"]
+	path = references/skills-sh
+	url = https://github.com/vercel-labs/skills.git
