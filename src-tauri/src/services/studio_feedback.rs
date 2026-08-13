@@ -327,6 +327,9 @@ impl StudioFeedbackService {
             passed_count: 0,
             failed_count: 0,
             blocked_count: 0,
+            required_case_count: 0,
+            verified_case_count: 0,
+            is_verified: false,
             last_evaluated_at: None,
         };
         for row in rows.flatten() {
@@ -344,6 +347,39 @@ impl StudioFeedbackService {
                 (None, candidate) => candidate,
             };
         }
+        let required_cases = SkillSetService::catalog()?
+            .releases
+            .into_iter()
+            .find(|release| release.id == release_id)
+            .map(|release| {
+                release
+                    .member_snapshots
+                    .iter()
+                    .flat_map(|member| {
+                        member
+                            .evaluation_cases
+                            .iter()
+                            .map(move |case| format!("{}::{case}", member.skill_id))
+                    })
+                    .collect::<std::collections::BTreeSet<_>>()
+            })
+            .unwrap_or_default();
+        let latest_statuses = Self::evaluation_records(release_id)?.into_iter().fold(
+            std::collections::BTreeMap::new(),
+            |mut statuses, record| {
+                statuses.entry(record.case_id).or_insert(record.status);
+                statuses
+            },
+        );
+        summary.required_case_count = required_cases.len() as u64;
+        summary.verified_case_count = required_cases
+            .iter()
+            .filter(|case| {
+                latest_statuses.get(*case) == Some(&crate::models::EvaluationStatus::Passed)
+            })
+            .count() as u64;
+        summary.is_verified = summary.required_case_count > 0
+            && summary.verified_case_count == summary.required_case_count;
         Ok(summary)
     }
 
@@ -596,7 +632,11 @@ impl StudioFeedbackService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{EvaluationStatus, StudioEvidenceType};
+    use crate::models::{
+        CreateSkillSetBlueprintRequest, CreateSkillSetReleaseRequest, EvaluationStatus,
+        StudioEvidenceType,
+    };
+    use crate::services::{ConfigManager, SkillSetService};
     use crate::test_support::with_temp_home;
 
     fn request(code: StudioFeedbackCode, evidence: &str) -> RecordStudioFeedbackRequest {
@@ -799,6 +839,66 @@ mod tests {
             assert_eq!(summary.passed_count, 1);
             assert_eq!(summary.failed_count, 1);
             assert_eq!(summary.blocked_count, 1);
+        });
+    }
+
+    #[test]
+    fn release_is_verified_only_when_all_frozen_cases_latest_results_pass() {
+        with_temp_home(|_home| {
+            let manager = ConfigManager::new();
+            let config = manager.load().unwrap();
+            let skill_dir = config.skills_dir.join("skill-a");
+            std::fs::create_dir_all(&skill_dir).unwrap();
+            std::fs::write(skill_dir.join("SKILL.md"), "# Skill A").unwrap();
+            std::fs::write(
+                skill_dir.join("skill-manager.yaml"),
+                r#"
+schema_version: 1
+purpose: { summary: Skill A, use_when: [test], avoid_when: [other] }
+requirements: { verification: [cargo test] }
+success_contract: { expected_outcomes: [pass], non_goals: [deploy], safety_rules: [review] }
+feedback: { codes: [completed], required_for_completed: [assertion] }
+evaluation: { cases: [evaluations/ok.md], review_cycle_days: 30 }
+"#,
+            )
+            .unwrap();
+            manager.save(&config).unwrap();
+            let catalog = SkillSetService::create_blueprint(CreateSkillSetBlueprintRequest {
+                name: "Verification".to_string(),
+                description: String::new(),
+                skill_ids: vec!["skill-a".to_string()],
+                member_scope_policies: Default::default(),
+            })
+            .unwrap();
+            SkillSetService::review_blueprint(&catalog.blueprints[0].id).unwrap();
+            let release = SkillSetService::create_release(CreateSkillSetReleaseRequest {
+                blueprint_id: catalog.blueprints[0].id.clone(),
+                label: "v1".to_string(),
+                release_notes: String::new(),
+            })
+            .unwrap()
+            .releases
+            .pop()
+            .unwrap();
+            StudioFeedbackService::record_evaluation(RecordEvaluationRequest {
+                release_id: release.id.clone(),
+                case_id: "skill-a::evaluations/ok.md".to_string(),
+                status: EvaluationStatus::Passed,
+                evidence_type: StudioEvidenceType::EvaluationAssertion,
+                evidence_summary: "assertion passed".to_string(),
+                project_id: None,
+                work_scope: None,
+                provider_id: None,
+            })
+            .unwrap();
+            let summary = StudioFeedbackService::evaluation_summary(&release.id).unwrap();
+            assert_eq!(
+                summary.required_case_count, 1,
+                "{:?}",
+                release.member_snapshots
+            );
+            assert!(summary.is_verified);
+            assert_eq!(summary.verified_case_count, 1);
         });
     }
 

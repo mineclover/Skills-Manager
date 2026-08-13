@@ -1,6 +1,6 @@
 # Skills Manager — Skill Set Studio & Activation Control Roadmap
 
-> Status: implementation in progress
+> Status: implementation complete; maintained through acceptance checks
 >
 > Scope: skill-set definition, project/work-scope assignment, provider-aware activation,
 > feedback, evaluation, and health management.
@@ -24,19 +24,22 @@ desktop application:
   and human-only improvement suggestions derived from repeated feedback;
 - Project Profile resolution, assignment priorities, frozen release notes,
   evaluation summaries, and project-context editable blueprint drafts.
+- sidecar-preferred local contract metadata fallback and an evidence-derived
+  verified release lifecycle label.
 
 Contract drafts always require human completion and review before release; duplicate
 detection only flags candidates for review. Existing presets remain separate legacy
-activation profiles and are never converted automatically. The remaining convention
-gap is the optional local contract-metadata fallback and a distinct verified
-lifecycle label; neither changes provider activation behavior.
+activation profiles and are never converted automatically. Local contract metadata
+is an instance-scoped fallback only; a portable `skill-manager.yaml` always wins.
+`Verified` is computed only from the latest evidence-backed result for every
+evaluation case frozen into a release.
 
 ### Delivery tracker
 
 | Milestone | Status | Delivered evidence | Remaining for exit |
 | --- | --- | --- | --- |
 | 0 — Vocabulary and compatibility | Complete | Studio/Activation terminology, roadmap, and legacy presets remain separate. | Keep compatibility covered by regression checks. |
-| 1 — Skill Contract and managed status | Substantially complete | Sidecar parsing, validation, managed status, detail summary, editor entry point, and context-seeded draft. | Local metadata fallback and an explicit verified lifecycle label. |
+| 1 — Skill Contract and managed status | Complete | Sidecar parsing, validation, sidecar-preferred local metadata fallback, managed status, editor entry point, and evidence-derived verified lifecycle label. | Covered by scanner, config, and Studio fixtures. |
 | 2 — Blueprint and Release | Complete | Reviewed blueprints, immutable membership/contract/evaluation snapshots, release notes, and explicit evaluation summaries. | Covered by release/service regression checks. |
 | 3 — Project Profiles and work scopes | Complete | Default/recommended assignments, work-scope overlays, effective-set resolver, Project Profile, priority ordering, and blocking unresolved entries. | Covered by resolver and UI build checks. |
 | 4 — Activation Control | Complete | Provider-aware preview/apply, `SkillControlService` mutation boundary, shared-root confirmation, drift, and provider-level history. | Covered by activation and provider-impact checks. |
@@ -45,12 +48,12 @@ lifecycle label; neither changes provider activation behavior.
 
 ### Next implementation sequence
 
-1. Decide whether local contract metadata is needed in addition to portable
-   sidecars, and define its synchronization/precedence rules.
-2. Add an explicit verified lifecycle label only after its evaluation threshold and
-   evidence authority are approved.
-3. Keep the acceptance audit in CI: focused Studio tests, full serial Rust tests,
+1. Keep the acceptance audit in CI: focused Studio tests, full serial Rust tests,
    frontend tests/build, shared-root confirmation, and provider/CLI parity.
+2. Treat local metadata as a non-portable fallback: do not synchronize it into a
+   skill artifact or let it override a sidecar without an explicit user action.
+3. Preserve the verified rule: every frozen evaluation case needs a latest,
+   evidence-backed `passed` record before the label can be shown.
 
 ## 1. Product direction
 

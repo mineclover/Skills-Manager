@@ -6,9 +6,9 @@ use crate::models::config::{
     is_builtin_skill_activation_preset_id, PresetActivation, SkillActivationPreset,
 };
 use crate::models::{
-    AppConfig, InstalledSkillPackage, Skill, SkillBindingImpact, SkillOperationAction,
-    SkillOperationFailure, SkillOperationPreview, SkillOperationReport, SkillScope,
-    DISABLED_TOOL_SKILL_SUFFIX,
+    AppConfig, InstalledSkillPackage, SaveLocalSkillContractRequest, Skill, SkillBindingImpact,
+    SkillContractSummary, SkillOperationAction, SkillOperationFailure, SkillOperationPreview,
+    SkillOperationReport, SkillScope, DISABLED_TOOL_SKILL_SUFFIX,
 };
 use crate::services::{
     set_codex_plugin_enabled, ConfigManager, LinkStatus, LinkerService, ProviderInventoryService,
@@ -235,6 +235,40 @@ impl SkillControlService {
             .map_err(|error| format!("Failed to write SKILL.md: {error}"))?;
 
         ScannerService::load_skill_with_config(&skill_path, &config)
+    }
+
+    pub fn save_local_skill_contract(
+        request: SaveLocalSkillContractRequest,
+    ) -> Result<SkillContractSummary, String> {
+        let instance_id = request.skill_instance_id.trim();
+        if instance_id.is_empty() {
+            return Err("Skill instance id is required for local contract metadata".to_string());
+        }
+        let manager = ConfigManager::new();
+        let mut config = manager.load()?;
+        let project_id = instance_id
+            .strip_prefix("project:")
+            .and_then(|value| value.split_once(':').map(|(project_id, _)| project_id));
+        let skill = ScannerService::scan_skills_for_scope(&config, project_id)?
+            .into_iter()
+            .find(|skill| skill.instance_id == instance_id)
+            .ok_or_else(|| format!("Skill instance not found: {instance_id}"))?;
+        if skill
+            .path
+            .join(crate::models::SKILL_CONTRACT_FILE_NAME)
+            .exists()
+        {
+            return Err(
+                "A portable skill-manager.yaml already exists and takes precedence".to_string(),
+            );
+        }
+        config
+            .skill_metadata
+            .entry(instance_id.to_string())
+            .or_default()
+            .local_contract = Some(request.contract.clone());
+        manager.save(&config)?;
+        Ok(SkillContractSummary::from_local_metadata(request.contract))
     }
 
     pub fn import_skills_to_hub(skill_paths: &[String]) -> Result<(), String> {
@@ -1229,14 +1263,58 @@ pub fn apply_preset_to_target_with_skills(
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_preset_to_target_with_skills, apply_skill_tool_enabled_from_skills};
-    use crate::models::{
-        AppConfig, PresetActivation, ProjectBinding, Skill, SkillActivationPreset, SkillScope,
-        ToolConfig,
+    use super::{
+        apply_preset_to_target_with_skills, apply_skill_tool_enabled_from_skills,
+        SkillControlService,
     };
-    use crate::services::ScannerService;
+    use crate::models::{
+        AppConfig, PresetActivation, ProjectBinding, SaveLocalSkillContractRequest, Skill,
+        SkillActivationPreset, SkillContract, SkillContractSource, SkillScope, ToolConfig,
+    };
+    use crate::services::{ConfigManager, ScannerService};
     use crate::test_support::with_temp_home;
     use std::fs;
+
+    #[test]
+    fn local_contract_is_saved_for_the_exact_skill_instance_and_rejects_sidecars() {
+        with_temp_home(|_| {
+            let mut config = AppConfig::default();
+            config.initialized = true;
+            let skill_dir = config.skills_dir.join("local-contract");
+            fs::create_dir_all(&skill_dir).expect("create skill");
+            fs::write(
+                skill_dir.join("SKILL.md"),
+                "---\nname: local-contract\n---\n",
+            )
+            .expect("write skill");
+            ConfigManager::new().save(&config).expect("save config");
+
+            let summary =
+                SkillControlService::save_local_skill_contract(SaveLocalSkillContractRequest {
+                    skill_instance_id: "global:local-contract".to_string(),
+                    contract: SkillContract::default(),
+                })
+                .expect("save local contract");
+            assert_eq!(summary.source, Some(SkillContractSource::LocalMetadata));
+
+            let loaded = ConfigManager::new().load().expect("load config");
+            assert!(loaded
+                .skill_metadata
+                .get("global:local-contract")
+                .and_then(|metadata| metadata.local_contract.as_ref())
+                .is_some());
+
+            fs::write(skill_dir.join("skill-manager.yaml"), "schema_version: 1\n")
+                .expect("write sidecar");
+            let error =
+                SkillControlService::save_local_skill_contract(SaveLocalSkillContractRequest {
+                    skill_instance_id: "global:local-contract".to_string(),
+                    contract: SkillContract::default(),
+                })
+                .expect_err("portable sidecar must take precedence");
+            assert!(error.contains("takes precedence"));
+        });
+    }
 
     #[test]
     fn target_preset_rejects_an_agent_without_explicit_configuration() {

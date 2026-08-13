@@ -12,6 +12,13 @@ pub enum SkillContractStatus {
     Managed,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillContractSource {
+    PortableSidecar,
+    LocalMetadata,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct SkillContractPurpose {
     #[serde(default)]
@@ -81,6 +88,14 @@ pub struct SkillContractSummary {
     pub contract: Option<SkillContract>,
     #[serde(default)]
     pub validation_errors: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<SkillContractSource>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SaveLocalSkillContractRequest {
+    pub skill_instance_id: String,
+    pub contract: SkillContract,
 }
 
 impl SkillContractSummary {
@@ -103,6 +118,7 @@ impl SkillContractSummary {
                         path: Some(sidecar_path),
                         contract: Some(contract),
                         validation_errors,
+                        source: Some(SkillContractSource::PortableSidecar),
                     }
                 }
                 Err(error) => Self {
@@ -110,6 +126,7 @@ impl SkillContractSummary {
                     path: Some(sidecar_path),
                     contract: None,
                     validation_errors: vec![format!("Invalid YAML: {error}")],
+                    source: Some(SkillContractSource::PortableSidecar),
                 },
             },
             Err(error) => Self {
@@ -117,7 +134,23 @@ impl SkillContractSummary {
                 path: Some(sidecar_path),
                 contract: None,
                 validation_errors: vec![format!("Unable to read contract: {error}")],
+                source: Some(SkillContractSource::PortableSidecar),
             },
+        }
+    }
+
+    pub fn from_local_metadata(contract: SkillContract) -> Self {
+        let validation_errors = contract.validate();
+        Self {
+            status: if validation_errors.is_empty() {
+                SkillContractStatus::Managed
+            } else {
+                SkillContractStatus::Incomplete
+            },
+            path: None,
+            contract: Some(contract),
+            validation_errors,
+            source: Some(SkillContractSource::LocalMetadata),
         }
     }
 
@@ -127,6 +160,7 @@ impl SkillContractSummary {
             path: None,
             contract: None,
             validation_errors: Vec::new(),
+            source: None,
         }
     }
 }

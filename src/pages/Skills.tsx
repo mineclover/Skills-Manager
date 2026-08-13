@@ -29,6 +29,7 @@ import {
   ProjectBinding,
   PublishResult,
   Skill,
+  SkillContract,
   SkillPublishRecord,
   SkillBinding,
   SkillBindingState,
@@ -174,6 +175,7 @@ import {
   resolveActiveProjectId,
 } from "./projectBindings";
 import { ProjectBindingsDialog } from "./ProjectBindingsDialog";
+import { LocalContractDialog } from "./skills/LocalContractDialog";
 import { getToolIconUrl } from "@/assets/tools";
 import { ProviderInventoryCard } from "@/components/skills/ProviderInventoryCard";
 import { ScopeSelector } from "@/components/ScopeSelector";
@@ -870,6 +872,8 @@ export function Skills() {
   const [togglingSkill, setTogglingSkill] = useState<string | null>(null);
   const [deletingSkill, setDeletingSkill] = useState<string | null>(null);
   const [publishingSkill, setPublishingSkill] = useState<Skill | null>(null);
+  const [localContractSkill, setLocalContractSkill] = useState<Skill | null>(null);
+  const [savingLocalContract, setSavingLocalContract] = useState(false);
   const [toolEditorSkillId, setToolEditorSkillId] = useState<string | null>(null);
   const [toolEditorQuery, setToolEditorQuery] = useState("");
   const [toolEditorEnabledOnly, setToolEditorEnabledOnly] = useState(false);
@@ -1111,6 +1115,23 @@ export function Skills() {
       setRefreshing(false);
     }
   }, [addToast, loadProviderBindings, loadProviderInventory, loadRiskReports, selectedProjectId, t]);
+
+  const handleSaveLocalContract = useCallback(async (contract: SkillContract) => {
+    if (!localContractSkill) return;
+    setSavingLocalContract(true);
+    try {
+      await invoke("save_local_skill_contract", {
+        request: { skill_instance_id: localContractSkill.instance_id, contract },
+      });
+      setLocalContractSkill(null);
+      await handleRefresh();
+      addToast("Local contract metadata saved", "success");
+    } catch (error) {
+      addToast(`Unable to save local contract: ${String(error)}`, "error");
+    } finally {
+      setSavingLocalContract(false);
+    }
+  }, [addToast, handleRefresh, localContractSkill]);
 
   const reloadData = useCallback(async () => {
     try {
@@ -3374,6 +3395,18 @@ export function Skills() {
                 ) : (
                   <p>Add <code>skill-manager.yaml</code> to define the skill's purpose, feedback, and evaluation.</p>
                 )}
+                {contract?.source === "local_metadata" && (
+                  <p className="mt-1 text-xs text-muted-foreground">Using local metadata fallback for this exact {skill.scope} instance. A portable sidecar will take precedence when added.</p>
+                )}
+                {!contract?.path && (
+                  <button
+                    type="button"
+                    className="mt-2 rounded border border-border px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+                    onClick={() => setLocalContractSkill(skill)}
+                  >
+                    {contract?.source === "local_metadata" ? "Edit local metadata" : "Use local metadata"}
+                  </button>
+                )}
                 <button
                   type="button"
                   className="mt-2 rounded border border-border px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
@@ -3390,7 +3423,7 @@ export function Skills() {
                     }
                   })()}
                 >
-                  {contract?.path ? "Edit contract" : "Create contract"}
+                  {contract?.path ? "Edit contract" : "Create portable contract"}
                 </button>
               </div>
               {item.openPath && (
@@ -5201,6 +5234,13 @@ export function Skills() {
         onClose={() => setPublishingSkill(null)}
         onPublished={handleSkillPublished}
         t={t}
+      />
+
+      <LocalContractDialog
+        skill={localContractSkill}
+        saving={savingLocalContract}
+        onClose={() => setLocalContractSkill(null)}
+        onSave={(contract) => void handleSaveLocalContract(contract)}
       />
 
       {showCreateDialog && (

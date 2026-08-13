@@ -75,7 +75,8 @@ pub use skills::{
     apply_preset, apply_preset_for_scope, apply_preset_for_target, batch_set_skill_tools,
     capture_preset, clear_active_preset, create_preset, create_skill, delete_preset, delete_skill,
     disable_skill, enable_skill, import_skills_to_hub, list_skills, refresh_skills,
-    scan_existing_skills, scan_skills_for_scope, set_preset_all, set_preset_skill,
+    save_local_skill_contract, scan_existing_skills, scan_skills_for_scope, set_preset_all,
+    set_preset_skill,
 };
 pub use studio_feedback::{
     get_contextual_release_health, get_release_evaluation_summary, get_release_health,

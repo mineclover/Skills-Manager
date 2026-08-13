@@ -39,9 +39,9 @@ pub use skill::{
     MarketplaceMeta, Skill, SkillScope, SkillSource, VaultMeta, DISABLED_TOOL_SKILL_SUFFIX,
 };
 pub use skill_contract::{
-    SkillContract, SkillContractEvaluation, SkillContractFeedback, SkillContractPurpose,
-    SkillContractRequirements, SkillContractStatus, SkillContractSuccess, SkillContractSummary,
-    SKILL_CONTRACT_FILE_NAME,
+    SaveLocalSkillContractRequest, SkillContract, SkillContractEvaluation, SkillContractFeedback,
+    SkillContractPurpose, SkillContractRequirements, SkillContractSource, SkillContractStatus,
+    SkillContractSuccess, SkillContractSummary, SKILL_CONTRACT_FILE_NAME,
 };
 pub use skill_package::{InstalledSkillPackage, SkillPackageMeta};
 pub use skill_set::{

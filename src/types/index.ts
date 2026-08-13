@@ -13,6 +13,7 @@ export interface SkillMarketplaceMeta {
 }
 
 export type SkillContractStatus = "unmanaged" | "incomplete" | "managed";
+export type SkillContractSource = "portable_sidecar" | "local_metadata";
 
 export interface SkillContractPurpose {
   summary: string;
@@ -56,6 +57,7 @@ export interface SkillContractSummary {
   path?: string | null;
   contract?: SkillContract | null;
   validation_errors: string[];
+  source?: SkillContractSource | null;
 }
 
 export interface SkillSetMember {
@@ -101,6 +103,9 @@ export interface ReleaseEvaluationSummary {
   passed_count: number;
   failed_count: number;
   blocked_count: number;
+  required_case_count: number;
+  verified_case_count: number;
+  is_verified: boolean;
   last_evaluated_at?: number | null;
 }
 
@@ -307,6 +312,7 @@ export interface SkillMetadata {
   favorited_at?: number | null;
   /** 最近一次成功发布到 ClawHub 的记录；未发布过时缺省。 */
   publish?: SkillPublishRecord | null;
+  local_contract?: SkillContract | null;
 }
 
 export type SkillMetadataMap = Record<string, SkillMetadata>;

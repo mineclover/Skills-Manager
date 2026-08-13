@@ -62,6 +62,10 @@ pub struct SkillMetadata {
     /// 并让下次发布沿用同一个 slug/owner 而不是重新按目录名推导。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub publish: Option<SkillPublishRecord>,
+    /// Non-portable fallback for a managed contract when a skill directory cannot
+    /// carry a sidecar. A portable `skill-manager.yaml` always takes precedence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_contract: Option<crate::models::SkillContract>,
 }
 
 /// 一次成功发布留下的本地凭证。ClawHub 用 (owner, slug) 唯一定位一个技能，

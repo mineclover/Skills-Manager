@@ -43,12 +43,18 @@ impl ScannerService {
         config: &AppConfig,
     ) -> Result<Vec<Skill>, String> {
         let mut skills = Self::scan_skills_in_root(skills_dir, config)?;
+        for skill in &mut skills {
+            Self::refresh_contract_fallback(skill, config);
+        }
         skills.sort_by(|a, b| a.id.cmp(&b.id).then_with(|| a.path.cmp(&b.path)));
         Ok(skills)
     }
 
     pub fn scan_global_skills(config: &AppConfig) -> Result<Vec<Skill>, String> {
         let mut skills = Self::scan_skills_in_root(&config.skills_dir, config)?;
+        for skill in &mut skills {
+            Self::refresh_contract_fallback(skill, config);
+        }
         skills.sort_by(|a, b| a.instance_id.cmp(&b.instance_id));
         Ok(skills)
     }
@@ -80,6 +86,7 @@ impl ScannerService {
                     Some(project_binding.id.clone()),
                     Some(project_binding.name.clone()),
                 );
+                Self::refresh_contract_fallback(&mut scoped_skill, config);
                 scoped_skill.enabled = Self::check_enabled_status_for_scope(
                     &scoped_skill.path,
                     &scoped_skill.id,
@@ -210,6 +217,7 @@ impl ScannerService {
             }
 
             let mut scoped_skill = skill.with_tool_scope(tool_id.to_string());
+            Self::refresh_contract_fallback(&mut scoped_skill, config);
 
             let mut enabled = HashMap::new();
             enabled.insert(tool_id.to_string(), is_enabled);
@@ -429,7 +437,7 @@ impl ScannerService {
             config,
         );
 
-        Ok(Skill {
+        let mut skill = Skill {
             id: id.clone(),
             instance_id: Skill::global_instance_id(&id),
             scope: SkillScope::Global,
@@ -446,7 +454,26 @@ impl ScannerService {
             contract: crate::models::SkillContractSummary::load(skill_path),
             enabled,
             path: skill_path.to_path_buf(),
-        })
+        };
+        Self::refresh_contract_fallback(&mut skill, config);
+        Ok(skill)
+    }
+
+    /// The portable sidecar is authoritative. Local metadata is a scope-aware
+    /// fallback only when no sidecar exists alongside the canonical skill.
+    fn refresh_contract_fallback(skill: &mut Skill, config: &AppConfig) {
+        let portable = crate::models::SkillContractSummary::load(&skill.path);
+        skill.contract = if portable.path.is_some() {
+            portable
+        } else if let Some(contract) = config
+            .skill_metadata
+            .get(&skill.instance_id)
+            .and_then(|metadata| metadata.local_contract.clone())
+        {
+            crate::models::SkillContractSummary::from_local_metadata(contract)
+        } else {
+            portable
+        };
     }
 
     /// Check if this skill is enabled for each tool by looking for symlinks
@@ -708,7 +735,10 @@ impl ScannerService {
 #[cfg(test)]
 mod tests {
     use super::{LinkerService, ScannerService};
-    use crate::models::{AppConfig, ProjectBinding, SkillContractStatus, SkillScope, SkillSource};
+    use crate::models::{
+        AppConfig, ProjectBinding, SkillContract, SkillContractSource, SkillContractStatus,
+        SkillMetadata, SkillScope, SkillSource,
+    };
     use crate::test_support::with_temp_home;
     use serde_json::json;
     use std::fs;
@@ -779,6 +809,40 @@ evaluation:
             assert_eq!(global[0].scope, SkillScope::Global);
             assert_eq!(project_skills[0].scope, SkillScope::Project);
             assert_eq!(tool[0].scope, SkillScope::Tool);
+        });
+    }
+
+    #[test]
+    fn local_contract_fallback_is_scope_aware_and_never_overrides_a_sidecar() {
+        with_temp_home(|home| {
+            let root = home.join("skills");
+            let skill_dir = root.join("fallback-skill");
+            fs::create_dir_all(&skill_dir).unwrap();
+            fs::write(skill_dir.join("SKILL.md"), "# fallback").unwrap();
+            let local_contract: SkillContract = serde_yaml::from_str(VALID_SKILL_CONTRACT).unwrap();
+            let mut config = AppConfig::default();
+            config.skills_dir = root;
+            config.skill_metadata.insert(
+                "global:fallback-skill".to_string(),
+                SkillMetadata {
+                    local_contract: Some(local_contract),
+                    ..Default::default()
+                },
+            );
+
+            let local = ScannerService::scan_global_skills(&config).unwrap();
+            assert_eq!(local[0].contract.status, SkillContractStatus::Managed);
+            assert_eq!(
+                local[0].contract.source,
+                Some(SkillContractSource::LocalMetadata)
+            );
+
+            fs::write(skill_dir.join("skill-manager.yaml"), VALID_SKILL_CONTRACT).unwrap();
+            let portable = ScannerService::scan_global_skills(&config).unwrap();
+            assert_eq!(
+                portable[0].contract.source,
+                Some(SkillContractSource::PortableSidecar)
+            );
         });
     }
 

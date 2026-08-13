@@ -100,11 +100,13 @@ impl ConfigManager {
                 .as_ref()
                 .map(|c| !c.trim().is_empty())
                 .unwrap_or(false);
-            // Keep metadata that has a comment, favorite, or ClawHub publish record.
+            // Keep metadata that has a comment, favorite, ClawHub publish record,
+            // or a non-portable contract fallback.
             if tags.is_empty()
                 && !has_comment
                 && item.favorited_at.is_none()
                 && item.publish.is_none()
+                && item.local_contract.is_none()
             {
                 changed = true;
                 continue;
@@ -113,6 +115,7 @@ impl ConfigManager {
             let normalized_id = if trimmed_id.starts_with("global:")
                 || trimmed_id.starts_with("project:")
                 || trimmed_id.starts_with("group:")
+                || trimmed_id.starts_with("tool:")
             {
                 trimmed_id.to_string()
             } else {
@@ -133,6 +136,7 @@ impl ConfigManager {
                         comment,
                         favorited_at: item.favorited_at,
                         publish: item.publish.clone(),
+                        local_contract: item.local_contract.clone(),
                     },
                 )
                 .is_some()
@@ -682,7 +686,7 @@ impl Default for ConfigManager {
 #[cfg(test)]
 mod tests {
     use super::ConfigManager;
-    use crate::models::{AppConfig, SkillMetadata, SkillPublishRecord};
+    use crate::models::{AppConfig, SkillContract, SkillMetadata, SkillPublishRecord};
     use crate::test_support::with_temp_home;
     use serde_json::json;
     use std::fs;
@@ -1319,6 +1323,30 @@ mod tests {
                     .get("global:skill-d")
                     .and_then(|meta| meta.publish.as_ref()),
                 Some(&record)
+            );
+        });
+    }
+
+    #[test]
+    fn save_and_load_preserves_local_contract_without_other_metadata() {
+        with_temp_home(|_home_dir| {
+            let manager = ConfigManager::new();
+            let mut config = manager.init_default().expect("init default config");
+            config.skill_metadata.insert(
+                "tool:codex:local-contract".to_string(),
+                SkillMetadata {
+                    local_contract: Some(SkillContract::default()),
+                    ..Default::default()
+                },
+            );
+            manager.save(&config).expect("save config");
+            let loaded = manager.load().expect("load config");
+            assert_eq!(
+                loaded
+                    .skill_metadata
+                    .get("tool:codex:local-contract")
+                    .and_then(|metadata| metadata.local_contract.as_ref()),
+                Some(&SkillContract::default())
             );
         });
     }

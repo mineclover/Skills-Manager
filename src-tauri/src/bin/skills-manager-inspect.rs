@@ -7,8 +7,9 @@ use serde::Serialize;
 use tmpskills_manager_temp_lib::models::config::SkillActivationPreset;
 use tmpskills_manager_temp_lib::models::{
     builtin_skill_activation_presets, home_dir, AppConfig, InstalledSkillPackage, ProjectBinding,
-    Skill, SkillBinding, SkillOperationPreview, SkillOperationReport, SkillProviderInventory,
-    SkillScope, SUPPORTED_TOOLS,
+    SaveLocalSkillContractRequest, Skill, SkillBinding, SkillContract, SkillContractSummary,
+    SkillOperationPreview, SkillOperationReport, SkillProviderInventory, SkillScope,
+    SUPPORTED_TOOLS,
 };
 use tmpskills_manager_temp_lib::services::{
     BatchSetSkillToolsRequest, BatchSetSkillToolsResponse, BatchSkillToolAction,
@@ -82,6 +83,11 @@ enum Command {
     },
     ImportSkills {
         paths: Vec<String>,
+        json: bool,
+    },
+    SetLocalSkillContract {
+        instance_id: String,
+        file: String,
         json: bool,
     },
     SetTool {
@@ -202,6 +208,7 @@ fn usage() {
          skills-manager-inspect skill create --name <name> [--description <text>] [--json]\n\
          skills-manager-inspect skill delete --id <instance-id> [--json]\n\
          skills-manager-inspect skill import --path <directory> [--path <directory>] [--json]\n\
+         skills-manager-inspect skill contract set --id <instance-id> --file <contract.yaml> [--json]\n\
          skills-manager-inspect tool enable --id <tool-id> [--json]\n\
          skills-manager-inspect tool disable --id <tool-id> [--json]\n\
          skills-manager-inspect batch enable --skill <instance-id> --tool <tool-id> [--json]\n\
@@ -216,7 +223,7 @@ fn usage() {
          skills-manager-inspect preset all disable --id <preset-id> --tool <tool-id> [--project <id>] [--json]\n\
          skills-manager-inspect preset list [--scope global|project:<id>] [--json]\n\
          skills-manager-inspect preset clear [--json]\n\n\
-         Inspect uses the same scanner as the UI. Skill and preset mutations use\n\
+         Inspect uses the same scanner as the UI. Skill, contract, and preset mutations use\n\
          the same shared Rust control service as the Tauri commands."
     );
 }
@@ -418,6 +425,31 @@ fn parse_command() -> Result<Command, String> {
                 .ok_or_else(|| "skill requires list, preview, enable, or disable".to_string())?;
             if action == "list" {
                 return Ok(Command::Inspect(parse_scope_options(&args[2..])?));
+            }
+
+            if action == "contract" {
+                if args.get(2).map(String::as_str) != Some("set") {
+                    return Err("skill contract requires set".to_string());
+                }
+                let mut instance_id = None;
+                let mut file = None;
+                let mut json = false;
+                let mut index = 3;
+                while index < args.len() {
+                    match args[index].as_str() {
+                        "--id" => instance_id = Some(required_option(&args, &mut index, "--id")?),
+                        "--file" => file = Some(required_option(&args, &mut index, "--file")?),
+                        "--json" => json = true,
+                        value => return Err(format!("unknown skill contract option: {value}")),
+                    }
+                    index += 1;
+                }
+                return Ok(Command::SetLocalSkillContract {
+                    instance_id: instance_id
+                        .ok_or_else(|| "skill contract set requires --id".to_string())?,
+                    file: file.ok_or_else(|| "skill contract set requires --file".to_string())?,
+                    json,
+                });
             }
 
             if action == "preview" {
@@ -1339,6 +1371,31 @@ fn print_batch_result(response: &BatchSetSkillToolsResponse, json: bool) -> Resu
     Ok(())
 }
 
+fn print_local_contract_result(summary: &SkillContractSummary, json: bool) -> Result<(), String> {
+    if json {
+        serde_json::to_string_pretty(summary)
+            .map(|output| println!("{output}"))
+            .map_err(|error| format!("Failed to serialize local contract: {error}"))
+    } else {
+        println!(
+            "Local contract saved: status={:?} source={}",
+            summary.status,
+            summary
+                .source
+                .as_ref()
+                .map(|source| format!("{source:?}"))
+                .unwrap_or_else(|| "none".to_string())
+        );
+        if !summary.validation_errors.is_empty() {
+            println!(
+                "  validation_errors={}",
+                summary.validation_errors.join("; ")
+            );
+        }
+        Ok(())
+    }
+}
+
 fn main() {
     let command = match parse_command() {
         Ok(command) => command,
@@ -1510,6 +1567,23 @@ fn main() {
         }
         Command::ImportSkills { paths, json } => SkillControlService::import_skills_to_hub(&paths)
             .map(|_| print_operation_result("skill.import", json)),
+        Command::SetLocalSkillContract {
+            instance_id,
+            file,
+            json,
+        } => fs::read_to_string(&file)
+            .map_err(|error| format!("Failed to read {file}: {error}"))
+            .and_then(|contents| {
+                serde_yaml::from_str::<SkillContract>(&contents)
+                    .map_err(|error| format!("Failed to parse {file} as contract YAML: {error}"))
+            })
+            .and_then(|contract| {
+                SkillControlService::save_local_skill_contract(SaveLocalSkillContractRequest {
+                    skill_instance_id: instance_id,
+                    contract,
+                })
+            })
+            .and_then(|summary| print_local_contract_result(&summary, json)),
         Command::SetTool {
             tool_id,
             enabled,

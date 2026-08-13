@@ -110,6 +110,12 @@ pub struct ReleaseEvaluationSummary {
     pub passed_count: u64,
     pub failed_count: u64,
     pub blocked_count: u64,
+    /// Number of evaluation cases frozen into the release manifest.
+    pub required_case_count: u64,
+    /// Frozen cases whose latest evidence-backed result is passed.
+    pub verified_case_count: u64,
+    /// True only when every frozen evaluation case has a latest passed result.
+    pub is_verified: bool,
     pub last_evaluated_at: Option<i64>,
 }
 

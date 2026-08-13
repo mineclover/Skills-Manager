@@ -1,7 +1,9 @@
 use crate::models::config::SkillActivationPreset;
 #[cfg(test)]
 use crate::models::AppConfig;
-use crate::models::{Skill, SkillOperationReport};
+use crate::models::{
+    SaveLocalSkillContractRequest, Skill, SkillContractSummary, SkillOperationReport,
+};
 #[cfg(test)]
 use crate::services::skill_control::{
     apply_preset_to_target_with_skills, apply_skill_tool_enabled, build_batch_operations,
@@ -872,6 +874,16 @@ pub fn create_skill(
     cache.invalidate_skills();
 
     Ok(skill)
+}
+
+#[tauri::command]
+pub fn save_local_skill_contract(
+    request: SaveLocalSkillContractRequest,
+    cache: State<AppCache>,
+) -> Result<SkillContractSummary, String> {
+    let summary = SkillControlService::save_local_skill_contract(request)?;
+    cache.invalidate_skills();
+    Ok(summary)
 }
 
 #[tauri::command]

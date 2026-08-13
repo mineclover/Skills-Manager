@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import {
   ReleaseHealth,
   EvaluationRecord,
+  ReleaseEvaluationSummary,
   EvaluationStatus,
   ReleaseImprovementSuggestion,
   ReviewQueueItem,
@@ -31,6 +32,7 @@ export function ReviewQueue() {
   const [evaluationStatus, setEvaluationStatus] = useState<EvaluationStatus>("passed");
   const [evaluationEvidence, setEvaluationEvidence] = useState("");
   const [evaluations, setEvaluations] = useState<EvaluationRecord[]>([]);
+  const [evaluationSummary, setEvaluationSummary] = useState<ReleaseEvaluationSummary | null>(null);
   const [suggestions, setSuggestions] = useState<ReleaseImprovementSuggestion[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -119,15 +121,24 @@ export function ReviewQueue() {
     void (async () => {
       if (!selectedReleaseId) return;
       try {
-        setEvaluations(
-          await invoke<EvaluationRecord[]>("list_release_evaluations", {
+        const [records, summary] = await Promise.all([
+          invoke<EvaluationRecord[]>("list_release_evaluations", {
             releaseId: selectedReleaseId,
           }),
-        );
+          invoke<ReleaseEvaluationSummary>("get_release_evaluation_summary", { releaseId: selectedReleaseId }),
+        ]);
+        setEvaluations(records);
+        setEvaluationSummary(summary);
       } catch (loadError) {
         setError(String(loadError));
       }
     })();
+
+  useEffect(() => {
+    if (releaseId) loadEvaluations(releaseId);
+  // The selected release is the sole input; the loader only updates local view state.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [releaseId]);
 
   const submitEvaluation = () =>
     void (async () => {
@@ -351,6 +362,7 @@ export function ReviewQueue() {
           </div>
           <div className="mt-5 border-t border-border pt-4">
             <h3 className="text-sm font-semibold">Run a frozen evaluation case</h3>
+            {evaluationSummary && <p className="mt-1 text-xs text-muted-foreground">Lifecycle: <span className={evaluationSummary.is_verified ? "text-primary" : "text-warning"}>{evaluationSummary.is_verified ? "Verified" : "Not verified"}</span> · {evaluationSummary.verified_case_count}/{evaluationSummary.required_case_count} frozen cases passed</p>}
             <p className="mt-1 text-xs text-muted-foreground">Cases are copied from the contract when the release is frozen. Record a redacted assertion after running the case in the intended environment.</p>
             <label className="mt-3 block text-xs font-medium">Evaluation case
               <select value={evaluationCaseId} onChange={(event) => setEvaluationCaseId(event.target.value)} className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
