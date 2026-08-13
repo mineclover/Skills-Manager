@@ -4,6 +4,7 @@ version = "2.1.8"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
+default-run = "Skills-Manager"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
