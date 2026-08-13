@@ -9,14 +9,14 @@
 
 ## 📖 Introduction
 
-**Skills Manager** is a modern desktop application designed to solve the fragmentation of AI assistant skills configurations. Instead of managing skills and prompts separately for different tools, Skills Manager provides a central hub.
+**Skills Manager** is a desktop **skill registry and management control plane** for fragmented AI-agent skill configurations. It records canonical skill sources, pinned revisions, contracts, evaluation, project assignments, and activation intent instead of treating each agent's local directory as the source of truth.
 
-It uses a powerful **symlink synchronization mechanism**, allowing you to write a skill once and instantly use it across 30+ supported AI tools including Claude Code, Codex, Cursor, Gemini CLI, Windsurf, Trae, and more.
+Agent `skills/` directories are delivery paths. Skills Manager uses **symbolic-link distribution by default** to expose one reviewed canonical skill revision across supported AI tools including Claude Code, Codex, Cursor, Gemini CLI, Windsurf, Trae, and more. Copy distribution remains an explicit compatibility fallback when links are unavailable.
 
 ## ✨ Key Features
 
-- **🎯 Unified Management**: Centralize all your AI skills in one secure location.
-- **🔄 Smart Synchronization**: Automatic symlink management ensures your tools always have the latest version of your skills without file duplication.
+- **🎯 Registry-backed Management**: Track canonical sources, revisions, contracts, evaluation, and project assignments in one control plane.
+- **🔄 Link-based Distribution**: Symbolic links deliver a reviewed source revision to agent paths without duplicating the authoritative artifact.
 - **🎛️ Granular Control**: Enable or disable specific skills for individual tools without deleting the original files.
 - **🧭 Provider-aware Scopes**: Manage global, project, and individual CLI skill bindings with explicit targets.
 - **🔎 Control-plane Inspector**: Inspect providers, bindings, projects, and operation previews from the CLI.

@@ -1,9 +1,10 @@
 # Skills Manager — Skill Set Studio & Activation Control Roadmap
 
-> Status: implementation complete; maintained through acceptance checks
+> Status: Studio and Activation Control are implemented; Registry and Distribution
+> is the next planned product foundation.
 >
-> Scope: skill-set definition, project/work-scope assignment, provider-aware activation,
-> feedback, evaluation, and health management.
+> Scope: registry import and distribution, skill-set definition, project/work-scope
+> assignment, provider-aware activation, feedback, evaluation, and health management.
 >
 > Relationship: this document extends the implemented provider-aware control plane in
 > [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md). It does not replace its
@@ -52,6 +53,7 @@ evaluation case frozen into a release.
 | 4 — Activation Control | Complete | Provider-aware preview/apply, `SkillControlService` mutation boundary, shared-root confirmation, drift, and provider-level history. | Covered by activation and provider-impact checks. |
 | 5 — Feedback, evaluation, and health | Complete | Redacted records, thresholds, full Review Queue coverage, contextual project/work-scope/provider health, and provider activation accounting. | Covered by SQLite service tests. |
 | 6 — Assisted authoring and improvement | Complete | Context-seeded contract drafts, project-context editable skill-set drafts, duplicate candidates, missing-instance/contract diagnostics, and human-only recommendations. | Human review remains mandatory before release. |
+| 7 — Skill Registry and Distribution | Planned | `skills.sh` is tracked as an installation-model reference at `references/skills-sh`. | Add managed source import, provenance, version locking, and link-based materialization. |
 
 ### Next implementation sequence
 
@@ -79,6 +81,63 @@ The primary user question is:
 
 Enable/disable is the final deployment operation, not the primary product concept.
 
+### 1.1 Registry, distribution, and delivery boundaries
+
+`skills/` directories are **delivery paths**: agent-readable endpoints where a
+provider discovers `SKILL.md` artifacts. They are not the product's registry,
+package database, or authoritative source of management state.
+
+Skills Manager is the **Skill Registry and Management Control Plane**. It owns
+source discovery, import review, provenance, immutable source revisions,
+contracts, evaluation, releases, project assignment, activation intent, and
+operation history. A provider-specific skill directory is the final delivery
+surface only.
+
+```text
+remote / local source
+  → inspect and review
+  → Skills Manager registry (canonical stored revision)
+  → contract, evaluation, release, and project assignment
+  → distribution binding (link by default; copy only when required)
+  → agent-readable skills/ delivery path
+```
+
+The managed registry record for an imported artifact must retain at least its
+source locator, resolved Git commit or archive digest, selected subpath,
+content digest, fetch time, license when available, and review/verification
+state. This lets a release and an exported system prompt explain exactly which
+source revision supplied each instruction.
+
+`skills.sh` is the interoperability reference for source forms, skill
+discovery, project/global scope, agent targeting, selection-before-install,
+link-versus-copy behavior, update, and removal. Its source is pinned as the
+[`references/skills-sh`](./references/skills-sh) submodule. Skills Manager must
+adopt those user-facing semantics without making an unpinned external CLI the
+authority for registry state or executing an arbitrary install command from
+the GUI.
+
+### 1.2 Link-based distribution role
+
+The existing Skills Manager linker is the distribution layer. Its default role
+is to materialize a registry revision as a symbolic link into the selected
+project/global and agent-specific delivery path. It must never make the link
+target itself the source of truth.
+
+- **Link (default):** a canonical registry copy is shared by selected agents
+  and projects; update or review happens once at the registry revision.
+- **Copy (fallback):** an explicit compatibility option for systems where links
+  are unavailable. Every copied binding records its source revision and drift
+  state, and does not silently become a new canonical artifact.
+- **Disable/remove:** removes or disables the delivery binding, not the
+  canonical registry revision. Unreferenced revisions are eligible only for an
+  explicit, recoverable garbage-collection action.
+- **Shared delivery roots:** retain the existing impact preview and explicit
+  confirmation requirement before changing a link used by more than one
+  consumer.
+
+The delivery transaction is therefore `inspect → import → select → preview →
+materialize → scan/verify`, with progress reported for every stage and skill.
+
 ## 2. Two connected product areas
 
 ```text
@@ -94,7 +153,8 @@ evaluation cases and release versions    preview, apply, drift, operation histor
 
 Studio owns the definition and quality of a skill set.
 
-- Skill library, source, version, requirements, and documentation.
+- Registry-backed skill library, source provenance, pinned revision,
+  requirements, and documentation.
 - Skill-set purpose, membership, work-scope tags, and usage guide.
 - Success contract, safety boundaries, evaluation cases, and review cadence.
 - Immutable releases that can be assigned to projects.
@@ -123,6 +183,10 @@ The following records remain authoritative and are not replaced:
 - `SkillBinding`: provider-specific state of that artifact.
 - `SkillOperationReport`: auditable result of an attempted mutation.
 - `ProjectBinding`: explicit registered project and its skill roots.
+
+These records describe discovered artifacts and delivery state. They remain the
+provider reconciliation model, but imported-source provenance and canonical
+content ownership belong to the Registry records below.
 
 The same artifact may have multiple scope-aware `instance_id` values. New models
 must never resolve a project or tool skill by legacy artifact ID alone.
@@ -160,7 +224,30 @@ FeedbackEvent
 - outcome code, evidence, evaluator type, timestamp
 ```
 
-### 3.3 Scope policy for an entry
+### 3.3 Registry records
+
+```text
+SkillSource
+- id, locator, source_kind, authentication_reference
+
+SkillSourceRevision
+- source_id, resolved_revision, selected_path, content_digest, fetched_at
+- discovery manifest, license, trust/review state
+
+RegistrySkill
+- source_revision_id, skill_name, canonical_content_path, contract reference
+
+DistributionBinding
+- registry_skill_id, project_id, provider_id, delivery_path
+- method: symlink | copy
+- intended state, observed state, drift, last_materialized_at
+```
+
+`RegistrySkill` content is immutable for a given `SkillSourceRevision`. A new
+upstream revision creates a candidate revision and requires preview/review
+before it can replace any project assignment or distribution binding.
+
+### 3.4 Scope policy for an entry
 
 A skill-set entry identifies a stable artifact and declares how it should resolve
 in a project. Resolution occurs only when an activation plan is built.
@@ -454,6 +541,28 @@ and threshold breaches reliably create a review item.
 **Done when:** users can turn a repeated project workflow into a reviewed managed
 skill or set without turning agent-generated text directly into production policy.
 
+### Milestone 7 — Skill Registry and Distribution
+
+- Add read-only source inspection for GitHub shorthand/URL, Git URL, direct
+  skill path, archive, and local directory sources compatible with the
+  `skills.sh` installation model.
+- Import selected skills into a managed canonical store with source revision,
+  digest, selected path, and review state; do not import by mutating a provider
+  delivery root.
+- Add an install-plan preview with selected skills, target projects, agents,
+  scope, link/copy method, collisions, shared-root impact, and expected
+  filesystem mutations.
+- Materialize registry revisions through `LinkerService` using symbolic links
+  by default. Keep copy as a visible compatibility fallback with drift
+  detection.
+- Add update candidates, content/prompt diffs, explicit adoption, safe binding
+  removal, and recoverable registry cleanup for unreferenced revisions.
+
+**Done when:** a user can inspect a source, import a pinned revision into the
+registry, selectively deliver it to project/global agent paths via links, and
+later explain, update, disable, or remove every resulting binding without
+losing the canonical source or its provenance.
+
 ## 9. Acceptance and safety rules
 
 - A user can apply a project work-scope configuration without manually toggling each skill.
@@ -461,6 +570,12 @@ skill or set without turning agent-generated text directly into production polic
 - Shared roots retain preview and explicit confirmation requirements.
 - Direct tool skills, disabled bindings, conflicts, and unavailable providers remain visible.
 - Canonical manager skill artifacts are never changed by activation.
+- An agent-visible `skills/` path is treated as a delivery endpoint, never as
+  the registry's source of truth.
+- Every imported registry skill is traceable to an immutable source revision
+  before it can be released or delivered.
+- Link and copy bindings report their source revision, delivery target, and
+  observed drift; copy is never silently promoted to a canonical artifact.
 - A managed asset always exposes purpose, boundaries, evaluation, and feedback conventions.
 - Feedback never treats unverified agent output as a successful outcome.
 - All new state transitions have focused Rust fixtures plus frontend and CLI parity tests.
@@ -470,6 +585,10 @@ skill or set without turning agent-generated text directly into production polic
 - Building a general-purpose agent runtime, scheduler, chat service, or sandbox platform.
 - Automatically installing arbitrary libraries or executing unreviewed commands from a contract.
 - Treating remote marketplace availability as local activation.
+- Treating an arbitrary provider `skills/` directory or a copied delivery
+  artifact as the authoritative registry record.
+- Running an unpinned third-party installation CLI from the GUI as the source
+  of registry truth.
 - Turning Orca-native read-only topics into filesystem toggles.
 - Replacing user skill files or third-party metadata to force a manager convention.
 
