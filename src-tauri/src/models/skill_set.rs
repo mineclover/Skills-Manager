@@ -33,6 +33,10 @@ pub struct SkillSetMemberSnapshot {
     pub contract_status: crate::models::SkillContractStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contract_digest: Option<String>,
+    /// Complete contract content frozen at release time. This keeps a release
+    /// explainable after the source artifact or its sidecar changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract: Option<crate::models::SkillContract>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub purpose_summary: Option<String>,
     /// Evaluation case identifiers frozen from the skill contract at release time.

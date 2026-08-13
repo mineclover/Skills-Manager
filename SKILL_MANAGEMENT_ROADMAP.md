@@ -27,6 +27,13 @@ desktop application:
 - sidecar-preferred local contract metadata fallback and an evidence-derived
   verified release lifecycle label.
 
+Each release freezes the complete skill-contract content (not just a digest), so
+its purpose, environment requirements, verification, safety boundaries, and
+feedback convention remain inspectable after the source artifact changes. The
+Review Queue also covers incomplete frozen contracts, unresolved assignments,
+provider drift, and repeated instruction/dependency gaps in addition to health
+and safety signals.
+
 Contract drafts always require human completion and review before release; duplicate
 detection only flags candidates for review. Existing presets remain separate legacy
 activation profiles and are never converted automatically. Local contract metadata
@@ -40,10 +47,10 @@ evaluation case frozen into a release.
 | --- | --- | --- | --- |
 | 0 — Vocabulary and compatibility | Complete | Studio/Activation terminology, roadmap, and legacy presets remain separate. | Keep compatibility covered by regression checks. |
 | 1 — Skill Contract and managed status | Complete | Sidecar parsing, validation, sidecar-preferred local metadata fallback, managed status, editor entry point, and evidence-derived verified lifecycle label. | Covered by scanner, config, and Studio fixtures. |
-| 2 — Blueprint and Release | Complete | Reviewed blueprints, immutable membership/contract/evaluation snapshots, release notes, and explicit evaluation summaries. | Covered by release/service regression checks. |
+| 2 — Blueprint and Release | Complete | Reviewed blueprints, immutable membership plus complete contract/evaluation snapshots, release notes, and explicit evaluation summaries. | Covered by release/service regression checks. |
 | 3 — Project Profiles and work scopes | Complete | Default/recommended assignments, work-scope overlays, effective-set resolver, Project Profile, priority ordering, and blocking unresolved entries. | Covered by resolver and UI build checks. |
 | 4 — Activation Control | Complete | Provider-aware preview/apply, `SkillControlService` mutation boundary, shared-root confirmation, drift, and provider-level history. | Covered by activation and provider-impact checks. |
-| 5 — Feedback, evaluation, and health | Complete | Redacted records, thresholds, Review Queue, contextual project/work-scope/provider health, and provider activation accounting. | Covered by SQLite service tests. |
+| 5 — Feedback, evaluation, and health | Complete | Redacted records, thresholds, full Review Queue coverage, contextual project/work-scope/provider health, and provider activation accounting. | Covered by SQLite service tests. |
 | 6 — Assisted authoring and improvement | Complete | Context-seeded contract drafts, project-context editable skill-set drafts, duplicate candidates, missing-instance/contract diagnostics, and human-only recommendations. | Human review remains mandatory before release. |
 
 ### Next implementation sequence

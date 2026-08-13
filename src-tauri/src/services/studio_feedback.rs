@@ -587,14 +587,69 @@ impl StudioFeedbackService {
         Ok(suggestions)
     }
 
+    fn repeated_feedback_gaps(release_id: &str) -> Result<Vec<(StudioFeedbackCode, u64)>, String> {
+        let conn = Self::open()?;
+        let target_kind = Self::text(&StudioFeedbackTargetKind::SkillSetRelease)?;
+        let mut statement = conn
+            .prepare("SELECT code, COUNT(*) FROM studio_feedback_events WHERE target_kind=?1 AND target_id=?2 AND code IN ('instruction_gap', 'dependency_gap') GROUP BY code HAVING COUNT(*) >= 2")
+            .map_err(|error| format!("Failed to query repeated feedback gaps: {error}"))?;
+        let rows = statement
+            .query_map(params![target_kind, release_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
+            })
+            .map_err(|error| format!("Failed to read repeated feedback gaps: {error}"))?;
+        rows.map(|row| {
+            let (raw_code, count) =
+                row.map_err(|error| format!("Failed to decode repeated feedback gap: {error}"))?;
+            let code = serde_json::from_value(serde_json::Value::String(raw_code))
+                .map_err(|error| format!("Invalid feedback code in Studio history: {error}"))?;
+            Ok((code, count))
+        })
+        .collect()
+    }
+
     pub fn review_queue() -> Result<Vec<ReviewQueueItem>, String> {
         let catalog = SkillSetService::catalog()?;
         let mut queue = Vec::new();
-        for release in catalog.releases {
+        for release in &catalog.releases {
+            let incomplete_contracts = release
+                .member_snapshots
+                .iter()
+                .filter(|member| {
+                    member.contract_status != crate::models::SkillContractStatus::Managed
+                })
+                .map(|member| member.skill_id.as_str())
+                .collect::<Vec<_>>();
+            if !incomplete_contracts.is_empty() {
+                queue.push(ReviewQueueItem {
+                    release_id: release.id.clone(),
+                    reason: ReviewReason::ContractIncomplete,
+                    detail: format!(
+                        "Frozen release members missing a complete managed contract: {}",
+                        incomplete_contracts.join(", ")
+                    ),
+                });
+            }
+
+            for (code, count) in Self::repeated_feedback_gaps(&release.id)? {
+                queue.push(ReviewQueueItem {
+                    release_id: release.id.clone(),
+                    reason: ReviewReason::RepeatedFeedbackGap,
+                    detail: format!(
+                        "{count} repeated {} reports require a reviewed replacement release",
+                        match code {
+                            StudioFeedbackCode::InstructionGap => "instruction-gap",
+                            StudioFeedbackCode::DependencyGap => "dependency-gap",
+                            _ => "feedback-gap",
+                        }
+                    ),
+                });
+            }
+
             let health = Self::release_health(&release.id)?;
             if health.safety_incidents > 0 {
                 queue.push(ReviewQueueItem {
-                    release_id: release.id,
+                    release_id: release.id.clone(),
                     reason: ReviewReason::SafetyConcern,
                     detail: format!(
                         "{} safety concern(s) require review",
@@ -603,14 +658,14 @@ impl StudioFeedbackService {
                 });
             } else if health.status == StudioHealthStatus::NeedsReview {
                 queue.push(ReviewQueueItem {
-                    release_id: release.id,
+                    release_id: release.id.clone(),
                     reason: ReviewReason::ThresholdBreach,
                     detail: "A success, correction, or scope-mismatch threshold was breached"
                         .to_string(),
                 });
             } else if health.status == StudioHealthStatus::Unknown {
                 queue.push(ReviewQueueItem {
-                    release_id: release.id,
+                    release_id: release.id.clone(),
                     reason: ReviewReason::InsufficientEvidence,
                     detail: format!(
                         "{} evaluated outcomes; at least {} are required",
@@ -619,10 +674,54 @@ impl StudioFeedbackService {
                 });
             } else if health.freshness_days.unwrap_or(i64::MAX) > REVIEW_WINDOW_DAYS {
                 queue.push(ReviewQueueItem {
-                    release_id: release.id,
+                    release_id: release.id.clone(),
                     reason: ReviewReason::StaleEvaluation,
                     detail: format!("No verified success in {REVIEW_WINDOW_DAYS} days"),
                 });
+            }
+        }
+        for assignment in catalog
+            .assignments
+            .iter()
+            .filter(|assignment| assignment.active)
+        {
+            let effective = SkillSetService::resolve_effective_set(
+                crate::models::ResolveEffectiveSkillSetRequest {
+                    project_id: assignment.project_id.clone(),
+                    work_scope: assignment.work_scope.clone(),
+                },
+            )?;
+            if !effective.unresolved_skill_ids.is_empty() {
+                queue.push(ReviewQueueItem {
+                    release_id: assignment.release_id.clone(),
+                    reason: ReviewReason::UnresolvedRequiredEntry,
+                    detail: format!(
+                        "Assignment {} cannot resolve required entries: {}",
+                        assignment.id,
+                        effective.unresolved_skill_ids.join(", ")
+                    ),
+                });
+            }
+            match SkillSetService::inspect_drift(&assignment.id) {
+                Ok(drift) if !drift.compliant => queue.push(ReviewQueueItem {
+                    release_id: assignment.release_id.clone(),
+                    reason: ReviewReason::ProviderDrift,
+                    detail: format!(
+                        "Assignment {} has provider drift: {} disabled and {} missing member(s)",
+                        assignment.id,
+                        drift.disabled_operations.len(),
+                        drift.missing_skill_ids.len()
+                    ),
+                }),
+                Ok(_) => {}
+                Err(error) => queue.push(ReviewQueueItem {
+                    release_id: assignment.release_id.clone(),
+                    reason: ReviewReason::ProviderDrift,
+                    detail: format!(
+                        "Assignment {} needs provider configuration review: {error}",
+                        assignment.id
+                    ),
+                }),
             }
         }
         Ok(queue)
@@ -633,8 +732,8 @@ impl StudioFeedbackService {
 mod tests {
     use super::*;
     use crate::models::{
-        CreateSkillSetBlueprintRequest, CreateSkillSetReleaseRequest, EvaluationStatus,
-        StudioEvidenceType,
+        AssignSkillSetReleaseRequest, CreateSkillSetBlueprintRequest, CreateSkillSetReleaseRequest,
+        EvaluationStatus, SkillSetAssignmentRole, StudioEvidenceType,
     };
     use crate::services::{ConfigManager, SkillSetService};
     use crate::test_support::with_temp_home;
@@ -916,6 +1015,58 @@ evaluation: { cases: [evaluations/ok.md], review_cycle_days: 30 }
             assert_eq!(suggestions.len(), 1);
             assert_eq!(suggestions[0].code, StudioFeedbackCode::InstructionGap);
             assert_eq!(suggestions[0].occurrence_count, 2);
+        });
+    }
+
+    #[test]
+    fn review_queue_covers_contract_gaps_repeated_feedback_and_unresolved_assignments() {
+        with_temp_home(|_| {
+            let catalog = SkillSetService::create_blueprint(CreateSkillSetBlueprintRequest {
+                name: "Unresolved release".to_string(),
+                description: "Queue every missing review condition.".to_string(),
+                skill_ids: vec!["missing-skill".to_string()],
+                member_scope_policies: Default::default(),
+            })
+            .unwrap();
+            let blueprint_id = catalog.blueprints[0].id.clone();
+            SkillSetService::review_blueprint(&blueprint_id).unwrap();
+            let release = SkillSetService::create_release(CreateSkillSetReleaseRequest {
+                blueprint_id,
+                label: "v1".to_string(),
+                release_notes: String::new(),
+            })
+            .unwrap()
+            .releases
+            .pop()
+            .unwrap();
+            SkillSetService::assign_release(AssignSkillSetReleaseRequest {
+                release_id: release.id.clone(),
+                project_id: None,
+                work_scope: "audit".to_string(),
+                role: SkillSetAssignmentRole::Recommended,
+                provider_ids: Vec::new(),
+                priority: 0,
+            })
+            .unwrap();
+            for _ in 0..2 {
+                let mut feedback = request(
+                    StudioFeedbackCode::InstructionGap,
+                    "missing explicit decision branch",
+                );
+                feedback.target_id = release.id.clone();
+                StudioFeedbackService::record_feedback(feedback).unwrap();
+            }
+
+            let queue = StudioFeedbackService::review_queue().unwrap();
+            let reasons = queue
+                .iter()
+                .filter(|item| item.release_id == release.id)
+                .map(|item| item.reason.clone())
+                .collect::<Vec<_>>();
+            assert!(reasons.contains(&ReviewReason::ContractIncomplete));
+            assert!(reasons.contains(&ReviewReason::RepeatedFeedbackGap));
+            assert!(reasons.contains(&ReviewReason::UnresolvedRequiredEntry));
+            assert!(reasons.contains(&ReviewReason::ProviderDrift));
         });
     }
 }

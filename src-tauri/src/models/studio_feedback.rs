@@ -176,6 +176,10 @@ pub enum ReviewReason {
     ThresholdBreach,
     SafetyConcern,
     StaleEvaluation,
+    UnresolvedRequiredEntry,
+    RepeatedFeedbackGap,
+    ProviderDrift,
+    ContractIncomplete,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

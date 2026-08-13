@@ -71,6 +71,7 @@ export interface SkillSetMemberSnapshot {
   scope: SkillScope;
   contract_status: SkillContractStatus;
   contract_digest?: string | null;
+  contract?: SkillContract | null;
   purpose_summary?: string | null;
   evaluation_cases: string[];
 }
@@ -214,7 +215,15 @@ export type StudioFeedbackTargetKind = "skill" | "skill_set_release" | "activati
 export type StudioFeedbackCode = "completed" | "partial" | "failed" | "wrong_scope" | "instruction_gap" | "dependency_gap" | "safety_concern";
 export type StudioEvidenceType = "command_result" | "evaluation_assertion" | "human_confirmation";
 export type StudioHealthStatus = "unknown" | "healthy" | "needs_review";
-export type ReviewReason = "insufficient_evidence" | "threshold_breach" | "safety_concern" | "stale_evaluation";
+export type ReviewReason =
+  | "insufficient_evidence"
+  | "threshold_breach"
+  | "safety_concern"
+  | "stale_evaluation"
+  | "unresolved_required_entry"
+  | "repeated_feedback_gap"
+  | "provider_drift"
+  | "contract_incomplete";
 
 export interface ReleaseHealth {
   release_id: string;

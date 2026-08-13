@@ -106,6 +106,7 @@ impl SkillSetService {
                         scope: crate::models::SkillScope::Global,
                         contract_status: crate::models::SkillContractStatus::Unmanaged,
                         contract_digest: None,
+                        contract: None,
                         purpose_summary: None,
                         evaluation_cases: Vec::new(),
                     });
@@ -127,6 +128,7 @@ impl SkillSetService {
                     scope: skill.scope.clone(),
                     contract_status: skill.contract.status.clone(),
                     contract_digest,
+                    contract: skill.contract.contract.clone(),
                     purpose_summary: skill
                         .contract
                         .contract
@@ -297,9 +299,16 @@ impl SkillSetService {
         let created_at = Self::now();
         let label = request.label.trim().to_string();
         let release_notes = request.release_notes.trim().to_string();
-        let digest_input =
-            serde_json::to_vec(&(&blueprint.id, &label, &release_notes, &blueprint.members))
-                .map_err(|error| format!("Failed to digest release: {error}"))?;
+        let digest_input = serde_json::to_vec(&(
+            &blueprint.id,
+            &blueprint.name,
+            &blueprint.description,
+            &label,
+            &release_notes,
+            &blueprint.members,
+            &member_snapshots,
+        ))
+        .map_err(|error| format!("Failed to digest release: {error}"))?;
         let content_digest = format!("{:x}", Sha256::digest(digest_input));
         store.releases.push(SkillSetRelease {
             id: format!("release-{}", Uuid::new_v4()),
@@ -683,7 +692,7 @@ impl SkillSetService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::ProjectBinding;
+    use crate::models::{AppConfig, ProjectBinding};
     use crate::test_support::with_temp_home;
     use std::collections::HashMap;
 
@@ -723,6 +732,76 @@ mod tests {
                 "unresolved:upstream"
             );
             assert!(!release.content_digest.is_empty());
+        });
+    }
+
+    #[test]
+    fn release_freezes_the_complete_contract_not_only_its_digest() {
+        with_temp_home(|_| {
+            let mut config = AppConfig::default();
+            config.initialized = true;
+            let skill_dir = config.skills_dir.join("frozen-contract");
+            fs::create_dir_all(&skill_dir).unwrap();
+            fs::write(
+                skill_dir.join("SKILL.md"),
+                "---\nname: frozen-contract\n---\n",
+            )
+            .unwrap();
+            fs::write(
+                skill_dir.join("skill-manager.yaml"),
+                r#"schema_version: 1
+purpose:
+  summary: Frozen purpose
+  use_when: ["release review"]
+  avoid_when: ["unrelated task"]
+requirements:
+  runtimes: ["node"]
+  project_signals: ["package.json"]
+  verification: ["npm test"]
+success_contract:
+  expected_outcomes: ["reviewable release"]
+  non_goals: ["provider mutation"]
+  safety_rules: ["require review"]
+feedback:
+  codes: ["completed"]
+  required_for_completed: ["test output"]
+evaluation:
+  cases: ["evaluations/release.md"]
+  review_cycle_days: 30
+"#,
+            )
+            .unwrap();
+            ConfigManager::new().save(&config).unwrap();
+
+            let store = SkillSetService::create_blueprint(CreateSkillSetBlueprintRequest {
+                name: "Frozen contract release".to_string(),
+                description: "Preserves the reviewed contract.".to_string(),
+                skill_ids: vec!["frozen-contract".to_string()],
+                member_scope_policies: Default::default(),
+            })
+            .unwrap();
+            let blueprint_id = store.blueprints[0].id.clone();
+            SkillSetService::review_blueprint(&blueprint_id).unwrap();
+            let release = SkillSetService::create_release(CreateSkillSetReleaseRequest {
+                blueprint_id,
+                label: "v1".to_string(),
+                release_notes: "Freeze contract context".to_string(),
+            })
+            .unwrap()
+            .releases
+            .pop()
+            .unwrap();
+
+            fs::write(
+                skill_dir.join("skill-manager.yaml"),
+                "schema_version: 1\npurpose:\n  summary: Changed source\n",
+            )
+            .unwrap();
+            let frozen = release.member_snapshots[0].contract.as_ref().unwrap();
+            assert_eq!(frozen.purpose.summary, "Frozen purpose");
+            assert_eq!(frozen.requirements.runtimes, vec!["node"]);
+            assert_eq!(frozen.success_contract.safety_rules, vec!["require review"]);
+            assert_eq!(frozen.feedback.required_for_completed, vec!["test output"]);
         });
     }
 
