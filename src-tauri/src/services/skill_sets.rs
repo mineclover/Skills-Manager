@@ -16,7 +16,10 @@ use crate::models::{
     SkillSetMemberScopePolicy, SkillSetMemberSnapshot, SkillSetRelease, SkillSetStore,
     UpdateSkillSetBlueprintRequest,
 };
-use crate::services::{ConfigManager, ScannerService, SkillControlService, StudioFeedbackService};
+use crate::services::{
+    ConfigManager, ProviderInventoryService, ScannerService, SkillControlService,
+    StudioFeedbackService,
+};
 
 const STORE_FILE_NAME: &str = "skill-sets.json";
 const STORE_SCHEMA_VERSION: u32 = 1;
@@ -510,6 +513,8 @@ impl SkillSetService {
             ScannerService::scan_skills_for_scope(&config, assignment.project_id.as_deref())?;
         let mut operations = Vec::new();
         let mut missing_skill_ids = Vec::new();
+        let mut shared_impacts = Vec::new();
+        let mut requires_shared_root_confirmation = false;
         for member in &release.members {
             let Some(skill) = Self::resolve_member(&skills, member) else {
                 missing_skill_ids.push(
@@ -522,6 +527,29 @@ impl SkillSetService {
                     return Err(format!("Unknown tool provider: {tool_id}"));
                 }
                 let current_enabled = skill.is_enabled_for(tool_id);
+                if !current_enabled {
+                    let preview = ProviderInventoryService::preview_binding_operation_with_skills(
+                        &config,
+                        &skills,
+                        assignment.project_id.as_deref(),
+                        &skill.instance_id,
+                        tool_id,
+                        true,
+                    )?;
+                    if preview.requires_confirmation {
+                        requires_shared_root_confirmation = true;
+                        for impact in preview.impacts.into_iter().filter(|impact| impact.shared) {
+                            if !shared_impacts.iter().any(
+                                |existing: &crate::models::SkillBindingImpact| {
+                                    existing.provider_id == impact.provider_id
+                                        && existing.root_path == impact.root_path
+                                },
+                            ) {
+                                shared_impacts.push(impact);
+                            }
+                        }
+                    }
+                }
                 operations.push(SkillSetActivationOperation {
                     skill_id: member.skill_id.clone(),
                     skill_instance_id: skill.instance_id.clone(),
@@ -547,6 +575,8 @@ impl SkillSetService {
             work_scope: assignment.work_scope.clone(),
             operations,
             missing_skill_ids,
+            requires_shared_root_confirmation,
+            shared_impacts,
             generated_at: Self::now(),
         })
     }
@@ -571,13 +601,19 @@ impl SkillSetService {
         })
     }
 
-    pub fn apply_activation(assignment_id: &str) -> Result<SkillSetActivationApplyResult, String> {
+    pub fn apply_activation(
+        assignment_id: &str,
+        confirm_shared_root: bool,
+    ) -> Result<SkillSetActivationApplyResult, String> {
         let plan = Self::preview_activation(assignment_id)?;
         if !plan.missing_skill_ids.is_empty() {
             return Err(format!(
                 "Cannot apply activation while release members are missing: {}",
                 plan.missing_skill_ids.join(", ")
             ));
+        }
+        if plan.requires_shared_root_confirmation && !confirm_shared_root {
+            return Err("Shared provider roots may be affected; inspect the preview and confirm before applying".to_string());
         }
         let mut result = SkillSetActivationApplyResult {
             plan: plan.clone(),

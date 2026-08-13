@@ -230,6 +230,10 @@ pub struct SkillSetActivationPlan {
     pub work_scope: String,
     pub operations: Vec<SkillSetActivationOperation>,
     pub missing_skill_ids: Vec<String>,
+    #[serde(default)]
+    pub requires_shared_root_confirmation: bool,
+    #[serde(default)]
+    pub shared_impacts: Vec<crate::models::SkillBindingImpact>,
     pub generated_at: i64,
 }
 

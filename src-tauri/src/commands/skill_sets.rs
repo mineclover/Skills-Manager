@@ -93,6 +93,7 @@ pub fn get_skill_set_drift(assignment_id: String) -> Result<SkillSetDriftReport,
 #[tauri::command]
 pub fn apply_skill_set_activation(
     assignment_id: String,
+    confirm_shared_root: Option<bool>,
 ) -> Result<SkillSetActivationApplyResult, String> {
-    SkillSetService::apply_activation(&assignment_id)
+    SkillSetService::apply_activation(&assignment_id, confirm_shared_root.unwrap_or(false))
 }

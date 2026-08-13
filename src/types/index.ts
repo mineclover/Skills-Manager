@@ -142,6 +142,8 @@ export interface SkillSetActivationPlan {
   work_scope: string;
   operations: SkillSetActivationOperation[];
   missing_skill_ids: string[];
+  requires_shared_root_confirmation: boolean;
+  shared_impacts: SkillBindingImpact[];
   generated_at: number;
 }
 
