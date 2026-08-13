@@ -18,16 +18,18 @@ desktop application:
   explicit editor entry point;
 - reviewed blueprints, immutable release snapshots, evaluation-case snapshots,
   default/recommended project assignments, and effective-set resolution;
-- provider-aware preview/apply through `SkillControlService`, plus binding drift
-  and bounded activation history;
-- redacted feedback/evaluation records, release health, a Review Queue, and
-  human-only improvement suggestions derived from repeated feedback.
+- provider-aware preview/apply through `SkillControlService`, explicit shared-root
+  confirmation, binding drift, and provider-level activation history;
+- redacted feedback/evaluation records, contextual release health, a Review Queue,
+  and human-only improvement suggestions derived from repeated feedback;
+- Project Profile resolution, assignment priorities, frozen release notes,
+  evaluation summaries, and project-context editable blueprint drafts.
 
-This does not yet mark every roadmap milestone complete. Per-project/provider
-health breakdowns remain follow-up work. Contract drafts are context-seeded but
-still require human completion, and duplicate detection only flags candidates for
-review. Existing presets remain separate legacy activation profiles and are never
-converted automatically.
+Contract drafts always require human completion and review before release; duplicate
+detection only flags candidates for review. Existing presets remain separate legacy
+activation profiles and are never converted automatically. The remaining convention
+gap is the optional local contract-metadata fallback and a distinct verified
+lifecycle label; neither changes provider activation behavior.
 
 ### Delivery tracker
 
@@ -35,22 +37,20 @@ converted automatically.
 | --- | --- | --- | --- |
 | 0 — Vocabulary and compatibility | Complete | Studio/Activation terminology, roadmap, and legacy presets remain separate. | Keep compatibility covered by regression checks. |
 | 1 — Skill Contract and managed status | Substantially complete | Sidecar parsing, validation, managed status, detail summary, editor entry point, and context-seeded draft. | Local metadata fallback and an explicit verified lifecycle label. |
-| 2 — Blueprint and Release | Substantially complete | Reviewed blueprints, immutable membership/contract/evaluation snapshots, and per-member scope policies. | Release notes and an explicit evaluation-summary view. |
-| 3 — Project Profiles and work scopes | Substantially complete | Default/recommended assignments, work-scope overlays, effective-set resolver, and blocking unresolved entries. | Dedicated Project Profile surface and assignment priority. |
-| 4 — Activation Control | Substantially complete | Provider-aware preview/apply, `SkillControlService` mutation boundary, drift, and bounded history. | Shared-root confirmation presentation and provider-level execution history. |
-| 5 — Feedback, evaluation, and health | In progress | Redacted feedback/evaluation records, health thresholds, Review Queue, safety visibility, and feedback-driven suggestions. | Project/work-scope/provider breakdowns, provider-level activation accounting, and contextual health views. |
-| 6 — Assisted authoring and improvement | In progress | Context-seeded contract drafts, duplicate candidate warning, and human-only feedback recommendations. | Project-context skill-set drafts and missing-requirement diagnostics. |
+| 2 — Blueprint and Release | Complete | Reviewed blueprints, immutable membership/contract/evaluation snapshots, release notes, and explicit evaluation summaries. | Covered by release/service regression checks. |
+| 3 — Project Profiles and work scopes | Complete | Default/recommended assignments, work-scope overlays, effective-set resolver, Project Profile, priority ordering, and blocking unresolved entries. | Covered by resolver and UI build checks. |
+| 4 — Activation Control | Complete | Provider-aware preview/apply, `SkillControlService` mutation boundary, shared-root confirmation, drift, and provider-level history. | Covered by activation and provider-impact checks. |
+| 5 — Feedback, evaluation, and health | Complete | Redacted records, thresholds, Review Queue, contextual project/work-scope/provider health, and provider activation accounting. | Covered by SQLite service tests. |
+| 6 — Assisted authoring and improvement | Complete | Context-seeded contract drafts, project-context editable skill-set drafts, duplicate candidates, missing-instance/contract diagnostics, and human-only recommendations. | Human review remains mandatory before release. |
 
 ### Next implementation sequence
 
-1. Store provider-level activation outcomes while preserving existing activation-run
-   records, then expose project/work-scope/provider health breakdowns.
-2. Add a Project Profile surface for default/recommended releases and explicit
-   priority ordering.
-3. Add release notes, evaluation summaries, missing-requirement diagnostics, and
-   human-reviewed skill-set draft assistance.
-4. Run the complete acceptance audit, including shared-root confirmation and
-   provider/CLI parity, before declaring the roadmap complete.
+1. Decide whether local contract metadata is needed in addition to portable
+   sidecars, and define its synchronization/precedence rules.
+2. Add an explicit verified lifecycle label only after its evaluation threshold and
+   evidence authority are approved.
+3. Keep the acceptance audit in CI: focused Studio tests, full serial Rust tests,
+   frontend tests/build, shared-root confirmation, and provider/CLI parity.
 
 ## 1. Product direction
 
