@@ -11,7 +11,7 @@
 
 **Skills Manager** 是一款现代化的桌面应用程序，旨在解决 AI 助手的 Skills 配置碎片化的问题。它提供了一个中心化的枢纽，让您不再需要为不同的工具分别管理 Skills 技能。
 
-通过强大的**软链接同步机制（Symlink Synchronization）**，您只需编写一次技能，即可在 30+ 款受支持的 AI 工具（包括 Claude Code、Codex、Cursor、Gemini CLI、Windsurf、Trae 等）中即时生效，实现"一处编写，多处使用"。
+通过强大的**软链接同步机制（Symlink Synchronization）**，您只需编写一次技能，即可在 30+ 款受支持的 AI 工具（包括 Claude Code、Codex、Cursor、Gemini CLI、Antigravity、Windsurf、Trae 等）中即时生效，实现"一处编写，多处使用"。
 
 ## ✨ 核心功能
 
@@ -26,7 +26,7 @@
 - **🌍 多语言界面**：支持英文、韩文和中文界面。
 - **⚡ 极致性能**：基于 **Rust** 和 **Tauri 2.0** 构建，带来轻量级、秒开的极致体验。
 - **🛡️ 跨平台支持**：完美支持 macOS、Windows 和 Linux 系统。
-- **🔌 多工具支持**：开箱即用支持 30+ 款 AI 工具（Claude Code、Codex、Cursor、Gemini CLI、Windsurf、Trae、Cline、Augment、Goose 等），并支持自定义扩展。
+- **🔌 多工具支持**：开箱即用支持 30+ 款 AI 工具（Claude Code、Codex、Cursor、Gemini CLI、Antigravity、Windsurf、Trae、Cline、Augment、Goose 等），并支持自定义扩展。
 - **🧩 自定义工具**：支持用户添加自定义工具，配置路径与图标。
 - **🎨 现代 UI**：基于 React 19、Tailwind CSS v4 和 Radix UI 打造的 Raycast 风格精美界面。
 

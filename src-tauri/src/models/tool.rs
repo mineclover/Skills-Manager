@@ -295,6 +295,7 @@ mod tests {
         assert!(ids.contains(&"hermes"));
         assert!(ids.contains(&"workbuddy"));
         assert!(ids.contains(&"qoderwork-cn"));
+        assert!(ids.contains(&"antigravity"));
     }
 
     #[test]
@@ -334,12 +335,17 @@ mod tests {
             .iter()
             .find(|tool| tool.id == "iflow")
             .expect("iflow should exist in supported tools");
+        let antigravity = SUPPORTED_TOOLS
+            .iter()
+            .find(|tool| tool.id == "antigravity")
+            .expect("antigravity should exist in supported tools");
 
         assert_eq!(commandcode.config_dir, ".commandcode");
         assert_eq!(continue_tool.config_dir, ".continue");
         assert_eq!(crush.config_dir, ".config/crush");
         assert_eq!(goose.config_dir, ".config/goose");
         assert_eq!(iflow.config_dir, ".iflow");
+        assert_eq!(antigravity.config_dir, ".antigravity");
     }
 
     #[test]

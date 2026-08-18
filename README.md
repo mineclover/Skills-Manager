@@ -11,7 +11,7 @@
 
 **Skills Manager** is a desktop **skill registry and management control plane** for fragmented AI-agent skill configurations. It records canonical skill sources, pinned revisions, contracts, evaluation, project assignments, and activation intent instead of treating each agent's local directory as the source of truth.
 
-Agent `skills/` directories are delivery paths. Skills Manager uses **symbolic-link distribution by default** to expose one reviewed canonical skill revision across supported AI tools including Claude Code, Codex, Cursor, Gemini CLI, Windsurf, Trae, and more. Copy distribution remains an explicit compatibility fallback when links are unavailable.
+Agent `skills/` directories are delivery paths. Skills Manager uses **symbolic-link distribution by default** to expose one reviewed canonical skill revision across supported AI tools including Claude Code, Codex, Cursor, Gemini CLI, Antigravity, Windsurf, Trae, and more. Copy distribution remains an explicit compatibility fallback when links are unavailable.
 
 ## ✨ Key Features
 
@@ -26,7 +26,7 @@ Agent `skills/` directories are delivery paths. Skills Manager uses **symbolic-l
 - **🌍 Multilingual UI**: English, Korean, and Chinese interface support.
 - **⚡ High Performance**: Built with **Rust** and **Tauri 2.0** for a lightweight, blazing-fast experience.
 - **🛡️ Cross-Platform**: Native support for macOS, Windows, and Linux.
-- **🔌 Multi-Tool Support**: Out-of-the-box support for 30+ AI tools (Claude Code, Codex, Cursor, Gemini CLI, Windsurf, Trae, Cline, Augment, Goose, and many more), extensible via custom tools.
+- **🔌 Multi-Tool Support**: Out-of-the-box support for 30+ AI tools (Claude Code, Codex, Cursor, Gemini CLI, Antigravity, Windsurf, Trae, Cline, Augment, Goose, and many more), extensible via custom tools.
 - **🧩 Custom Tools**: Add your own tools with custom paths and optional icons.
 - **🎨 Modern UI**: Beautiful Raycast-style interface built with React 19, Tailwind CSS v4, and Radix UI.
 
