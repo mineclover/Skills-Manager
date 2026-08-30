@@ -1,4 +1,0 @@
-interface:
-  display_name: "Skills Manager UI"
-  short_description: "Provider-aware Skills Manager frontend"
-  default_prompt: "Use $skills-manager-ui to change the Skills Manager frontend while preserving UI and CLI parity."

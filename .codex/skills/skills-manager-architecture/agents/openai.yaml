@@ -1,4 +1,0 @@
-interface:
-  display_name: "Skills Manager Architecture"
-  short_description: "Provider-aware architecture guidance"
-  default_prompt: "Use $skills-manager-architecture to reason about provider inventory, binding state, scopes, and shared-root safety."
