@@ -322,7 +322,6 @@ export interface Skill {
 export interface ProjectBinding {
   id: string;
   name: string;
-  root_path?: string | null;
   skills_dir: string;
   root_path?: string | null;
 }
@@ -348,7 +347,7 @@ export interface InstalledSkillPackage {
 
 export interface SkillMetadata {
   tags: string[];
-  note?: string | null;
+  comment?: string | null;
   favorited_at?: number | null;
   /** 最近一次成功发布到 ClawHub 的记录；未发布过时缺省。 */
   publish?: SkillPublishRecord | null;
@@ -390,8 +389,117 @@ export interface Tool {
   config: ToolConfig;
   source: "builtin" | "custom";
   icon_path?: string | null;
-  project_skills_dir?: string | null;
 }
+
+export type SkillProviderKind = "filesystem" | "config_file" | "cli" | "marketplace";
+
+export interface SkillProviderCapabilities {
+  list: boolean;
+  install: boolean;
+  enable: boolean;
+  disable: boolean;
+  update: boolean;
+  inspect: boolean;
+}
+
+export interface SkillProvider {
+  provider_id: string;
+  kind: SkillProviderKind;
+  display_name: string;
+  root_path?: string | null;
+  detected: boolean;
+  cli_available: boolean;
+  reachable?: boolean | null;
+  capabilities: SkillProviderCapabilities;
+  skill_count: number;
+  enabled_count: number;
+  disabled_count: number;
+  warning?: string | null;
+}
+
+export interface OrcaTopic {
+  name: string;
+  description?: string | null;
+}
+
+export interface OrcaInventory {
+  cli_available: boolean;
+  available: boolean;
+  app_running?: boolean | null;
+  runtime_reachable?: boolean | null;
+  runtime_state?: string | null;
+  topics_available: boolean;
+  topics: OrcaTopic[];
+  checked_at: number;
+  warning?: string | null;
+}
+
+export interface SkillProviderInventory {
+  checked_at: number;
+  providers: SkillProvider[];
+  orca: OrcaInventory;
+}
+
+export type SkillBindingState = "enabled" | "disabled" | "missing" | "conflict" | "unavailable";
+
+export interface SkillBinding {
+  artifact_id: string;
+  skill_instance_id: string;
+  provider_id: string;
+  scope: SkillScope;
+  state: SkillBindingState;
+  source_path?: string | null;
+  target_path?: string | null;
+  last_checked_at: number;
+  reason?: string | null;
+}
+
+export type SkillOperationAction = "enable" | "disable" | "preset_apply";
+
+export interface SkillBindingImpact {
+  provider_id: string;
+  display_name: string;
+  root_path?: string | null;
+  shared: boolean;
+  reason?: string | null;
+}
+
+export interface SkillOperationPreview {
+  skill_instance_id: string;
+  artifact_id: string;
+  provider_id: string;
+  scope: SkillScope;
+  action: SkillOperationAction;
+  target_root?: string | null;
+  impacts: SkillBindingImpact[];
+  requires_confirmation: boolean;
+  warning?: string | null;
+}
+
+export interface SkillOperationFailure {
+  skill_instance_id?: string | null;
+  provider_id?: string | null;
+  message: string;
+}
+
+export interface SkillOperationReport {
+  operation_id: string;
+  action: SkillOperationAction;
+  scope?: SkillScope | null;
+  project_id?: string | null;
+  provider_id?: string | null;
+  requested_count: number;
+  attempted_count: number;
+  applied_count: number;
+  skipped_count: number;
+  failed_count: number;
+  failures: SkillOperationFailure[];
+  impacts: SkillBindingImpact[];
+  completed_at: number;
+}
+
+export type VaultBackupConsent = "unknown" | "granted" | "denied";
+export type TelemetryConsent = "unknown" | "granted" | "denied";
 
 // Risk scan
 export type RiskScanMode = "off" | "basic" | "deep";
@@ -433,6 +541,9 @@ export interface UserPreferences {
 
   // Sync behavior
   auto_sync: boolean;
+  sync_on_save: boolean;
+  cloud_sync_auto: boolean;
+  cloud_sync_interval_minutes: number;
 
   // Editor settings
   default_editor: string;
@@ -441,6 +552,8 @@ export interface UserPreferences {
   // Notifications
   show_sync_notifications: boolean;
   remove_links_when_disabling_tool: boolean;
+  vault_backup_consent: VaultBackupConsent;
+  telemetry_consent: TelemetryConsent;
   skill_usage_monitor: boolean;
   risk_scan_mode: RiskScanMode;
 
@@ -480,6 +593,89 @@ export interface AuthMeResponse {
   email?: string | null;
 }
 
+export interface CloudSyncState {
+  device_id: string;
+  last_revision: number;
+  last_synced_at?: number | null;
+  last_payload_hash?: string | null;
+}
+
+export interface CloudSyncSkill {
+  id: string;
+  instance_id?: string | null;
+  scope?: SkillScope | null;
+  project_id?: string | null;
+  project_name?: string | null;
+  name: string;
+  source: "local" | "imported" | "marketplace" | "vault";
+  version: string;
+  marketplace?: CloudSyncMarketplaceMeta | null;
+  vault?: CloudSyncVaultMeta | null;
+}
+
+export interface CloudSyncMarketplaceMeta {
+  marketplace_source_id?: string | null;
+  marketplace_skill_id?: string | null;
+  marketplace_skill_slug?: string | null;
+  repo_url?: string | null;
+  skill_path?: string | null;
+  remote_revision?: string | null;
+}
+
+export interface CloudSyncVaultMeta {
+  provider?: string | null;
+  user_id?: string | null;
+  skill_id?: string | null;
+  version?: string | null;
+  hash?: string | null;
+  size?: number | null;
+  updated_at?: number | null;
+}
+
+export interface CloudSyncToolState {
+  enabled: boolean;
+  enabled_skills: string[];
+}
+
+export interface CloudSyncCustomTool {
+  id: string;
+  name: string;
+  config_path: string;
+  skills_path: string;
+  enabled: boolean;
+}
+
+export interface CloudSyncPayload {
+  version: number;
+  updated_at: number;
+  device_id: string;
+  skills: CloudSyncSkill[];
+  tool_states: Record<string, CloudSyncToolState>;
+  custom_tools: CloudSyncCustomTool[];
+  preferences?: UserPreferences | null;
+}
+
+export interface CloudSyncSnapshot {
+  revision: number;
+  payload: CloudSyncPayload | null;
+}
+
+export interface VaultBackupResult {
+  uploaded: number;
+  skipped: number;
+  failed: string[];
+}
+
+export type CloudSyncPushResult =
+  | { status: "synced"; revision: number }
+  | { status: "skipped"; reason: string }
+  | {
+      status: "conflict";
+      revision: number;
+      payload: CloudSyncPayload;
+      local_payload: CloudSyncPayload;
+    };
+
 export interface AppConfig {
   version: string;
   skills_dir: string;
@@ -489,7 +685,9 @@ export interface AppConfig {
   marketplace_favorites?: MarketplaceFavoriteMap;
   preferences?: UserPreferences;
   marketplace_sources?: MarketplaceSource[];
+  poll_client_state?: PollClientStateConfig | null;
   auth_session?: AuthSession | null;
+  cloud_sync?: CloudSyncState | null;
   projects?: ProjectBinding[];
   active_project_id?: string | null;
   llm_provider?: LlmProvider | null;
@@ -504,6 +702,11 @@ export interface LlmProvider {
   temperature?: number | null;
   max_tokens?: number | null;
   timeout_secs?: number | null;
+}
+
+export interface PollClientStateConfig {
+  voter_id?: string | null;
+  voted_options?: Record<string, string>;
 }
 
 export interface CustomToolConfig {
@@ -591,28 +794,6 @@ export interface MarketplaceSource {
   api_key?: string | null;
 }
 
-export type MarketplaceInstallStatus = "not_installed" | "installed" | "update_available";
-
-export interface MarketplaceInstallTarget {
-  scope: SkillScope;
-  project_id?: string | null;
-  tool_ids?: string[];
-}
-
-export interface MarketplaceInstallSelection {
-  global: boolean;
-  projects: MarketplaceInstallTarget[];
-}
-
-export interface MarketplaceInstallation {
-  instance_id: string;
-  scope: SkillScope;
-  project_id?: string | null;
-  project_name?: string | null;
-  tool_ids: string[];
-  install_status: MarketplaceInstallStatus;
-}
-
 export interface MarketplaceSkill {
   id: string;
   slug?: string | null;
@@ -629,8 +810,7 @@ export interface MarketplaceSkill {
   external_url: string | null;
   remote_revision?: string | null;
   tags: string[];
-  install_status: MarketplaceInstallStatus;
-  installations: MarketplaceInstallation[];
+  install_status: "not_installed" | "installed" | "update_available";
   clawhub_slug?: string | null;
   clawhub_owner?: string | null;
   clawhub_version?: string | null;
@@ -683,36 +863,6 @@ export interface UpdateInfo {
   release_notes?: string;
 }
 
-export interface CliInstallStatus {
-  bundled: boolean;
-  installed: boolean;
-  target: string;
-  versionMatches: boolean;
-  appVersion: string;
-  /** False when the install folder is not on PATH — `skm` would not resolve in a shell. */
-  onPath: boolean;
-}
-
-export interface CliSkillEnableFailure {
-  tool: string;
-  message: string;
-}
-
-export interface CliSkillInstallReport {
-  id?: string;
-  path?: string;
-  enabled_for?: string[];
-  failed?: CliSkillEnableFailure[];
-  error?: string;
-}
-
-export interface CliInstallResult {
-  installed: boolean;
-  target: string;
-  onPath: boolean;
-  cliSkill?: CliSkillInstallReport;
-}
-
 export type FeedbackContactType =
   | "wechat"
   | "email"
@@ -726,6 +876,66 @@ export interface FeedbackRequest {
   language?: string | null;
 }
 
+export interface PollOption {
+  id: string;
+  label: string;
+}
+
+export interface PollOptionResult extends PollOption {
+  votes: number;
+}
+
+export interface Poll {
+  id: string;
+  title: string;
+  locale: string;
+  defaultLocale: string;
+  isActive: boolean;
+  options: PollOption[];
+  createdAt: number;
+}
+
+export interface PollResult {
+  id: string;
+  title: string;
+  locale: string;
+  defaultLocale: string;
+  isActive: boolean;
+  options: PollOptionResult[];
+  totalVotes: number;
+  createdAt: number;
+}
+
+export interface PollVoteRequest {
+  voterId: string;
+  optionId: string;
+}
+
+export interface PollVote {
+  id: string;
+  pollId: string;
+  voterId: string;
+  optionId: string;
+  createdAt: number;
+}
+
+export interface PollClientState {
+  voterId: string | null;
+  votedOptions: Record<string, string>;
+}
+
+export interface PresetActivation {
+  tool_id: string;
+  skill_ids: string[];
+}
+
+export interface SkillActivationPreset {
+  id: string;
+  name: string;
+  description?: string | null;
+  activations: PresetActivation[];
+}
+
 // Skill import/export (cross-device sync)
 export interface ExportedSkillMeta {
   id: string;
@@ -735,7 +945,6 @@ export interface ExportedSkillMeta {
   folder: string;
   enabled_tools: string[];
   tags: string[];
-  note?: string | null;
   favorited_at: number | null;
 }
 
