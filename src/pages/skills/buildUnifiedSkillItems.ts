@@ -10,6 +10,7 @@ import { getDetectedToolIds } from "./getEnabledToolIds.ts";
 import { orderToolIdsForSkill } from "./orderToolIds.ts";
 import { summarizeEnabledTools, type EnabledToolsSummary } from "./summarizeEnabledTools.ts";
 import { getGroupMetadataKey, getGroupTags, getSkillTagsForSkill, normalizeSkillTags, type SkillTagSummary } from "./skillTags.ts";
+import { getSkillNoteForSkill } from "./skillNotes.ts";
 
 export interface GroupToolState {
   toolId: string;
@@ -25,6 +26,7 @@ export interface UnifiedSkillListItem {
   id: string;
   title: string;
   description: string | null;
+  note: string | null;
   openPath: string | null;
   searchText: string;
   tags: string[];
@@ -234,12 +236,13 @@ function getSkillBadgeLabel(_skill: Skill): string | null {
   return null;
 }
 
-function getSkillSearchText(skill: Skill, tags: string[]): string {
+function getSkillSearchText(skill: Skill, tags: string[], note: string): string {
   return buildSearchText([
     skill.name,
     skill.id,
     skill.instance_id,
     skill.description,
+    note,
     skill.scope,
     skill.tool_id ?? null,
     skill.project_id ?? null,
@@ -263,10 +266,8 @@ export function buildUnifiedSkillItems({
 
   const skillItems = skills.map((skill): UnifiedSkillListItem => {
     const tags = getSkillTagsForSkill(skill, skillMetadata);
-    const manageableToolIds = skill.scope === "tool" && skill.tool_id
-      ? [skill.tool_id]
-      : detectedToolIds;
-    const orderedToolIds = orderToolIdsForSkill(manageableToolIds, skill.enabled);
+    const note = getSkillNoteForSkill(skill, skillMetadata);
+    const orderedToolIds = orderToolIdsForSkill(enabledToolIds, skill.enabled);
     const previewChips = getSkillPreviewChips(skill, tags);
     const previewTotal = tags.length;
 
@@ -276,8 +277,9 @@ export function buildUnifiedSkillItems({
       id: skill.instance_id,
       title: skill.name,
       description: skill.description,
+      note: note || null,
       openPath: skill.path,
-      searchText: getSkillSearchText(skill, tags),
+      searchText: getSkillSearchText(skill, tags, note),
       tags,
       supportsTagFilter: true,
       badgeLabel: getSkillBadgeLabel(skill),
@@ -301,6 +303,7 @@ export function buildUnifiedSkillItems({
       id: skillPackage.package_id,
       title: skillPackage.name,
       description: null,
+      note: null,
       openPath: skillPackage.path ?? null,
       searchText: buildSearchText([
         skillPackage.name,

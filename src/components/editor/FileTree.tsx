@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { FileNode } from "@/types";
@@ -556,15 +556,8 @@ function TreeNode({
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
             }}
-            dangerouslySetInnerHTML={
-              query
-                ? {
-                    __html: highlightMatch(node.name, query),
-                  }
-                : undefined
-            }
           >
-            {query ? undefined : node.name}
+            {query ? highlightMatch(node.name, query) : node.name}
           </span>
         )}
 
@@ -776,23 +769,29 @@ function EditInput({ inputRef, value, onChange, onCommit, onCancel }: EditInputP
   );
 }
 
-function highlightMatch(name: string, query: string): string {
-  if (!query) return escapeHtml(name);
+function highlightMatch(name: string, query: string): ReactNode {
+  if (!query) return name;
   const idx = name.toLowerCase().indexOf(query);
-  if (idx < 0) return escapeHtml(name);
+  if (idx < 0) return name;
   const before = name.slice(0, idx);
   const match = name.slice(idx, idx + query.length);
   const after = name.slice(idx + query.length);
-  return `${escapeHtml(before)}<mark style="background:color-mix(in srgb, var(--primary) 30%, transparent);color:inherit;border-radius:2px;padding:0;">${escapeHtml(match)}</mark>${escapeHtml(after)}`;
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+  return (
+    <>
+      {before}
+      <mark
+        style={{
+          background: "color-mix(in srgb, var(--primary) 30%, transparent)",
+          color: "inherit",
+          borderRadius: 2,
+          padding: 0,
+        }}
+      >
+        {match}
+      </mark>
+      {after}
+    </>
+  );
 }
 
 interface ContextMenuProps {

@@ -21,11 +21,13 @@ import {
 } from "@/constants/modal";
 import { ExternalLink } from "lucide-react";
 import { formatInstallCountLabel } from "@/pages/marketplace/formatInstallCount";
+import type { MarketplaceInstallAction } from "@/pages/marketplace/installTargets";
 
 interface SkillDetailModalProps {
   skill: MarketplaceSkill;
   onClose: () => void;
   onInstall: (skill: MarketplaceSkill, event?: MouseEvent) => void;
+  installAction: MarketplaceInstallAction;
   installing: boolean;
   isFavorite: boolean;
   onToggleFavorite: (skill: MarketplaceSkill) => void;
@@ -89,7 +91,7 @@ function clearFileContentCacheForTree(tree: SkillFileNode | null) {
   }
 }
 
-export function SkillDetailModal({ skill, onClose, onInstall, installing, isFavorite, onToggleFavorite, onTagClick, onResolveClawhubMeta }: SkillDetailModalProps) {
+export function SkillDetailModal({ skill, onClose, onInstall, installAction, installing, isFavorite, onToggleFavorite, onTagClick, onResolveClawhubMeta }: SkillDetailModalProps) {
   const { t, language } = useTranslation();
   const { theme } = useTheme();
   const translation = useSkillTranslation();
@@ -119,7 +121,7 @@ export function SkillDetailModal({ skill, onClose, onInstall, installing, isFavo
     }
     return skill.external_url || skill.repo_url;
   })();
-  const isUpdateAvailable = skill.install_status === "update_available";
+  const isUpdateAvailable = installAction === "update";
   const installCountLabel = formatInstallCountLabel(skill.install_count);
 
   const translationKey = makeTranslationKey(skill.id, language);
@@ -856,7 +858,7 @@ export function SkillDetailModal({ skill, onClose, onInstall, installing, isFavo
             {installCountLabel && (
               <InstallCountBadge label={installCountLabel} size="default" />
             )}
-            {skill.install_status === "installed" ? (
+            {installAction === "installed" ? (
               <span style={{
                 display: "inline-flex",
                 alignItems: "center",

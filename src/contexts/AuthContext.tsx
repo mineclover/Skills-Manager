@@ -203,7 +203,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
     try {
       const startAuthFn = provider === "google" ? startGoogleAuth : startGithubAuth;
       const result = await startAuthFn(language);
-      console.info("OAuth auth_url:", result.auth_url);
       await openUrl(result.auth_url);
     } catch (err) {
       console.warn(`Failed to start ${provider} auth:`, err);

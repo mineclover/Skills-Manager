@@ -1,7 +1,4 @@
 @import "tailwindcss";
-@import "tw-animate-css";
-
-@plugin "tailwindcss-animate";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -609,6 +606,22 @@
   min-width: 0;
 }
 
+.skills-note-badge {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  height: 18px;
+  padding: 0 6px;
+  border: 1px solid var(--primary-tint-border);
+  border-radius: 4px;
+  color: var(--primary);
+  background: var(--primary-tint);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
 .skills-group-title-line {
   gap: 8px;
 }
@@ -949,6 +962,15 @@
   color: var(--muted-foreground);
   font-size: 10px;
   font-weight: 650;
+}
+
+.skills-detail-note {
+  margin-bottom: 10px;
+}
+
+.skills-detail-note p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .skills-list-row-details p,

@@ -1,0 +1,79 @@
+name: Publish CLI Skill
+
+# Auto-publish the companion `skills-manager-cli` skill to ClawHub whenever the
+# app version in package.json changes on main. The publish script is idempotent
+# (it queries ClawHub and only uploads when the local version is strictly
+# newer), so this is safe even if the guard below is bypassed.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "package.json"
+      - "skills/skills-manager-cli/**"
+      - "scripts/publish-skill.mjs"
+      - "scripts/lib/**"
+      - ".github/workflows/publish-skill.yml"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Publish even if the version already exists on ClawHub"
+        type: boolean
+        default: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Two commits so we can diff package.json against the previous version.
+          fetch-depth: 2
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: detect version change
+        id: version
+        shell: bash
+        run: |
+          current="$(node -p "require('./package.json').version")"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+
+          # workflow_dispatch has no "before" version — always proceed.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "App version: $current (manual dispatch)"
+            exit 0
+          fi
+
+          previous="$(git show HEAD~1:package.json 2>/dev/null | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version" 2>/dev/null || echo '')"
+          echo "Previous version: ${previous:-<none>} -> current: $current"
+          if [ "$current" != "$previous" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Version unchanged; skipping publish."
+          fi
+
+      - name: run unit tests
+        if: steps.version.outputs.changed == 'true'
+        run: node --test scripts/publish-skill.test.mjs
+
+      - name: publish to ClawHub
+        if: steps.version.outputs.changed == 'true'
+        env:
+          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+        run: |
+          # The public mirror and forks have no CLAWHUB_TOKEN. Skip there instead
+          # of failing, so only the repo that owns the token actually publishes.
+          if [ -z "$CLAWHUB_TOKEN" ]; then
+            echo "::warning::CLAWHUB_TOKEN is not set for ${{ github.repository }} — skipping ClawHub publish."
+            exit 0
+          fi
+          force_flag=""
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+            force_flag="--force"
+          fi
+          node scripts/publish-skill.mjs $force_flag

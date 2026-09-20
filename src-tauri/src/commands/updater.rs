@@ -1,5 +1,5 @@
-use crate::models::update::UpdateInfo;
-use crate::services::{updater, ConfigManager};
+use sm_core::models::update::UpdateInfo;
+use sm_core::services::{updater, ConfigManager};
 
 #[tauri::command]
 pub async fn check_update(app_handle: tauri::AppHandle) -> Result<UpdateInfo, String> {

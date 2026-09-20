@@ -1,12 +1,12 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::models::publish::CLAWHUB_CATEGORIES;
-use crate::models::{
+use sm_core::models::publish::CLAWHUB_CATEGORIES;
+use sm_core::models::{
     ClawhubIdentity, PublishPreview, PublishRequest, PublishResult, SkillMetadata,
     SkillPublishRecord,
 };
-use crate::services::{publish, AppCache, ConfigManager, ScannerService};
+use sm_core::services::{publish, AppCache, ConfigManager, ScannerService};
 use tauri::State;
 
 /// 从配置里取 ClawHub token，未配置时返回可读的错误。

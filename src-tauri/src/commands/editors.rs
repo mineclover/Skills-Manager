@@ -1,5 +1,5 @@
-use crate::models::DetectedEditor;
-use crate::services::{detect_editors as do_detect, open_in_external_editor, AppCache};
+use sm_core::models::DetectedEditor;
+use sm_core::services::{detect_editors as do_detect, open_in_external_editor, AppCache};
 use tauri::State;
 
 #[tauri::command]

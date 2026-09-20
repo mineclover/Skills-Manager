@@ -10,14 +10,16 @@ import {
   UpdateInfo,
   LlmProvider,
   ClawhubIdentity,
+  CliInstallStatus,
+  CliInstallResult,
 } from "@/types";
 import { defaultPreferences } from "@/constants/preferences";
 import { checkUpdate } from "@/services/updater";
 import { useTranslation, Language, TranslationPath } from "@/i18n";
 import { useSkillTranslation } from "@/hooks/useSkillTranslation";
 import { useTheme } from "@/hooks/useTheme";
-import { resolveTelemetryConsent } from "@/telemetry/consent";
 import { getEditorIcon } from "@/assets/editors";
+import { binaryDir } from "@/lib/binaryPath";
 import { FontFamilyPreset, normalizeFontFamilyPreset } from "@/lib/fontFamily";
 import wechatRewardCode from "@/assets/donation/wechat-reward-code.jpg";
 import alipayRewardCode from "@/assets/donation/alipay-reward-code.jpg";
@@ -46,6 +48,8 @@ export function Settings() {
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [resetting, setResetting] = useState(false);
   const [usageHookLoading, setUsageHookLoading] = useState(false);
+  const [cliStatus, setCliStatus] = useState<CliInstallStatus | null>(null);
+  const [cliInstalling, setCliInstalling] = useState(false);
   const { riskScanning, setRiskScanning } = usePageHeaderState();
   const { toasts, addToast, removeToast } = useToast();
 
@@ -116,6 +120,65 @@ export function Settings() {
     loadEditors();
   }, []);
 
+  const refreshCliStatus = useCallback(async () => {
+    try {
+      setCliStatus(await invoke<CliInstallStatus>("get_cli_install_status"));
+    } catch {
+      // Resource missing (e.g. dev build without bundle:cli) — leave null.
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshCliStatus();
+  }, [refreshCliStatus]);
+
+  const handleInstallCli = async () => {
+    setCliInstalling(true);
+    try {
+      const result = await invoke<CliInstallResult>("install_cli_binary");
+      // A binary outside PATH is installed but unusable from a shell; say so
+      // instead of a plain success toast, and keep it on screen (persistent)
+      // since the user has to act on it.
+      if (result.onPath) {
+        addToast(t("settings.cliInstallDone"), "success");
+      } else {
+        addToast(
+          `${t("settings.cliPathWarning")} ${binaryDir(result.target) || result.target}`,
+          "info",
+          true
+        );
+      }
+      const skill = result.cliSkill;
+      if (skill?.error) {
+        addToast(`${t("settings.cliSkillFailed")} ${skill.error}`, "error");
+      } else if (skill?.enabled_for && skill.enabled_for.length > 0) {
+        addToast(t("settings.cliSkillInstalled"), "success");
+      } else if (skill?.failed && skill.failed.length > 0) {
+        addToast(
+          `${t("settings.cliSkillFailed")} ${skill.failed
+            .map((item) => `${item.tool}: ${item.message}`)
+            .join("; ")}`,
+          "error"
+        );
+      } else if (skill?.id) {
+        addToast(t("settings.cliSkillHubOnly"), "info");
+      }
+    } catch (err) {
+      addToast(err instanceof Error ? err.message : String(err), "error");
+    } finally {
+      setCliInstalling(false);
+      refreshCliStatus();
+    }
+  };
+
+  // One source of truth for the button's disabled state: the `disabled` prop
+  // and the cursor/opacity styling used to drift apart, so an up-to-date CLI
+  // rendered a disabled button that still looked clickable.
+  const cliInstallDisabled =
+    cliInstalling ||
+    !cliStatus?.bundled ||
+    (cliStatus.installed && cliStatus.versionMatches);
+
   // Auto-check for updates on mount
   useEffect(() => {
     async function autoCheckUpdate() {
@@ -184,19 +247,6 @@ export function Settings() {
     autoSaveTimeoutRef.current = window.setTimeout(async () => {
       try {
         await invoke("save_config", { config: configToSave });
-
-        // Handle telemetry consent
-        const prefs = configToSave.preferences || defaultPreferences;
-        const telemetryConsent = resolveTelemetryConsent(prefs.telemetry_consent);
-        if (telemetryConsent === "granted") {
-          void invoke("telemetry_initialize").catch((err) => {
-            console.warn("Failed to initialize telemetry after auto-save:", err);
-          });
-        } else if (telemetryConsent === "denied") {
-          void invoke("telemetry_clear_local_data").catch((err) => {
-            console.warn("Failed to clear telemetry after auto-save:", err);
-          });
-        }
 
         // Show saved status
         setSaveStatus('saved');
@@ -433,6 +483,50 @@ export function Settings() {
                 >
                   {config.skills_dir}
                 </code>
+              </div>
+            </SettingsRow>
+
+            <SettingsRow
+              label={t("settings.cliInstall")}
+              description={cliStatus?.installed && cliStatus.versionMatches
+                ? `${t("settings.cliInstallDescInstalled")} (${cliStatus.target})`
+                : t("settings.cliInstallDesc")}
+              isLast={false}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={handleInstallCli}
+                  disabled={cliInstallDisabled}
+                  style={{
+                    padding: '8px 14px',
+                    fontSize: '13px',
+                    fontWeight: 500,
+                    color: 'var(--foreground)',
+                    backgroundColor: 'var(--background)',
+                    border: '1px solid var(--border)',
+                    borderRadius: '8px',
+                    cursor: cliInstallDisabled ? 'not-allowed' : 'pointer',
+                    opacity: cliInstallDisabled ? 0.6 : 1,
+                  }}
+                >
+                  {cliInstalling
+                    ? t("settings.cliInstalling")
+                    : cliStatus?.installed
+                      ? (cliStatus.versionMatches ? t("settings.cliUpToDate") : t("settings.cliUpdate"))
+                      : t("settings.cliInstallAction")}
+                </button>
+                {cliStatus?.installed && !cliStatus.versionMatches && (
+                  <span style={{ fontSize: '12px', color: 'var(--muted-foreground)' }}>
+                    {t("settings.cliOutdatedHint")}
+                  </span>
+                )}
+                {/* Outlives the install toast: the folder stays off PATH until the user fixes it. */}
+                {cliStatus?.installed && !cliStatus.onPath && (
+                  <span style={{ fontSize: '12px', color: 'var(--destructive)' }}>
+                    {t("settings.cliPathHint")}
+                  </span>
+                )}
               </div>
             </SettingsRow>
 
@@ -759,7 +853,7 @@ export function Settings() {
             />
           </SettingsCard>
 
-          {/* Account & Cloud Sync */}
+          {/* Account */}
           <SectionTitle id="settings-account">{t("settings.account")}</SectionTitle>
           <SettingsCard>
             <SettingsRow

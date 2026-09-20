@@ -206,6 +206,26 @@ test("buildUnifiedSkillItems keeps tags isolated for same skill id across global
   assert.deepEqual(projectItem?.tags, ["project-tag"]);
 });
 
+test("buildUnifiedSkillItems exposes notes and includes them in search", () => {
+  const items = buildUnifiedSkillItems({
+    skills,
+    skillPackages: [],
+    tools,
+    skillMetadata: {
+      "skill-alpha": { tags: [], note: "发布前检查中英文链接" },
+    },
+    groupBadgeLabel: "Group",
+  });
+  const alpha = items.find((item) => item.id === "skill-alpha");
+
+  assert.equal(alpha?.note, "发布前检查中英文链接");
+  assert.deepEqual(filterUnifiedSkillItems(items, {
+    searchQuery: "中英文链接",
+    selectedTags: [],
+    untaggedOnly: false,
+  }).map((item) => item.id), ["skill-alpha"]);
+});
+
 test("migrateSkillMetadataEntryToInstanceId upgrades legacy global metadata key", () => {
   const migrated = migrateSkillMetadataEntryToInstanceId(
     {

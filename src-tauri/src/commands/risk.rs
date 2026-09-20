@@ -10,8 +10,8 @@ use std::collections::HashMap;
 
 use tauri::{AppHandle, Emitter};
 
-use crate::models::{RiskScanMode, Skill, SkillRiskReport};
-use crate::services::{
+use sm_core::models::{RiskScanMode, Skill, SkillRiskReport};
+use sm_core::services::{
     clear_risk_cache, invalidate_risk_cache, scan_all_skills, scan_skill, ConfigManager,
     ScannerService,
 };
@@ -104,7 +104,7 @@ pub fn clear_risk_cache_command() -> Result<(), String> {
 /// 获取风险扫描器版本号（用于前端展示）
 #[tauri::command]
 pub fn get_risk_scanner_version() -> String {
-    crate::services::scanner_version().to_string()
+    sm_core::services::scanner_version().to_string()
 }
 
 /// 批量获取多个 skill 的风险报告

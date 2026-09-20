@@ -309,6 +309,33 @@ test("updateSkillTagsForSkill writes global metadata back to instance_id key", (
   });
 });
 
+test("updateSkillTagsForSkill preserves note, favorite, and publish metadata", () => {
+  const publish = { slug: "shared-skill", version: "1.0.0", published_at: 1 };
+  const updated = updateSkillTagsForSkill(
+    {
+      id: "shared-skill",
+      instance_id: "global:shared-skill",
+      scope: "global",
+    },
+    ["next-tag"],
+    {
+      "global:shared-skill": {
+        tags: ["legacy-tag"],
+        note: "我的备注",
+        favorited_at: 123,
+        publish,
+      },
+    },
+  );
+
+  assert.deepEqual(updated["global:shared-skill"], {
+    tags: ["next-tag"],
+    note: "我的备注",
+    favorited_at: 123,
+    publish,
+  });
+});
+
 test("hasSkillMetadataEntry recognizes both migrated and legacy global metadata keys", () => {
   const globalSkill = {
     id: "shared-skill",

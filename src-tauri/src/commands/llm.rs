@@ -1,9 +1,9 @@
-use crate::models::{LlmProvider, Skill};
-use crate::services::llm::{self, LlmError};
-use crate::services::scanner::ScannerService;
-use crate::services::translation::{self, SkillTranslationInput, SkillTranslationOutput};
-use crate::services::translation_cache::{CacheKey, TranslationCache};
-use crate::services::ConfigManager;
+use sm_core::models::{LlmProvider, Skill};
+use sm_core::services::llm::{self, LlmError};
+use sm_core::services::scanner::ScannerService;
+use sm_core::services::translation::{self, SkillTranslationInput, SkillTranslationOutput};
+use sm_core::services::translation_cache::{CacheKey, TranslationCache};
+use sm_core::services::ConfigManager;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -61,7 +61,7 @@ pub struct MarketplaceTranslationInput {
 
 fn load_provider_or_error() -> Result<LlmProvider, LlmError> {
     let manager = ConfigManager::new();
-    let config = manager.load().map_err(|e| LlmError::NetworkError(e))?;
+    let config = manager.load().map_err(LlmError::NetworkError)?;
     config.llm_provider.ok_or(LlmError::NotConfigured)
 }
 
@@ -478,10 +478,8 @@ fn determine_concurrency(provider: &LlmProvider) -> usize {
         8 // DeepSeek 速率较宽松
     } else if url.contains("localhost") || url.contains("127.0.0.1") {
         12 // 本地 Ollama 无限制
-    } else if url.contains("api.anthropic.com") {
-        6 // Claude API 中等限制
     } else {
-        6 // 默认保守值
+        6 // Claude API and other providers use a conservative default
     }
 }
 

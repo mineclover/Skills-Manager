@@ -182,16 +182,16 @@ export function updateMetadataTags(
 ): SkillMetadataMap {
   const normalizedTags = normalizeSkillTags(nextTags);
   const nextMetadata = { ...(skillMetadata ?? {}) };
-  const currentEntry = nextMetadata[metadataKey];
-  const comment = currentEntry?.comment;
+  const existing = nextMetadata[metadataKey];
 
-  if (normalizedTags.length === 0 && !comment) {
-    delete nextMetadata[metadataKey];
+  if (normalizedTags.length === 0) {
+    if (!existing || (existing.favorited_at == null && existing.publish == null && !existing.note?.trim())) {
+      delete nextMetadata[metadataKey];
+    } else {
+      nextMetadata[metadataKey] = { ...existing, tags: [] };
+    }
   } else {
-    nextMetadata[metadataKey] = {
-      ...currentEntry,
-      tags: normalizedTags,
-    };
+    nextMetadata[metadataKey] = { ...existing, tags: normalizedTags };
   }
 
   return nextMetadata;

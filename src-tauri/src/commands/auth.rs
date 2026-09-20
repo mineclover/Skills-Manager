@@ -6,11 +6,13 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::models::auth::{AuthProfile, AuthSession};
-use crate::services::auth::{build_auth_start_url, generate_code_verifier, pkce_challenge};
-use crate::services::ConfigManager;
+use sm_core::models::auth::{AuthProfile, AuthSession};
+use sm_core::models::AppConfig;
+use sm_core::services::auth::{build_web_auth_start_url, generate_code_verifier, pkce_challenge};
+use sm_core::services::ConfigManager;
 
-const DEFAULT_AUTH_API_BASE: &str = "https://skills-market-api.guardssl.info/api/v1";
+const DEFAULT_AUTH_API_BASE: &str = "https://skillsmanager.freeourdays.com/api/v1";
+const DEFAULT_WEB_AUTH_BASE: &str = "https://skillsmanager.freeourdays.com";
 
 #[derive(Debug, Clone)]
 struct PendingAuthState {
@@ -25,18 +27,19 @@ fn pending_auth_states() -> &'static Mutex<HashMap<String, PendingAuthState>> {
 }
 
 fn auth_api_base_url() -> String {
-    std::env::var("SKILLS_MARKET_API_BASE").unwrap_or_else(|_| DEFAULT_AUTH_API_BASE.to_string())
+    std::env::var("SKILLS_MANAGER_AUTH_API_BASE")
+        .unwrap_or_else(|_| DEFAULT_AUTH_API_BASE.to_string())
+}
+
+fn web_auth_base_url() -> String {
+    std::env::var("SKILLS_MANAGER_WEB_BASE_URL")
+        .unwrap_or_else(|_| DEFAULT_WEB_AUTH_BASE.to_string())
 }
 
 fn build_auth_api_url(base_url: &str, path: &str) -> Result<reqwest::Url, String> {
     let base = base_url.trim_end_matches('/');
     let url = format!("{base}{path}");
     reqwest::Url::parse(&url).map_err(|e| format!("Invalid auth url: {e}"))
-}
-
-#[derive(Debug, Deserialize)]
-struct AuthStartResponse {
-    auth_url: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -69,8 +72,8 @@ async fn refresh_access_token(
     client: &Client,
     base_url: &str,
     refresh_token: &str,
-) -> Result<String, String> {
-    let refresh_url = build_auth_api_url(base_url, "/auth/refresh")?;
+) -> Result<String, AuthApiError> {
+    let refresh_url = build_auth_api_url(base_url, "/auth/refresh").map_err(AuthApiError::Other)?;
     let refresh_response = client
         .post(refresh_url)
         .header(CONTENT_TYPE, "application/json")
@@ -80,21 +83,24 @@ async fn refresh_access_token(
         }))
         .send()
         .await
-        .map_err(|e| format!("Failed to refresh auth token: {e}"))?;
+        .map_err(|e| AuthApiError::Other(format!("Failed to refresh auth token: {e}")))?;
 
-    if !refresh_response.status().is_success() {
-        return Err(format!(
-            "Auth refresh failed: HTTP {}",
-            refresh_response.status()
-        ));
+    if refresh_response.status().as_u16() == 401 {
+        return Err(AuthApiError::Unauthorized);
     }
 
-    let refresh_payload = refresh_response
+    if !refresh_response.status().is_success() {
+        return Err(AuthApiError::Other(format!(
+            "Auth refresh failed: HTTP {}",
+            refresh_response.status()
+        )));
+    }
+
+    refresh_response
         .json::<AuthRefreshResponse>()
         .await
-        .map_err(|e| format!("Failed to parse auth refresh response: {e}"))?;
-
-    Ok(refresh_payload.access_token)
+        .map(|payload| payload.access_token)
+        .map_err(|e| AuthApiError::Other(format!("Failed to parse auth refresh response: {e}")))
 }
 
 #[derive(Debug, Serialize)]
@@ -159,37 +165,25 @@ async fn start_oauth_auth(
     let code_verifier = generate_code_verifier();
     let code_challenge = pkce_challenge(&code_verifier);
     let nonce = Uuid::new_v4().simple().to_string();
-    let base_url = auth_api_base_url();
-    let url = build_auth_start_url(
-        &base_url,
+    let web_locale = match locale.as_deref().map(str::trim) {
+        Some("zh") | Some("zh-CN") => Some("zh-CN"),
+        Some("en") => Some("en"),
+        Some(_) => Some("en"),
+        None => Some("en"),
+    };
+    let url = build_web_auth_start_url(
+        &web_auth_base_url(),
         provider,
         &state,
         &code_challenge,
         &nonce,
-        locale.as_deref(),
+        web_locale,
     )?;
-
-    let client = Client::new();
-    let response = client
-        .get(url)
-        .header(ACCEPT, "application/json")
-        .send()
-        .await
-        .map_err(|e| format!("Failed to start auth: {e}"))?;
-
-    if !response.status().is_success() {
-        return Err(format!("Auth start failed: HTTP {}", response.status()));
-    }
-
-    let payload = response
-        .json::<AuthStartResponse>()
-        .await
-        .map_err(|e| format!("Failed to parse auth start response: {e}"))?;
 
     store_pending_state(state.clone(), code_verifier, nonce);
 
     Ok(AuthStartResult {
-        auth_url: payload.auth_url,
+        auth_url: url.to_string(),
         state,
     })
 }
@@ -275,9 +269,7 @@ pub async fn exchange_google_auth(
 
 #[tauri::command]
 pub async fn get_auth_profile() -> Result<Option<AuthMeResponse>, String> {
-    let manager = ConfigManager::new();
-    let mut config = manager.load()?;
-    let Some(mut session) = config.auth_session.clone() else {
+    let Some(session) = ConfigManager::new().load()?.auth_session else {
         return Ok(None);
     };
 
@@ -286,57 +278,85 @@ pub async fn get_auth_profile() -> Result<Option<AuthMeResponse>, String> {
 
     let access_token = match session.access_token.clone() {
         Some(token) => token,
-        None => {
-            let Some(refresh_token) = session.refresh_token.clone() else {
-                config.auth_session = None;
-                manager.save(&config)?;
-                return Ok(None);
-            };
-            let new_access = refresh_access_token(&client, &base_url, &refresh_token).await?;
-            session.access_token = Some(new_access.clone());
-            config.auth_session = Some(session.clone());
-            manager.save(&config)?;
-            new_access
-        }
+        None => match renew_access_token(&client, &base_url, &session).await? {
+            Some(token) => token,
+            None => return Ok(None),
+        },
     };
 
     match fetch_auth_me(&client, &base_url, &access_token).await {
         Ok(profile) => Ok(Some(profile)),
         Err(AuthApiError::Unauthorized) => {
-            let Some(refresh_token) = session.refresh_token.clone() else {
-                config.auth_session = None;
-                manager.save(&config)?;
+            let Some(renewed_token) = renew_access_token(&client, &base_url, &session).await? else {
                 return Ok(None);
             };
-            let new_access = refresh_access_token(&client, &base_url, &refresh_token).await?;
-            session.access_token = Some(new_access.clone());
-            config.auth_session = Some(session.clone());
-            manager.save(&config)?;
-
-            let profile = fetch_auth_me(&client, &base_url, &new_access)
-                .await
-                .map_err(|e| e.to_string())?;
-            Ok(Some(profile))
+            match fetch_auth_me(&client, &base_url, &renewed_token).await {
+                Ok(profile) => Ok(Some(profile)),
+                // A brand new access token being rejected means the account or
+                // session is gone server side, so stop trusting the local copy.
+                Err(AuthApiError::Unauthorized) => {
+                    discard_auth_session()?;
+                    Ok(None)
+                }
+                Err(err) => Err(err.to_string()),
+            }
         }
         Err(err) => Err(err.to_string()),
     }
 }
 
+/// Trades the refresh token for a fresh access token and stores it.
+///
+/// `Ok(None)` means the stored credentials are dead and the local session has
+/// been dropped, so the caller should report "signed out". `Err` means the
+/// request itself failed (offline, DNS, 5xx); the session is kept so a later
+/// attempt can recover instead of logging the user out on a network hiccup.
+async fn renew_access_token(
+    client: &Client,
+    base_url: &str,
+    session: &AuthSession,
+) -> Result<Option<String>, String> {
+    let Some(refresh_token) = session.refresh_token.as_deref() else {
+        discard_auth_session()?;
+        return Ok(None);
+    };
+
+    match refresh_access_token(client, base_url, refresh_token).await {
+        Ok(access_token) => {
+            save_auth_session(AuthSession {
+                access_token: Some(access_token.clone()),
+                ..session.clone()
+            })?;
+            Ok(Some(access_token))
+        }
+        Err(AuthApiError::Unauthorized) => {
+            discard_auth_session()?;
+            Ok(None)
+        }
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+fn discard_auth_session() -> Result<(), String> {
+    let manager = ConfigManager::new();
+    let config = manager.load()?;
+    manager.save(&AppConfig {
+        auth_session: None,
+        ..config
+    })
+}
+
 #[tauri::command]
 pub async fn logout_auth() -> Result<(), String> {
     let manager = ConfigManager::new();
-    let mut config = manager.load()?;
+    let config = manager.load()?;
     let Some(session) = config.auth_session.clone() else {
         return Ok(());
     };
 
-    let refresh_token = session.refresh_token.clone();
-
-    if refresh_token.is_none() {
-        config.auth_session = None;
-        manager.save(&config)?;
-        return Ok(());
-    }
+    let Some(refresh_token) = session.refresh_token.clone() else {
+        return discard_auth_session();
+    };
 
     let client = Client::new();
     let base_url = auth_api_base_url();
@@ -346,18 +366,19 @@ pub async fn logout_auth() -> Result<(), String> {
         .header(CONTENT_TYPE, "application/json")
         .header(ACCEPT, "application/json")
         .json(&serde_json::json!({
-            "refresh_token": refresh_token.clone().expect("refresh token"),
+            "refresh_token": refresh_token,
         }))
         .send()
         .await
         .map_err(|e| format!("Failed to logout: {e}"))?;
 
-    if !response.status().is_success() {
+    // A 401 means the server side session is already gone, which is exactly the
+    // state logout aims for — drop the local copy instead of failing.
+    if !response.status().is_success() && response.status().as_u16() != 401 {
         return Err(format!("Auth logout failed: HTTP {}", response.status()));
     }
 
-    config.auth_session = None;
-    manager.save(&config)
+    discard_auth_session()
 }
 
 #[derive(Debug)]
@@ -415,7 +436,7 @@ mod tests {
 
     #[test]
     fn auth_session_persists_to_config() {
-        crate::test_support::with_temp_home(|_| {
+        sm_core::test_support::with_temp_home(|_| {
             let session = AuthSession {
                 provider: "github".to_string(),
                 access_token: Some("a".to_string()),
@@ -436,22 +457,19 @@ mod tests {
 
     #[test]
     fn start_github_auth_returns_state_and_stores_pending() {
-        crate::test_support::with_temp_home(|_| {
-            let mut server = mockito::Server::new();
-            std::env::set_var("SKILLS_MARKET_API_BASE", format!("{}/api/v1", server.url()));
-            let _mock = server
-                .mock("GET", "/api/v1/auth/github/start")
-                .match_query(Matcher::Any)
-                .with_status(200)
-                .with_header("content-type", "application/json")
-                .with_body(r#"{"auth_url":"https://example.com/auth"}"#)
-                .create();
+        sm_core::test_support::with_temp_home(|_| {
+            std::env::set_var("SKILLS_MANAGER_WEB_BASE_URL", "https://example.com");
 
             tauri::async_runtime::block_on(async {
                 let result = start_github_auth(Some(true), None)
                     .await
                     .expect("start auth");
-                assert_eq!(result.auth_url, "https://example.com/auth");
+                assert!(result
+                    .auth_url
+                    .starts_with("https://example.com/auth/start?"));
+                assert!(result.auth_url.contains("provider=github"));
+                assert!(result.auth_url.contains("client=desktop"));
+                assert!(result.auth_url.contains("locale=en"));
                 assert!(result.state.starts_with("debug-"));
                 assert!(has_pending_state(&result.state));
             });
@@ -460,9 +478,9 @@ mod tests {
 
     #[test]
     fn exchange_github_auth_saves_session_and_returns_profile() {
-        crate::test_support::with_temp_home(|_| {
+        sm_core::test_support::with_temp_home(|_| {
             let mut server = mockito::Server::new();
-            std::env::set_var("SKILLS_MARKET_API_BASE", format!("{}/api/v1", server.url()));
+            std::env::set_var("SKILLS_MANAGER_AUTH_API_BASE", format!("{}/api/v1", server.url()));
 
             let _exchange_mock = server
                 .mock("POST", "/api/v1/auth/exchange")
@@ -510,22 +528,19 @@ mod tests {
 
     #[test]
     fn start_google_auth_returns_state_and_stores_pending() {
-        crate::test_support::with_temp_home(|_| {
-            let mut server = mockito::Server::new();
-            std::env::set_var("SKILLS_MARKET_API_BASE", format!("{}/api/v1", server.url()));
-            let _mock = server
-                .mock("GET", "/api/v1/auth/google/start")
-                .match_query(Matcher::Any)
-                .with_status(200)
-                .with_header("content-type", "application/json")
-                .with_body(r#"{"auth_url":"https://example.com/google"}"#)
-                .create();
+        sm_core::test_support::with_temp_home(|_| {
+            std::env::set_var("SKILLS_MANAGER_WEB_BASE_URL", "https://example.com");
 
             tauri::async_runtime::block_on(async {
-                let result = start_google_auth(Some(true), None)
+                let result = start_google_auth(Some(true), Some("zh".to_string()))
                     .await
                     .expect("start google auth");
-                assert_eq!(result.auth_url, "https://example.com/google");
+                assert!(result
+                    .auth_url
+                    .starts_with("https://example.com/auth/start?"));
+                assert!(result.auth_url.contains("provider=google"));
+                assert!(result.auth_url.contains("client=desktop"));
+                assert!(result.auth_url.contains("locale=zh-CN"));
                 assert!(result.state.starts_with("debug-"));
                 assert!(has_pending_state(&result.state));
             });
@@ -534,9 +549,9 @@ mod tests {
 
     #[test]
     fn exchange_google_auth_saves_session_and_returns_profile() {
-        crate::test_support::with_temp_home(|_| {
+        sm_core::test_support::with_temp_home(|_| {
             let mut server = mockito::Server::new();
-            std::env::set_var("SKILLS_MARKET_API_BASE", format!("{}/api/v1", server.url()));
+            std::env::set_var("SKILLS_MANAGER_AUTH_API_BASE", format!("{}/api/v1", server.url()));
 
             let _exchange_mock = server
                 .mock("POST", "/api/v1/auth/exchange")
@@ -584,7 +599,7 @@ mod tests {
 
     #[test]
     fn auth_tokens_persist_to_config() {
-        crate::test_support::with_temp_home(|_| {
+        sm_core::test_support::with_temp_home(|_| {
             let session = AuthSession {
                 provider: "github".to_string(),
                 access_token: Some("at".to_string()),
@@ -605,9 +620,9 @@ mod tests {
 
     #[test]
     fn logout_auth_clears_session() {
-        crate::test_support::with_temp_home(|_| {
+        sm_core::test_support::with_temp_home(|_| {
             let mut server = mockito::Server::new();
-            std::env::set_var("SKILLS_MARKET_API_BASE", format!("{}/api/v1", server.url()));
+            std::env::set_var("SKILLS_MANAGER_AUTH_API_BASE", format!("{}/api/v1", server.url()));
             let _mock = server
                 .mock("POST", "/api/v1/auth/logout")
                 .match_header("content-type", "application/json")
@@ -638,11 +653,159 @@ mod tests {
 
     #[test]
     fn get_auth_profile_returns_none_when_missing_session() {
-        crate::test_support::with_temp_home(|_| {
+        sm_core::test_support::with_temp_home(|_| {
             tauri::async_runtime::block_on(async {
                 let profile = get_auth_profile().await.expect("get profile");
                 assert!(profile.is_none());
             });
+        });
+    }
+
+    fn stale_session() -> AuthSession {
+        AuthSession {
+            provider: "github".to_string(),
+            access_token: Some("stale".to_string()),
+            refresh_token: Some("rt".to_string()),
+            profile: AuthProfile {
+                username: "octo".to_string(),
+                avatar_url: None,
+            },
+        }
+    }
+
+    #[test]
+    fn get_auth_profile_clears_session_when_refresh_is_rejected() {
+        sm_core::test_support::with_temp_home(|_| {
+            let mut server = mockito::Server::new();
+            std::env::set_var(
+                "SKILLS_MANAGER_AUTH_API_BASE",
+                format!("{}/api/v1", server.url()),
+            );
+            let _me_mock = server
+                .mock("GET", "/api/v1/auth/me")
+                .match_header("authorization", "Bearer stale")
+                .with_status(401)
+                .with_header("content-type", "application/json")
+                .with_body(r#"{"error":{"code":"UNAUTHORIZED"}}"#)
+                .create();
+            let _refresh_mock = server
+                .mock("POST", "/api/v1/auth/refresh")
+                .with_status(401)
+                .with_header("content-type", "application/json")
+                .with_body(r#"{"error":{"code":"UNAUTHORIZED"}}"#)
+                .create();
+
+            save_auth_session(stale_session()).expect("save session");
+
+            tauri::async_runtime::block_on(async {
+                let profile = get_auth_profile().await.expect("get profile");
+                assert!(profile.is_none());
+            });
+
+            let restored = ConfigManager::new().load().unwrap();
+            assert!(restored.auth_session.is_none());
+        });
+    }
+
+    #[test]
+    fn get_auth_profile_keeps_session_when_refresh_fails_with_server_error() {
+        sm_core::test_support::with_temp_home(|_| {
+            let mut server = mockito::Server::new();
+            std::env::set_var(
+                "SKILLS_MANAGER_AUTH_API_BASE",
+                format!("{}/api/v1", server.url()),
+            );
+            let _me_mock = server
+                .mock("GET", "/api/v1/auth/me")
+                .match_header("authorization", "Bearer stale")
+                .with_status(401)
+                .with_header("content-type", "application/json")
+                .with_body(r#"{"error":{"code":"UNAUTHORIZED"}}"#)
+                .create();
+            let _refresh_mock = server
+                .mock("POST", "/api/v1/auth/refresh")
+                .with_status(500)
+                .with_header("content-type", "application/json")
+                .with_body(r#"{"error":{"code":"INTERNAL_ERROR"}}"#)
+                .create();
+
+            save_auth_session(stale_session()).expect("save session");
+
+            tauri::async_runtime::block_on(async {
+                let error = get_auth_profile().await.expect_err("refresh should fail");
+                assert!(error.contains("500"), "unexpected error: {error}");
+            });
+
+            let restored = ConfigManager::new().load().unwrap();
+            let session = restored.auth_session.expect("session kept for retry");
+            assert_eq!(session.refresh_token.as_deref(), Some("rt"));
+        });
+    }
+
+    #[test]
+    fn get_auth_profile_clears_session_when_renewed_token_is_rejected() {
+        sm_core::test_support::with_temp_home(|_| {
+            let mut server = mockito::Server::new();
+            std::env::set_var(
+                "SKILLS_MANAGER_AUTH_API_BASE",
+                format!("{}/api/v1", server.url()),
+            );
+            let _stale_me_mock = server
+                .mock("GET", "/api/v1/auth/me")
+                .match_header("authorization", "Bearer stale")
+                .with_status(401)
+                .with_header("content-type", "application/json")
+                .with_body(r#"{"error":{"code":"UNAUTHORIZED"}}"#)
+                .create();
+            let _refresh_mock = server
+                .mock("POST", "/api/v1/auth/refresh")
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(r#"{"access_token":"at2","access_expires_at":1}"#)
+                .create();
+            let _renewed_me_mock = server
+                .mock("GET", "/api/v1/auth/me")
+                .match_header("authorization", "Bearer at2")
+                .with_status(401)
+                .with_header("content-type", "application/json")
+                .with_body(r#"{"error":{"code":"UNAUTHORIZED"}}"#)
+                .create();
+
+            save_auth_session(stale_session()).expect("save session");
+
+            tauri::async_runtime::block_on(async {
+                let profile = get_auth_profile().await.expect("get profile");
+                assert!(profile.is_none());
+            });
+
+            let restored = ConfigManager::new().load().unwrap();
+            assert!(restored.auth_session.is_none());
+        });
+    }
+
+    #[test]
+    fn logout_auth_clears_session_when_server_reports_unauthorized() {
+        sm_core::test_support::with_temp_home(|_| {
+            let mut server = mockito::Server::new();
+            std::env::set_var(
+                "SKILLS_MANAGER_AUTH_API_BASE",
+                format!("{}/api/v1", server.url()),
+            );
+            let _logout_mock = server
+                .mock("POST", "/api/v1/auth/logout")
+                .with_status(401)
+                .with_header("content-type", "application/json")
+                .with_body(r#"{"error":{"code":"UNAUTHORIZED"}}"#)
+                .create();
+
+            save_auth_session(stale_session()).expect("save session");
+
+            tauri::async_runtime::block_on(async {
+                logout_auth().await.expect("logout should succeed");
+            });
+
+            let restored = ConfigManager::new().load().unwrap();
+            assert!(restored.auth_session.is_none());
         });
     }
 }

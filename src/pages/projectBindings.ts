@@ -4,14 +4,14 @@ function normalizePathSeparators(path: string): string {
   return path.replace(/\\+/g, "/");
 }
 
-function normalizeDirectoryPath(directoryPath: string): string {
+function normalizeProjectRootPath(directoryPath: string): string {
   const trimmed = normalizePathSeparators(directoryPath.trim());
   if (!trimmed) {
-    throw new Error("Project skills directory path is required");
+    throw new Error("Project root path is required");
   }
 
   if (trimmed === "/" || /^[A-Za-z]:\/$/.test(trimmed)) {
-    throw new Error("Select a skills directory instead of the filesystem root");
+    throw new Error("Select a project directory instead of the filesystem root");
   }
 
   return trimmed.replace(/\/+$/, "") || "/";
@@ -21,20 +21,10 @@ function getPathSegments(directoryPath: string): string[] {
   return directoryPath.split("/").filter(Boolean);
 }
 
-export function buildDefaultProjectNameFromSkillsDir(skillsDir: string): string {
-  const normalizedSkillsDir = normalizeDirectoryPath(skillsDir);
-  const segments = getPathSegments(normalizedSkillsDir);
-  const lastSegment = segments[segments.length - 1] ?? normalizedSkillsDir;
-
-  if (lastSegment.toLowerCase() !== "skills") {
-    return lastSegment;
-  }
-
-  if (segments.length >= 3 && segments[segments.length - 2] === ".claude") {
-    return segments[segments.length - 3] ?? lastSegment;
-  }
-
-  return segments[segments.length - 2] ?? lastSegment;
+export function buildDefaultProjectNameFromRootPath(rootPath: string): string {
+  const normalizedRootPath = normalizeProjectRootPath(rootPath);
+  const segments = getPathSegments(normalizedRootPath);
+  return segments[segments.length - 1] ?? normalizedRootPath;
 }
 
 function slugifyProjectName(projectName: string): string {
@@ -56,9 +46,9 @@ function buildPathHash(skillsDir: string): string {
   return (hash >>> 0).toString(36);
 }
 
-function buildProjectId(skillsDir: string, projectName: string): string {
+function buildProjectId(rootPath: string, projectName: string): string {
   const slug = slugifyProjectName(projectName);
-  const suffix = buildPathHash(skillsDir);
+  const suffix = buildPathHash(rootPath);
   return slug ? `${slug}-${suffix}` : `project-${suffix}`;
 }
 
@@ -70,27 +60,28 @@ function normalizeProjectName(projectName: string): string {
   return normalizedName;
 }
 
-export function buildProjectBindingFromSkillsDir(
-  skillsDir: string,
+export function buildProjectBindingFromRootPath(
+  rootPath: string,
   projectName?: string,
 ): ProjectBinding {
-  const normalizedSkillsDir = normalizeDirectoryPath(skillsDir);
+  const normalizedRootPath = normalizeProjectRootPath(rootPath);
   const resolvedProjectName = projectName
     ? normalizeProjectName(projectName)
-    : buildDefaultProjectNameFromSkillsDir(normalizedSkillsDir);
+    : buildDefaultProjectNameFromRootPath(normalizedRootPath);
 
   return {
-    id: buildProjectId(normalizedSkillsDir, buildDefaultProjectNameFromSkillsDir(normalizedSkillsDir)),
+    id: buildProjectId(normalizedRootPath, buildDefaultProjectNameFromRootPath(normalizedRootPath)),
     name: resolvedProjectName,
-    skills_dir: normalizedSkillsDir,
+    root_path: normalizedRootPath,
+    skills_dir: `${normalizedRootPath}/.skills-manager/skills`,
   };
 }
 
-export function hasProjectSkillsDirConflict(
+export function hasProjectRootConflict(
   projects: ProjectBinding[] | null | undefined,
   nextProject: ProjectBinding,
 ): boolean {
-  return (projects ?? []).some((project) => project.skills_dir === nextProject.skills_dir);
+  return (projects ?? []).some((project) => project.root_path === nextProject.root_path);
 }
 
 export function resolveActiveProjectId(

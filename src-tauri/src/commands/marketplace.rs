@@ -6,16 +6,18 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::models::{
-    home_dir, AppConfig, ClawhubSkillFilesResponse, InstallResult, InstallStatus, MarketplaceSkill,
-    MarketplaceSkillsResponse, MarketplaceSource, MarketplaceSyncResult,
-    MarketplaceUpdateCheckResult, Skill, SkillFileNode, SkillSource,
+use sm_core::models::{
+    AppConfig, ClawhubSkillFilesResponse, InstallResult, InstallStatus, MarketplaceInstallation,
+    MarketplaceSkill, MarketplaceSkillsResponse, MarketplaceSource, MarketplaceSyncResult,
+    MarketplaceUpdateCheckResult, Skill, SkillFileNode, SkillScope, SkillSource,
 };
-use crate::services::marketplace::{
-    derive_github_repo_and_skill_path, DIRECT_GITHUB_SOURCE_ID, DIRECT_GITHUB_SOURCE_NAME,
+use sm_core::services::marketplace::{
+    derive_github_repo_and_skill_path, CLAWHUB_SOURCE_ID, DIRECT_GITHUB_SOURCE_ID,
+    DIRECT_GITHUB_SOURCE_NAME,
 };
-use crate::services::{
-    AppCache, ConfigManager, MarketplaceCache, MarketplaceService, ScannerService,
+use sm_core::services::{
+    project_tool_skills_dir, AppCache, ConfigManager, LinkerService, MarketplaceCache,
+    MarketplaceService, ScannerService,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -36,12 +38,258 @@ pub struct MarketplaceSkillReference {
     pub remote_revision: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MarketplaceInstallTarget {
+    pub scope: SkillScope,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub tool_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedProjectToolTarget {
+    tool_id: String,
+    skills_dir: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedMarketplaceInstallTarget {
+    skills_dir: PathBuf,
+    scope: SkillScope,
+    project_id: Option<String>,
+    project_name: Option<String>,
+    project_tool_targets: Vec<ResolvedProjectToolTarget>,
+    project_tool_cleanup_targets: Vec<ResolvedProjectToolTarget>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistedMarketplaceUpdateCheckState {
     last_checked_at_unix_secs: u64,
 }
 
 const MARKETPLACE_UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(12 * 60 * 60);
+
+fn resolve_marketplace_install_target(
+    config: &AppConfig,
+    target: Option<MarketplaceInstallTarget>,
+) -> Result<ResolvedMarketplaceInstallTarget, String> {
+    let target = target.unwrap_or(MarketplaceInstallTarget {
+        scope: SkillScope::Global,
+        project_id: None,
+        tool_ids: Vec::new(),
+    });
+
+    match target.scope {
+        SkillScope::Global => {
+            if !target.tool_ids.is_empty() {
+                return Err("global install target must not include project tool ids".to_string());
+            }
+            Ok(ResolvedMarketplaceInstallTarget {
+                skills_dir: config.skills_dir.clone(),
+                scope: SkillScope::Global,
+                project_id: None,
+                project_name: None,
+                project_tool_targets: Vec::new(),
+                project_tool_cleanup_targets: Vec::new(),
+            })
+        }
+        SkillScope::Project => {
+            let project_id = target
+                .project_id
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "project scope requires project_id".to_string())?;
+
+            let project = config
+                .projects
+                .iter()
+                .find(|project| project.id == project_id)
+                .ok_or_else(|| format!("project binding not found: {project_id}"))?;
+
+            project.root_path.as_deref().ok_or_else(|| {
+                format!(
+                    "project binding '{}' has no project root; remove and add it again",
+                    project.name
+                )
+            })?;
+            let mut tool_ids = target
+                .tool_ids
+                .into_iter()
+                .map(|tool_id| tool_id.trim().to_string())
+                .filter(|tool_id| !tool_id.is_empty())
+                .collect::<Vec<_>>();
+            tool_ids.sort();
+            tool_ids.dedup();
+            if tool_ids.is_empty() {
+                return Err("project install target requires at least one tool".to_string());
+            }
+
+            let mut project_tool_targets = Vec::with_capacity(tool_ids.len());
+            for tool_id in tool_ids {
+                let tool = config
+                    .get_tool_config(&tool_id)
+                    .ok_or_else(|| format!("tool not found: {tool_id}"))?;
+                if !tool.enabled {
+                    return Err(format!("tool is disabled: {tool_id}"));
+                }
+                project_tool_targets.push(ResolvedProjectToolTarget {
+                    skills_dir: project_tool_skills_dir(project, &tool_id)?,
+                    tool_id,
+                });
+            }
+            let selected_paths = project_tool_targets
+                .iter()
+                .map(|target| target.skills_dir.clone())
+                .collect::<HashSet<_>>();
+            let mut cleanup_paths = HashSet::new();
+            let mut project_tool_cleanup_targets = Vec::new();
+            for (tool_id, _) in config.collect_tool_configs() {
+                let Ok(skills_dir) = project_tool_skills_dir(project, &tool_id) else {
+                    continue;
+                };
+                if selected_paths.contains(&skills_dir) || !cleanup_paths.insert(skills_dir.clone())
+                {
+                    continue;
+                }
+                project_tool_cleanup_targets.push(ResolvedProjectToolTarget {
+                    tool_id,
+                    skills_dir,
+                });
+            }
+
+            Ok(ResolvedMarketplaceInstallTarget {
+                skills_dir: project.skills_dir.clone(),
+                scope: SkillScope::Project,
+                project_id: Some(project.id.clone()),
+                project_name: Some(project.name.clone()),
+                project_tool_targets,
+                project_tool_cleanup_targets,
+            })
+        }
+    }
+}
+
+fn target_from_installation(installation: &MarketplaceInstallation) -> MarketplaceInstallTarget {
+    MarketplaceInstallTarget {
+        scope: installation.scope.clone(),
+        project_id: installation.project_id.clone(),
+        tool_ids: installation.tool_ids.clone(),
+    }
+}
+
+fn activate_project_installation(
+    result: &InstallResult,
+    target: &ResolvedMarketplaceInstallTarget,
+) -> Result<(), String> {
+    if target.scope != SkillScope::Project {
+        return Ok(());
+    }
+    let installed_path = result
+        .installed_path
+        .as_deref()
+        .map(PathBuf::from)
+        .ok_or_else(|| "project installation did not return an installed path".to_string())?;
+    let skill_id = installed_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "installed Skill path has no valid directory name".to_string())?;
+
+    let rollback_activations = |activated: Vec<ResolvedProjectToolTarget>| {
+        for completed in activated.into_iter().rev() {
+            let _ = LinkerService::disable_skill_for_tool(
+                &completed.skills_dir,
+                skill_id,
+                &completed.tool_id,
+            );
+        }
+    };
+
+    let mut activated: Vec<ResolvedProjectToolTarget> = Vec::new();
+    for tool_target in &target.project_tool_targets {
+        if installed_path == tool_target.skills_dir.join(skill_id) {
+            continue;
+        }
+        match LinkerService::check_link_for_scoped_skill(
+            &installed_path,
+            &tool_target.skills_dir,
+            skill_id,
+            &tool_target.tool_id,
+            &SkillScope::Project,
+        ) {
+            sm_core::services::LinkStatus::Valid => continue,
+            sm_core::services::LinkStatus::Missing => {}
+            status => {
+                rollback_activations(activated);
+                return Err(format!(
+                    "installed Skill but refused to replace the existing {} target for {}: {:?}",
+                    skill_id, tool_target.tool_id, status
+                ));
+            }
+        }
+        if let Err(error) = LinkerService::enable_skill_for_tool(
+            &installed_path,
+            &tool_target.skills_dir,
+            skill_id,
+            &tool_target.tool_id,
+        ) {
+            rollback_activations(activated);
+            return Err(format!(
+                "installed Skill but failed to activate it for {}: {}",
+                tool_target.tool_id, error
+            ));
+        }
+        activated.push(tool_target.clone());
+    }
+
+    let mut cleaned: Vec<ResolvedProjectToolTarget> = Vec::new();
+    for tool_target in &target.project_tool_cleanup_targets {
+        if LinkerService::check_link_for_scoped_skill(
+            &installed_path,
+            &tool_target.skills_dir,
+            skill_id,
+            &tool_target.tool_id,
+            &SkillScope::Project,
+        ) != sm_core::services::LinkStatus::Valid
+        {
+            continue;
+        }
+        if let Err(error) = LinkerService::disable_skill_for_tool(
+            &tool_target.skills_dir,
+            skill_id,
+            &tool_target.tool_id,
+        ) {
+            for completed in cleaned.into_iter().rev() {
+                let _ = LinkerService::enable_skill_for_tool(
+                    &installed_path,
+                    &completed.skills_dir,
+                    skill_id,
+                    &completed.tool_id,
+                );
+            }
+            rollback_activations(activated);
+            return Err(format!(
+                "installed Skill but failed to deactivate it for {}: {}",
+                tool_target.tool_id, error
+            ));
+        }
+        cleaned.push(tool_target.clone());
+    }
+    Ok(())
+}
+
+fn installation_scope_label(installation: &MarketplaceInstallation) -> String {
+    match installation.scope {
+        SkillScope::Global => "global".to_string(),
+        SkillScope::Project => installation
+            .project_name
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+            .map(|name| format!("project: {name}"))
+            .unwrap_or_else(|| "project".to_string()),
+    }
+}
 
 fn github_token_from_config(config: &AppConfig) -> Option<String> {
     config
@@ -137,6 +385,7 @@ fn build_marketplace_skill_from_reference(
         remote_revision: reference.remote_revision,
         tags: Vec::new(),
         install_status: InstallStatus::NotInstalled,
+        installations: Vec::new(),
         clawhub_slug: None,
         clawhub_owner: None,
         clawhub_version: None,
@@ -220,6 +469,7 @@ fn expand_skill_group_reference(
                 remote_revision: None,
                 tags: Vec::new(),
                 install_status: InstallStatus::NotInstalled,
+                installations: Vec::new(),
                 clawhub_slug: None,
                 clawhub_owner: None,
                 clawhub_version: None,
@@ -294,17 +544,126 @@ fn resolve_cache_source_scope(
     }
 }
 
-fn load_cached_or_scanned_skills(
-    app_cache: &AppCache,
-    skills_dir: &std::path::Path,
-) -> Result<Vec<Skill>, String> {
-    if let Some(skills) = app_cache.get_skills() {
-        return Ok(skills);
-    }
+fn load_marketplace_skills(config: &AppConfig) -> Result<Vec<Skill>, String> {
+    // Project bindings can change while the application is running. Always scan
+    // against the freshly loaded config so Marketplace state includes every
+    // configured project, independent of the active Skills-page context.
+    ScannerService::scan_all_scoped_skills(config)
+}
 
-    let skills = ScannerService::scan_skills(skills_dir)?;
-    app_cache.set_skills(skills.clone());
-    Ok(skills)
+fn local_marketplace_skill_id(skill: &Skill) -> Option<&str> {
+    if !matches!(skill.source, SkillSource::Marketplace) {
+        return None;
+    }
+    skill
+        .marketplace_meta
+        .as_ref()?
+        .marketplace_skill_id
+        .as_deref()
+}
+
+fn installation_status_for_local_skill(
+    marketplace_skill: &MarketplaceSkill,
+    local_skill: &Skill,
+) -> InstallStatus {
+    let remote_revision = marketplace_skill
+        .remote_revision
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let local_revision = local_skill
+        .marketplace_meta
+        .as_ref()
+        .and_then(|meta| meta.remote_revision.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    match (remote_revision, local_revision) {
+        (Some(remote), Some(local)) if remote != local => InstallStatus::UpdateAvailable,
+        (Some(_), None) => InstallStatus::UpdateAvailable,
+        _ => InstallStatus::Installed,
+    }
+}
+
+fn collect_marketplace_installations(
+    marketplace_skill: &MarketplaceSkill,
+    local_skills: &[Skill],
+) -> Vec<MarketplaceInstallation> {
+    let mut installations: Vec<MarketplaceInstallation> = local_skills
+        .iter()
+        .filter(|local_skill| {
+            local_marketplace_skill_id(local_skill) == Some(marketplace_skill.id.as_str())
+        })
+        .map(|local_skill| MarketplaceInstallation {
+            instance_id: local_skill.instance_id.clone(),
+            scope: local_skill.scope.clone(),
+            project_id: local_skill.project_id.clone(),
+            project_name: local_skill.project_name.clone(),
+            tool_ids: {
+                let mut tool_ids = local_skill
+                    .enabled
+                    .iter()
+                    .filter_map(|(tool_id, enabled)| enabled.then_some(tool_id.clone()))
+                    .collect::<Vec<_>>();
+                tool_ids.sort();
+                tool_ids
+            },
+            install_status: installation_status_for_local_skill(marketplace_skill, local_skill),
+        })
+        .collect();
+
+    installations.sort_by(|a, b| {
+        let a_scope = if a.scope == SkillScope::Global { 0 } else { 1 };
+        let b_scope = if b.scope == SkillScope::Global { 0 } else { 1 };
+        a_scope
+            .cmp(&b_scope)
+            .then_with(|| a.project_name.cmp(&b.project_name))
+            .then_with(|| a.instance_id.cmp(&b.instance_id))
+    });
+    installations
+}
+
+fn aggregate_install_status(installations: &[MarketplaceInstallation]) -> InstallStatus {
+    if installations
+        .iter()
+        .any(|item| item.install_status == InstallStatus::UpdateAvailable)
+    {
+        InstallStatus::UpdateAvailable
+    } else if installations
+        .iter()
+        .any(|item| item.install_status == InstallStatus::Installed)
+    {
+        InstallStatus::Installed
+    } else {
+        InstallStatus::NotInstalled
+    }
+}
+
+fn collect_marketplace_update_candidates(
+    skills: &[MarketplaceSkill],
+) -> Vec<(MarketplaceSkill, MarketplaceInstallation)> {
+    skills
+        .iter()
+        .flat_map(|skill| {
+            skill
+                .installations
+                .iter()
+                .filter(|installation| {
+                    installation.install_status == InstallStatus::UpdateAvailable
+                })
+                .map(|installation| (skill.clone(), installation.clone()))
+        })
+        .collect()
+}
+
+fn with_marketplace_installations(
+    mut marketplace_skill: MarketplaceSkill,
+    local_skills: &[Skill],
+) -> MarketplaceSkill {
+    marketplace_skill.installations =
+        collect_marketplace_installations(&marketplace_skill, local_skills);
+    marketplace_skill.install_status = aggregate_install_status(&marketplace_skill.installations);
+    marketplace_skill
 }
 
 fn collect_installed_marketplace_skills(
@@ -321,30 +680,32 @@ fn collect_installed_marketplace_skills(
         .as_ref()
         .map(|ids| ids.iter().map(String::as_str).collect());
 
-    let mut installed: Vec<MarketplaceSkill> = skills
+    let mut installed_by_id: HashMap<String, MarketplaceSkill> = HashMap::new();
+    for skill in skills
         .iter()
-        .filter_map(|skill| {
-            if !matches!(skill.source, SkillSource::Marketplace) {
-                return None;
+        .filter(|skill| matches!(skill.source, SkillSource::Marketplace))
+    {
+        let Some(meta) = skill.marketplace_meta.as_ref() else {
+            continue;
+        };
+        let source_id = meta
+            .marketplace_source_id
+            .clone()
+            .unwrap_or_else(|| "marketplace".to_string());
+
+        if let Some(filter) = &selected_source_ids {
+            if !filter.contains(source_id.as_str()) {
+                continue;
             }
+        }
 
-            let meta = skill.marketplace_meta.as_ref()?;
-            let source_id = meta
-                .marketplace_source_id
-                .clone()
-                .unwrap_or_else(|| "marketplace".to_string());
-
-            if let Some(filter) = &selected_source_ids {
-                if !filter.contains(source_id.as_str()) {
-                    return None;
-                }
-            }
-
-            Some(MarketplaceSkill {
-                id: meta
-                    .marketplace_skill_id
-                    .clone()
-                    .unwrap_or_else(|| skill.id.clone()),
+        let Some(marketplace_skill_id) = meta.marketplace_skill_id.clone() else {
+            continue;
+        };
+        installed_by_id
+            .entry(marketplace_skill_id.clone())
+            .or_insert_with(|| MarketplaceSkill {
+                id: marketplace_skill_id,
                 slug: meta
                     .marketplace_skill_slug
                     .clone()
@@ -363,11 +724,22 @@ fn collect_installed_marketplace_skills(
                 remote_revision: meta.remote_revision.clone(),
                 tags: Vec::new(),
                 install_status: InstallStatus::Installed,
-                clawhub_slug: None,
+                installations: Vec::new(),
+                clawhub_slug: if source_id == CLAWHUB_SOURCE_ID {
+                    meta.marketplace_skill_slug
+                        .clone()
+                        .or_else(|| meta.skill_path.clone())
+                } else {
+                    None
+                },
                 clawhub_owner: None,
                 clawhub_version: None,
-            })
-        })
+            });
+    }
+
+    let mut installed: Vec<MarketplaceSkill> = installed_by_id
+        .into_values()
+        .map(|skill| with_marketplace_installations(skill, skills))
         .collect();
 
     installed.sort_by(|a, b| {
@@ -376,9 +748,6 @@ fn collect_installed_marketplace_skills(
             .cmp(&b.name.to_lowercase())
             .then_with(|| a.id.cmp(&b.id))
     });
-
-    let mut seen_ids = HashSet::new();
-    installed.retain(|skill| seen_ids.insert(skill.id.clone()));
 
     MarketplaceService::filter_marketplace_skills_by_query(installed, normalized_query)
 }
@@ -405,7 +774,7 @@ fn prepend_missing_installed_marketplace_skills(
 }
 
 fn should_hydrate_missing_installed_marketplace_skill(skill: &MarketplaceSkill) -> bool {
-    skill.source_id == DIRECT_GITHUB_SOURCE_ID
+    (skill.source_id == DIRECT_GITHUB_SOURCE_ID
         && skill
             .repo_url
             .as_deref()
@@ -413,20 +782,29 @@ fn should_hydrate_missing_installed_marketplace_skill(skill: &MarketplaceSkill) 
         && skill
             .skill_path
             .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
+            .is_some_and(|value| !value.trim().is_empty()))
+        || (skill.source_id == CLAWHUB_SOURCE_ID
+            && skill
+                .clawhub_slug
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty()))
 }
 
 async fn merge_installed_marketplace_skills_into_page(
-    response: MarketplaceSkillsResponse,
+    mut response: MarketplaceSkillsResponse,
     page: u32,
     skills: &[Skill],
     sources: &[MarketplaceSource],
     normalized_query: Option<&str>,
     normalized_source_filter: &Option<Vec<String>>,
-    skills_dir: &std::path::Path,
     github_token: Option<&str>,
 ) -> MarketplaceSkillsResponse {
     if page != 1 {
+        response.skills = response
+            .skills
+            .into_iter()
+            .map(|skill| with_marketplace_installations(skill, skills))
+            .collect();
         return response;
     }
 
@@ -455,14 +833,16 @@ async fn merge_installed_marketplace_skills_into_page(
         } else {
             skill
         };
-        let install_status = MarketplaceService::check_install_status(&resolved, skills_dir);
-        hydrated_installed.push(MarketplaceSkill {
-            install_status,
-            ..resolved
-        });
+        hydrated_installed.push(resolved);
     }
 
-    prepend_missing_installed_marketplace_skills(response, hydrated_installed)
+    let mut merged = prepend_missing_installed_marketplace_skills(response, hydrated_installed);
+    merged.skills = merged
+        .skills
+        .into_iter()
+        .map(|skill| with_marketplace_installations(skill, skills))
+        .collect();
+    merged
 }
 
 fn marketplace_update_check_state_path() -> Option<PathBuf> {
@@ -521,7 +901,6 @@ pub async fn fetch_marketplace_skills(
     page: Option<u32>,
     source_ids: Option<Vec<String>>,
     cache: State<'_, MarketplaceCache>,
-    app_cache: State<'_, AppCache>,
 ) -> Result<MarketplaceSkillsResponse, String> {
     let normalized_query = query
         .as_ref()
@@ -542,8 +921,7 @@ pub async fn fetch_marketplace_skills(
         if let Some(cached) =
             cache.get_fresh_with_meta(page, &normalized_query, &cache_source_scope)
         {
-            let installed_skills =
-                load_cached_or_scanned_skills(app_cache.inner(), &config.skills_dir)?;
+            let installed_skills = load_marketplace_skills(&config)?;
             return Ok(merge_installed_marketplace_skills_into_page(
                 cached,
                 page,
@@ -551,7 +929,6 @@ pub async fn fetch_marketplace_skills(
                 &sources,
                 normalized_query.as_deref(),
                 &cache_source_scope,
-                &config.skills_dir,
                 github_token.as_deref(),
             )
             .await);
@@ -591,8 +968,7 @@ pub async fn fetch_marketplace_skills(
                         filtered_by_source,
                         normalized_query.as_deref(),
                     );
-                    let installed_skills =
-                        load_cached_or_scanned_skills(app_cache.inner(), &config.skills_dir)?;
+                    let installed_skills = load_marketplace_skills(&config)?;
                     return Ok(merge_installed_marketplace_skills_into_page(
                         MarketplaceSkillsResponse {
                             skills: filtered,
@@ -603,7 +979,6 @@ pub async fn fetch_marketplace_skills(
                         &sources,
                         normalized_query.as_deref(),
                         &runtime_cache_source_scope,
-                        &config.skills_dir,
                         github_token.as_deref(),
                     )
                     .await);
@@ -620,7 +995,7 @@ pub async fn fetch_marketplace_skills(
         result.clone(),
     );
 
-    let installed_skills = load_cached_or_scanned_skills(app_cache.inner(), &config.skills_dir)?;
+    let installed_skills = load_marketplace_skills(&config)?;
     Ok(merge_installed_marketplace_skills_into_page(
         result,
         page,
@@ -628,7 +1003,6 @@ pub async fn fetch_marketplace_skills(
         &sources,
         normalized_query.as_deref(),
         &runtime_cache_source_scope,
-        &config.skills_dir,
         github_token.as_deref(),
     )
     .await)
@@ -692,12 +1066,14 @@ pub async fn fetch_marketplace_skill_descriptions(
 #[tauri::command]
 pub async fn install_marketplace_skill(
     skill_id: String,
+    target: Option<MarketplaceInstallTarget>,
     marketplace_cache: State<'_, MarketplaceCache>,
     app_cache: State<'_, AppCache>,
 ) -> Result<InstallResult, String> {
     let manager = ConfigManager::new();
     let config = manager.load()?;
     let github_token = github_token_from_config(&config);
+    let resolved_target = resolve_marketplace_install_target(&config, target)?;
 
     let skill = if let Some(skill) = marketplace_cache.get_cached_skill(&skill_id) {
         skill
@@ -705,13 +1081,19 @@ pub async fn install_marketplace_skill(
         return Err("未找到对应的 Skill，请先在市场列表中加载该技能后再安装".to_string());
     };
 
-    let result =
-        MarketplaceService::install_skill(&skill, &config.skills_dir, github_token.as_deref())
-            .await?;
+    let result = MarketplaceService::install_skill(
+        &skill,
+        &resolved_target.skills_dir,
+        github_token.as_deref(),
+    )
+    .await?;
+    let activation_result = activate_project_installation(&result, &resolved_target);
 
-    // Invalidate caches so UI can refresh
+    // Local installation state is recomputed on every Marketplace read. Keep the
+    // remote listing cached so a multi-target frontend request can reuse the same
+    // Marketplace Skill for subsequent project installations.
     app_cache.invalidate_skills();
-    marketplace_cache.invalidate();
+    activation_result?;
 
     Ok(result)
 }
@@ -719,12 +1101,14 @@ pub async fn install_marketplace_skill(
 #[tauri::command]
 pub async fn install_marketplace_skill_by_ref(
     reference: MarketplaceSkillReference,
+    target: Option<MarketplaceInstallTarget>,
     marketplace_cache: State<'_, MarketplaceCache>,
     app_cache: State<'_, AppCache>,
 ) -> Result<InstallResult, String> {
     let manager = ConfigManager::new();
     let config = manager.load()?;
     let github_token = github_token_from_config(&config);
+    let resolved_target = resolve_marketplace_install_target(&config, target)?;
 
     let skill = build_marketplace_skill_from_reference(reference)?;
     let result = if let Some(repo_url) = skill.repo_url.as_deref() {
@@ -738,27 +1122,53 @@ pub async fn install_marketplace_skill_by_ref(
         let group_members = expand_skill_group_reference(&skill, &tree);
 
         if group_members.is_empty() {
-            MarketplaceService::install_skill(&skill, &config.skills_dir, github_token.as_deref())
-                .await?
+            let result = MarketplaceService::install_skill(
+                &skill,
+                &resolved_target.skills_dir,
+                github_token.as_deref(),
+            )
+            .await?;
+            if let Err(error) = activate_project_installation(&result, &resolved_target) {
+                app_cache.invalidate_skills();
+                marketplace_cache.invalidate();
+                return Err(error);
+            }
+            result
         } else {
             for member in &group_members {
-                MarketplaceService::install_skill(
+                let member_result = MarketplaceService::install_skill(
                     member,
-                    &config.skills_dir,
+                    &resolved_target.skills_dir,
                     github_token.as_deref(),
                 )
                 .await?;
+                if let Err(error) = activate_project_installation(&member_result, &resolved_target)
+                {
+                    app_cache.invalidate_skills();
+                    marketplace_cache.invalidate();
+                    return Err(error);
+                }
             }
             InstallResult {
                 success: true,
                 skill_id: skill.id.clone(),
                 message: Some(format!("已安装 {} 个 Skills", group_members.len())),
-                installed_path: Some(config.skills_dir.to_string_lossy().into_owned()),
+                installed_path: Some(resolved_target.skills_dir.to_string_lossy().into_owned()),
             }
         }
     } else {
-        MarketplaceService::install_skill(&skill, &config.skills_dir, github_token.as_deref())
-            .await?
+        let result = MarketplaceService::install_skill(
+            &skill,
+            &resolved_target.skills_dir,
+            github_token.as_deref(),
+        )
+        .await?;
+        if let Err(error) = activate_project_installation(&result, &resolved_target) {
+            app_cache.invalidate_skills();
+            marketplace_cache.invalidate();
+            return Err(error);
+        }
+        result
     };
 
     app_cache.invalidate_skills();
@@ -779,9 +1189,12 @@ pub async fn sync_marketplace_installed_skills(
     let normalized_source_filter = normalize_source_filter(source_ids);
     let sources = config.marketplace_sources.clone().unwrap_or_default();
 
-    let listing =
+    let mut listing =
         MarketplaceService::fetch_marketplace_skills_page(&config.skills_dir, None, 1).await?;
-    let installed_skills = load_cached_or_scanned_skills(app_cache.inner(), &config.skills_dir)?;
+    if let Some(cached_skills) = marketplace_cache.get_any() {
+        listing = prepend_missing_installed_marketplace_skills(listing, cached_skills);
+    }
+    let installed_skills = load_marketplace_skills(&config)?;
     let listing = merge_installed_marketplace_skills_into_page(
         listing,
         1,
@@ -789,7 +1202,6 @@ pub async fn sync_marketplace_installed_skills(
         &sources,
         None,
         &normalized_source_filter,
-        &config.skills_dir,
         github_token.as_deref(),
     )
     .await;
@@ -799,26 +1211,51 @@ pub async fn sync_marketplace_installed_skills(
         updated: 0,
         failed: Vec::new(),
     };
+    let mut installed_any = false;
 
-    for skill in listing
-        .skills
-        .into_iter()
-        .filter(|skill| skill.install_status == InstallStatus::UpdateAvailable)
-    {
+    for (skill, installation) in collect_marketplace_update_candidates(&listing.skills) {
         result.checked += 1;
-        match MarketplaceService::install_skill(&skill, &config.skills_dir, github_token.as_deref())
+        let target = match resolve_marketplace_install_target(
+            &config,
+            Some(target_from_installation(&installation)),
+        ) {
+            Ok(target) => target,
+            Err(err) => {
+                result.failed.push(format!(
+                    "{} ({}): {}",
+                    skill.name,
+                    installation_scope_label(&installation),
+                    err
+                ));
+                continue;
+            }
+        };
+
+        match MarketplaceService::install_skill(&skill, &target.skills_dir, github_token.as_deref())
             .await
         {
-            Ok(_) => {
-                result.updated += 1;
+            Ok(install_result) => {
+                installed_any = true;
+                match activate_project_installation(&install_result, &target) {
+                    Ok(()) => result.updated += 1,
+                    Err(err) => result.failed.push(format!(
+                        "{} ({}): {}",
+                        skill.name,
+                        installation_scope_label(&installation),
+                        err
+                    )),
+                }
             }
-            Err(err) => {
-                result.failed.push(format!("{}: {}", skill.name, err));
-            }
+            Err(err) => result.failed.push(format!(
+                "{} ({}): {}",
+                skill.name,
+                installation_scope_label(&installation),
+                err
+            )),
         }
     }
 
-    if result.updated > 0 {
+    if installed_any {
         app_cache.invalidate_skills();
         marketplace_cache.invalidate();
     }
@@ -829,7 +1266,6 @@ pub async fn sync_marketplace_installed_skills(
 #[tauri::command]
 pub async fn check_marketplace_updates_if_stale(
     marketplace_cache: State<'_, MarketplaceCache>,
-    app_cache: State<'_, AppCache>,
 ) -> Result<MarketplaceUpdateCheckResult, String> {
     let now = SystemTime::now();
     let last_checked = load_last_update_check_time();
@@ -848,7 +1284,7 @@ pub async fn check_marketplace_updates_if_stale(
 
     let listing =
         MarketplaceService::fetch_marketplace_skills_page(&config.skills_dir, None, 1).await?;
-    let installed_skills = load_cached_or_scanned_skills(app_cache.inner(), &config.skills_dir)?;
+    let installed_skills = load_marketplace_skills(&config)?;
     let merged_listing = merge_installed_marketplace_skills_into_page(
         listing.clone(),
         1,
@@ -856,7 +1292,6 @@ pub async fn check_marketplace_updates_if_stale(
         &sources,
         None,
         &None,
-        &config.skills_dir,
         github_token.as_deref(),
     )
     .await;
@@ -873,12 +1308,13 @@ pub async fn check_marketplace_updates_if_stale(
     let checked = merged_listing
         .skills
         .iter()
-        .filter(|skill| skill.install_status != InstallStatus::NotInstalled)
+        .flat_map(|skill| skill.installations.iter())
         .count();
     let update_available = merged_listing
         .skills
         .iter()
-        .filter(|skill| skill.install_status == InstallStatus::UpdateAvailable)
+        .flat_map(|skill| skill.installations.iter())
+        .filter(|installation| installation.install_status == InstallStatus::UpdateAvailable)
         .count();
 
     Ok(MarketplaceUpdateCheckResult {
@@ -923,22 +1359,30 @@ pub fn toggle_marketplace_source(source_id: String, enabled: bool) -> Result<(),
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::fs;
     use std::path::PathBuf;
     use std::time::{Duration, SystemTime};
 
-    use crate::models::{
-        InstallStatus, MarketplaceMeta, MarketplaceSkill, MarketplaceSkillsResponse,
-        MarketplaceSource, Skill, SkillFileNode, SkillSource, SourceType,
+    use sm_core::models::{
+        AppConfig, InstallResult, InstallStatus, MarketplaceMeta, MarketplaceSkill,
+        MarketplaceSkillsResponse, MarketplaceSource, ProjectBinding, Skill, SkillFileNode,
+        SkillScope, SkillSource, SourceType, ToolConfig,
     };
-    use crate::services::marketplace::{DIRECT_GITHUB_SOURCE_ID, DIRECT_GITHUB_SOURCE_NAME};
-    use crate::test_support::with_temp_home;
+    use sm_core::services::marketplace::{
+        CLAWHUB_SOURCE_ID, DIRECT_GITHUB_SOURCE_ID, DIRECT_GITHUB_SOURCE_NAME,
+    };
+    use sm_core::test_support::with_temp_home;
 
     use super::{
+        activate_project_installation, aggregate_install_status,
         build_marketplace_skill_from_reference, collect_installed_marketplace_skills,
+        collect_marketplace_installations, collect_marketplace_update_candidates,
         expand_skill_group_reference, load_last_update_check_time, persist_update_check_time,
         prepend_missing_installed_marketplace_skills, resolve_cache_source_scope,
-        should_hydrate_missing_installed_marketplace_skill, should_run_marketplace_update_check,
-        MarketplaceSkillReference, MARKETPLACE_UPDATE_CHECK_INTERVAL,
+        resolve_marketplace_install_target, should_hydrate_missing_installed_marketplace_skill,
+        should_run_marketplace_update_check, MarketplaceInstallTarget, MarketplaceSkillReference,
+        ResolvedMarketplaceInstallTarget, ResolvedProjectToolTarget,
+        MARKETPLACE_UPDATE_CHECK_INTERVAL,
     };
 
     fn make_source(id: &str, enabled: bool) -> MarketplaceSource {
@@ -962,7 +1406,7 @@ mod tests {
         Skill {
             id: format!("local-{id}"),
             instance_id: Skill::global_instance_id(&format!("local-{id}")),
-            scope: crate::models::SkillScope::Global,
+            scope: sm_core::models::SkillScope::Global,
             project_id: None,
             project_name: None,
             tool_id: None,
@@ -1004,10 +1448,358 @@ mod tests {
             remote_revision: Some("rev-remote".to_string()),
             tags: Vec::new(),
             install_status,
+            installations: Vec::new(),
             clawhub_slug: None,
             clawhub_owner: None,
             clawhub_version: None,
         }
+    }
+
+    fn config_with_active_project() -> AppConfig {
+        let mut tools = HashMap::new();
+        tools.insert(
+            "claude-code".to_string(),
+            ToolConfig {
+                enabled: true,
+                detected: true,
+                skills_path: PathBuf::from("/configured/global/.claude/skills"),
+                config_path: PathBuf::from("/configured/global/.claude"),
+            },
+        );
+        AppConfig {
+            skills_dir: PathBuf::from("/configured/global/skills"),
+            projects: vec![ProjectBinding {
+                id: "project-alpha".to_string(),
+                name: "Alpha".to_string(),
+                root_path: Some(PathBuf::from("/configured/alpha")),
+                skills_dir: PathBuf::from("/configured/alpha/.skills-manager/skills"),
+            }],
+            tools,
+            active_project_id: Some("project-alpha".to_string()),
+            ..AppConfig::default()
+        }
+    }
+
+    #[test]
+    fn install_target_defaults_to_global_directory() {
+        let config = config_with_active_project();
+        let resolved = resolve_marketplace_install_target(&config, None).expect("resolve target");
+
+        assert_eq!(resolved.scope, SkillScope::Global);
+        assert_eq!(resolved.skills_dir, config.skills_dir);
+        assert_eq!(resolved.project_id, None);
+    }
+
+    #[test]
+    fn install_target_resolves_explicit_global_directory() {
+        let config = config_with_active_project();
+        let resolved = resolve_marketplace_install_target(
+            &config,
+            Some(MarketplaceInstallTarget {
+                scope: SkillScope::Global,
+                project_id: Some("ignored".to_string()),
+                tool_ids: Vec::new(),
+            }),
+        )
+        .expect("resolve target");
+
+        assert_eq!(
+            resolved.skills_dir,
+            PathBuf::from("/configured/global/skills")
+        );
+        assert_eq!(resolved.project_id, None);
+    }
+
+    #[test]
+    fn install_target_resolves_configured_project() {
+        let config = config_with_active_project();
+        let resolved = resolve_marketplace_install_target(
+            &config,
+            Some(MarketplaceInstallTarget {
+                scope: SkillScope::Project,
+                project_id: Some("project-alpha".to_string()),
+                tool_ids: vec!["claude-code".to_string()],
+            }),
+        )
+        .expect("resolve target");
+
+        assert_eq!(resolved.scope, SkillScope::Project);
+        assert_eq!(
+            resolved.skills_dir,
+            PathBuf::from("/configured/alpha/.skills-manager/skills")
+        );
+        assert_eq!(resolved.project_tool_targets.len(), 1);
+        assert_eq!(
+            resolved.project_tool_targets[0].skills_dir,
+            PathBuf::from("/configured/alpha/.claude/skills")
+        );
+        assert_eq!(resolved.project_name.as_deref(), Some("Alpha"));
+    }
+
+    #[test]
+    fn install_target_resolves_non_active_configured_project() {
+        let mut config = config_with_active_project();
+        config.projects.push(ProjectBinding {
+            id: "project-beta".to_string(),
+            name: "Beta".to_string(),
+            root_path: Some(PathBuf::from("/configured/beta")),
+            skills_dir: PathBuf::from("/configured/beta/.skills-manager/skills"),
+        });
+
+        let resolved = resolve_marketplace_install_target(
+            &config,
+            Some(MarketplaceInstallTarget {
+                scope: SkillScope::Project,
+                project_id: Some("project-beta".to_string()),
+                tool_ids: vec!["claude-code".to_string()],
+            }),
+        )
+        .expect("resolve non-active project target");
+
+        assert_eq!(resolved.project_id.as_deref(), Some("project-beta"));
+        assert_eq!(resolved.project_name.as_deref(), Some("Beta"));
+        assert_eq!(
+            resolved.skills_dir,
+            PathBuf::from("/configured/beta/.skills-manager/skills")
+        );
+    }
+
+    #[test]
+    fn install_target_rejects_missing_or_unknown_project() {
+        let config = config_with_active_project();
+        let missing = resolve_marketplace_install_target(
+            &config,
+            Some(MarketplaceInstallTarget {
+                scope: SkillScope::Project,
+                project_id: None,
+                tool_ids: vec!["claude-code".to_string()],
+            }),
+        )
+        .expect_err("missing project id should fail");
+        let unknown = resolve_marketplace_install_target(
+            &config,
+            Some(MarketplaceInstallTarget {
+                scope: SkillScope::Project,
+                project_id: Some("project-other".to_string()),
+                tool_ids: vec!["claude-code".to_string()],
+            }),
+        )
+        .expect_err("unknown project id should fail");
+
+        assert!(missing.contains("project_id"));
+        assert!(unknown.contains("project binding not found"));
+    }
+
+    #[test]
+    fn install_target_requires_enabled_supported_project_tools() {
+        let mut config = config_with_active_project();
+        let no_tools = resolve_marketplace_install_target(
+            &config,
+            Some(MarketplaceInstallTarget {
+                scope: SkillScope::Project,
+                project_id: Some("project-alpha".to_string()),
+                tool_ids: Vec::new(),
+            }),
+        )
+        .expect_err("project targets need a tool");
+        let unknown = resolve_marketplace_install_target(
+            &config,
+            Some(MarketplaceInstallTarget {
+                scope: SkillScope::Project,
+                project_id: Some("project-alpha".to_string()),
+                tool_ids: vec!["unknown-tool".to_string()],
+            }),
+        )
+        .expect_err("unknown tools must fail");
+        config.tools.get_mut("claude-code").unwrap().enabled = false;
+        let disabled = resolve_marketplace_install_target(
+            &config,
+            Some(MarketplaceInstallTarget {
+                scope: SkillScope::Project,
+                project_id: Some("project-alpha".to_string()),
+                tool_ids: vec!["claude-code".to_string()],
+            }),
+        )
+        .expect_err("disabled tools must fail");
+
+        assert!(no_tools.contains("at least one tool"));
+        assert!(unknown.contains("tool not found"));
+        assert!(disabled.contains("tool is disabled"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn project_activation_syncs_selected_paths_and_preserves_unmanaged_conflicts() {
+        with_temp_home(|home| {
+            let installed_path = home
+                .join("project")
+                .join(".skills-manager")
+                .join("skills")
+                .join("demo");
+            let selected_dir = home.join("project").join(".claude").join("skills");
+            let cleanup_dir = home.join("project").join(".gemini").join("skills");
+            let unmanaged_dir = home.join("project").join(".cursor").join("skills");
+            fs::create_dir_all(&installed_path).expect("create installed Skill");
+            fs::write(installed_path.join("SKILL.md"), "# Demo\n").expect("write Skill");
+            fs::create_dir_all(&cleanup_dir).expect("create cleanup directory");
+            fs::create_dir_all(unmanaged_dir.join("demo")).expect("create unmanaged conflict");
+            std::os::unix::fs::symlink(&installed_path, cleanup_dir.join("demo"))
+                .expect("create old managed link");
+
+            let target = ResolvedMarketplaceInstallTarget {
+                skills_dir: installed_path.parent().unwrap().to_path_buf(),
+                scope: SkillScope::Project,
+                project_id: Some("alpha".to_string()),
+                project_name: Some("Alpha".to_string()),
+                project_tool_targets: vec![ResolvedProjectToolTarget {
+                    tool_id: "claude-code".to_string(),
+                    skills_dir: selected_dir.clone(),
+                }],
+                project_tool_cleanup_targets: vec![
+                    ResolvedProjectToolTarget {
+                        tool_id: "gemini".to_string(),
+                        skills_dir: cleanup_dir.clone(),
+                    },
+                    ResolvedProjectToolTarget {
+                        tool_id: "cursor".to_string(),
+                        skills_dir: unmanaged_dir.clone(),
+                    },
+                ],
+            };
+            let result = InstallResult {
+                success: true,
+                skill_id: "demo".to_string(),
+                message: None,
+                installed_path: Some(installed_path.to_string_lossy().into_owned()),
+            };
+
+            activate_project_installation(&result, &target).expect("activate project Skill");
+
+            assert_eq!(
+                fs::read_link(selected_dir.join("demo")).expect("read selected link"),
+                installed_path
+            );
+            assert!(cleanup_dir.join("demo").symlink_metadata().is_err());
+            assert!(unmanaged_dir.join("demo").is_dir());
+        });
+    }
+
+    #[test]
+    fn install_target_does_not_accept_a_frontend_directory() {
+        let error = serde_json::from_value::<MarketplaceInstallTarget>(serde_json::json!({
+            "scope": "project",
+            "project_id": "project-alpha",
+            "skills_dir": "/tmp/untrusted"
+        }))
+        .expect_err("directory fields must be rejected");
+
+        assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn marketplace_installations_preserve_global_and_project_instances() {
+        let mut global = make_marketplace_skill("src_skills::alpha", "src_skills", "Alpha", None);
+        global.marketplace_meta.as_mut().unwrap().remote_revision = Some("rev-current".to_string());
+        let mut project = global.clone().with_scope(
+            SkillScope::Project,
+            Some("project-alpha".to_string()),
+            Some("Alpha Project".to_string()),
+        );
+        project.path = PathBuf::from("/configured/alpha/.claude/skills/alpha");
+        project.marketplace_meta.as_mut().unwrap().remote_revision = Some("rev-old".to_string());
+        let mut remote = make_listing_skill("src_skills::alpha", InstallStatus::NotInstalled);
+        remote.remote_revision = Some("rev-current".to_string());
+
+        let installations = collect_marketplace_installations(&remote, &[global, project]);
+
+        assert_eq!(installations.len(), 2);
+        assert_eq!(installations[0].scope, SkillScope::Global);
+        assert_eq!(installations[0].install_status, InstallStatus::Installed);
+        assert_eq!(installations[1].scope, SkillScope::Project);
+        assert_eq!(
+            installations[1].install_status,
+            InstallStatus::UpdateAvailable
+        );
+        assert_eq!(
+            aggregate_install_status(&installations),
+            InstallStatus::UpdateAvailable
+        );
+    }
+
+    #[test]
+    fn marketplace_installations_support_single_scope_and_ignore_same_name_local_skill() {
+        let mut project = make_marketplace_skill("src_skills::alpha", "src_skills", "Alpha", None)
+            .with_scope(
+                SkillScope::Project,
+                Some("project-alpha".to_string()),
+                Some("Alpha Project".to_string()),
+            );
+        project.marketplace_meta.as_mut().unwrap().remote_revision = Some("rev-remote".to_string());
+        let local_same_name = Skill::new(
+            "alpha-local".to_string(),
+            "Alpha".to_string(),
+            PathBuf::from("/tmp/alpha-local"),
+        );
+        let remote = make_listing_skill("src_skills::alpha", InstallStatus::NotInstalled);
+
+        let installations = collect_marketplace_installations(&remote, &[project, local_same_name]);
+
+        assert_eq!(installations.len(), 1);
+        assert_eq!(installations[0].scope, SkillScope::Project);
+        assert_eq!(
+            installations[0].project_id.as_deref(),
+            Some("project-alpha")
+        );
+        assert_eq!(
+            aggregate_install_status(&installations),
+            InstallStatus::Installed
+        );
+    }
+
+    #[test]
+    fn batch_update_candidates_keep_each_instance_directory() {
+        let config = config_with_active_project();
+        let mut remote = make_listing_skill("src_skills::alpha", InstallStatus::UpdateAvailable);
+        remote.installations = vec![
+            sm_core::models::MarketplaceInstallation {
+                instance_id: "global:alpha".to_string(),
+                scope: SkillScope::Global,
+                project_id: None,
+                project_name: None,
+                tool_ids: Vec::new(),
+                install_status: InstallStatus::UpdateAvailable,
+            },
+            sm_core::models::MarketplaceInstallation {
+                instance_id: "project:project-alpha:alpha".to_string(),
+                scope: SkillScope::Project,
+                project_id: Some("project-alpha".to_string()),
+                project_name: Some("Alpha".to_string()),
+                tool_ids: vec!["claude-code".to_string()],
+                install_status: InstallStatus::UpdateAvailable,
+            },
+        ];
+
+        let candidates = collect_marketplace_update_candidates(&[remote]);
+        let resolved_directories = candidates
+            .iter()
+            .map(|(_, installation)| {
+                resolve_marketplace_install_target(
+                    &config,
+                    Some(super::target_from_installation(installation)),
+                )
+                .expect("candidate target should resolve")
+                .skills_dir
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(
+            resolved_directories,
+            vec![
+                PathBuf::from("/configured/global/skills"),
+                PathBuf::from("/configured/alpha/.skills-manager/skills"),
+            ]
+        );
     }
 
     #[test]
@@ -1148,6 +1940,7 @@ mod tests {
             remote_revision: None,
             tags: Vec::new(),
             install_status: InstallStatus::NotInstalled,
+            installations: Vec::new(),
             clawhub_slug: None,
             clawhub_owner: None,
             clawhub_version: None,
@@ -1230,6 +2023,7 @@ mod tests {
             remote_revision: None,
             tags: Vec::new(),
             install_status: InstallStatus::NotInstalled,
+            installations: Vec::new(),
             clawhub_slug: None,
             clawhub_owner: None,
             clawhub_version: None,
@@ -1261,7 +2055,7 @@ mod tests {
             Skill {
                 id: "local-only".to_string(),
                 instance_id: Skill::global_instance_id("local-only"),
-                scope: crate::models::SkillScope::Global,
+                scope: sm_core::models::SkillScope::Global,
                 project_id: None,
                 project_name: None,
                 tool_id: None,
@@ -1343,6 +2137,17 @@ mod tests {
         assert!(
             should_hydrate_missing_installed_marketplace_skill(&direct),
             "direct GitHub installs still need remote hydration for update tracking"
+        );
+
+        let clawhub = MarketplaceSkill {
+            source_id: CLAWHUB_SOURCE_ID.to_string(),
+            source_name: "ClawHub".to_string(),
+            clawhub_slug: Some("demo".to_string()),
+            ..make_listing_skill("src_clawhub::demo", InstallStatus::Installed)
+        };
+        assert!(
+            should_hydrate_missing_installed_marketplace_skill(&clawhub),
+            "installed ClawHub skills outside the current page need latest-version hydration"
         );
     }
 }

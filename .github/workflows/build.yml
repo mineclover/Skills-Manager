@@ -19,6 +19,10 @@ jobs:
               'skills-manager-macos-x64',
               'skills-manager-ubuntu-22.04',
               'skills-manager-windows-latest',
+              'skm-macos-aarch64',
+              'skm-macos-x64',
+              'skm-linux-x64',
+              'skm-windows-x64',
             ]);
 
             const artifacts = await github.paginate(
@@ -54,28 +58,41 @@ jobs:
             args: "--target aarch64-apple-darwin"
             rust_target: "aarch64-apple-darwin"
             artifact_name: "skills-manager-macos-aarch64"
+            # Workspace root target dir — src-tauri is a workspace member, so
+            # cargo writes bundles to ./target, not ./src-tauri/target.
             artifact_paths: |
-              src-tauri/target/aarch64-apple-darwin/release/bundle/**/*.dmg
+              target/aarch64-apple-darwin/release/bundle/**/*.dmg
+            skm_artifact_name: "skm-macos-aarch64"
+            # Release asset stem. Always the Rust target triple, even where
+            # rust_target is empty (native build), so users can tell the
+            # archives apart in the Assets list.
+            skm_archive: "skm-aarch64-apple-darwin"
           - platform: "macos-15-intel" # Intel Mac (Native x64 runner)
             args: "--target x86_64-apple-darwin"
             rust_target: "x86_64-apple-darwin"
             artifact_name: "skills-manager-macos-x64"
             artifact_paths: |
-              src-tauri/target/x86_64-apple-darwin/release/bundle/**/*.dmg
+              target/x86_64-apple-darwin/release/bundle/**/*.dmg
+            skm_artifact_name: "skm-macos-x64"
+            skm_archive: "skm-x86_64-apple-darwin"
           - platform: "ubuntu-22.04"
             args: ""
             rust_target: ""
             artifact_name: "skills-manager-ubuntu-22.04"
             artifact_paths: |
-              src-tauri/target/release/bundle/**/*.AppImage
-              src-tauri/target/release/bundle/**/*.deb
+              target/release/bundle/**/*.AppImage
+              target/release/bundle/**/*.deb
+            skm_artifact_name: "skm-linux-x64"
+            skm_archive: "skm-x86_64-unknown-linux-gnu"
           - platform: "windows-latest"
             args: ""
             rust_target: ""
             artifact_name: "skills-manager-windows-latest"
             artifact_paths: |
-              src-tauri/target/release/bundle/**/*.exe
-              src-tauri/target/release/bundle/**/*.msi
+              target/release/bundle/**/*.exe
+              target/release/bundle/**/*.msi
+            skm_artifact_name: "skm-windows-x64"
+            skm_archive: "skm-x86_64-pc-windows-msvc"
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -98,7 +115,8 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: "./src-tauri"
+          # Single workspace at the repo root (crates/core, crates/cli, src-tauri).
+          workspaces: "."
 
       - name: install dependencies (ubuntu only)
         if: matrix.platform == 'ubuntu-22.04'
@@ -106,13 +124,49 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
 
+      - name: build skm CLI
+        run: cargo build --release -p skm ${{ matrix.args }}
+
+      - name: package skm CLI (unix)
+        if: runner.os != 'Windows'
+        run: |
+          target_dir="target/release"
+          if [ -n "${{ matrix.rust_target }}" ]; then
+            target_dir="target/${{ matrix.rust_target }}/release"
+          fi
+          mkdir -p "${{ matrix.skm_archive }}"
+          cp "${target_dir}/skm" "${{ matrix.skm_archive }}/"
+          tar -czf "${{ matrix.skm_archive }}.tar.gz" "${{ matrix.skm_archive }}"
+
+      - name: package skm CLI (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path "${{ matrix.skm_archive }}" | Out-Null
+          Copy-Item target/release/skm.exe "${{ matrix.skm_archive }}/"
+          Compress-Archive -Path "${{ matrix.skm_archive }}" -DestinationPath "${{ matrix.skm_archive }}.zip"
+
+      - name: Upload skm CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.skm_artifact_name }}
+          path: |
+            skm-*.tar.gz
+            skm-*.zip
+          retention-days: 1
+          if-no-files-found: error
+
       - name: install frontend dependencies
         run: npm ci
 
       - name: build tauri app
+        id: tauri
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # beforeBuildCommand runs bundle:cli — fail the build rather than
+          # shipping an installer with no bundled CLI.
+          SKM_REQUIRE_CLI: "1"
         with:
           tagName: v__VERSION__ # the action automatically replaces \_\_VERSION\_\_ with the app version.
           releaseName: "Skills Manager v__VERSION__"
@@ -120,6 +174,39 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      # tauri-action only attaches the installers it builds, so the CLI archive
+      # would otherwise exist as a 1-day artifact and never reach the Releases
+      # page the READMEs point users at. Upload it onto the same draft release.
+      - name: attach skm CLI to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ steps.tauri.outputs.releaseId }}
+          ARCHIVE_STEM: ${{ matrix.skm_archive }}
+        run: |
+          set -euo pipefail
+
+          # Resolve the tag from the release tauri-action just wrote to, rather
+          # than re-deriving it from package.json — that keeps the two in sync
+          # even if the version source ever moves.
+          tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" --jq .tag_name)"
+
+          archives=()
+          for candidate in "${ARCHIVE_STEM}.tar.gz" "${ARCHIVE_STEM}.zip"; do
+            if [ -f "$candidate" ]; then
+              archives+=("$candidate")
+            fi
+          done
+          if [ ${#archives[@]} -eq 0 ]; then
+            echo "::error::No ${ARCHIVE_STEM} archive found to attach — the packaging step above did not produce one."
+            exit 1
+          fi
+
+          # --clobber so re-running the workflow for an unpublished draft
+          # replaces the asset instead of failing on the existing name.
+          gh release upload "$tag" "${archives[@]}" --clobber
+          echo "Attached ${archives[*]} to $tag"
 
       - name: Upload installer artifacts
         uses: actions/upload-artifact@v4

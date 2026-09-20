@@ -2,7 +2,6 @@ import { lazy, Suspense, useState, useEffect, useCallback } from "react";
 import { BrowserRouter, Routes, Route, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { Layout } from "@/components/layout/Layout";
-import { Welcome } from "@/pages/Welcome";
 import { useInitialization } from "@/hooks/useInitialization";
 import { ThemeProvider } from "@/hooks/useTheme";
 import { SkillTranslationProvider } from "@/hooks/useSkillTranslation";
@@ -12,20 +11,30 @@ import { FontFamilyPreset, normalizeFontFamilyPreset } from "@/lib/fontFamily";
 import { AppConfig, MarketplaceUpdateCheckResult } from "@/types";
 import { ToastContainer, useToast } from "@/components/ui/toast";
 import { CommandPalette } from "@/components/CommandPalette";
+import { CliPromoModal } from "@/components/cli/CliPromoModal";
 import { PageHeaderProvider } from "@/components/PageHeaderContext";
 
 type Theme = "light" | "dark" | "system";
 
 const Skills = lazy(() => import("@/pages/Skills").then(({ Skills }) => ({ default: Skills })));
 const Tools = lazy(() => import("@/pages/Tools").then(({ Tools }) => ({ default: Tools })));
-const Presets = lazy(() => import("@/pages/Presets").then(({ Presets }) => ({ default: Presets })));
-const SkillSets = lazy(() => import("@/pages/SkillSets").then(({ SkillSets }) => ({ default: SkillSets })));
-const ProjectProfile = lazy(() => import("@/pages/ProjectProfile").then(({ ProjectProfile }) => ({ default: ProjectProfile })));
-const ReviewQueue = lazy(() => import("@/pages/ReviewQueue").then(({ ReviewQueue }) => ({ default: ReviewQueue })));
-const Marketplace = lazy(() => import("@/pages/Marketplace").then(({ Marketplace }) => ({ default: Marketplace })));
+const Marketplace = lazy(() =>
+  import("@/pages/Marketplace").then(({ Marketplace }) => ({ default: Marketplace })),
+);
 const Settings = lazy(() => import("@/pages/Settings").then(({ Settings }) => ({ default: Settings })));
 const Feedback = lazy(() => import("@/pages/Feedback").then(({ Feedback }) => ({ default: Feedback })));
-const EditorPage = lazy(() => import("@/pages/Editor").then(({ EditorPage }) => ({ default: EditorPage })));
+const EditorPage = lazy(() =>
+  import("@/pages/Editor").then(({ EditorPage }) => ({ default: EditorPage })),
+);
+const Welcome = lazy(() => import("@/pages/Welcome").then(({ Welcome }) => ({ default: Welcome })));
+
+function AppLoader() {
+  return (
+    <div className="min-h-full bg-background flex items-center justify-center">
+      <div className="animate-pulse text-muted-foreground">Loading...</div>
+    </div>
+  );
+}
 
 function GlobalShortcuts({ onOpenPalette }: { onOpenPalette: () => void }) {
   const navigate = useNavigate();
@@ -73,7 +82,7 @@ function App() {
           setTheme(config.preferences.theme as Theme);
         }
         setFontFamily(normalizeFontFamilyPreset(config.preferences?.font_family));
-        } catch {
+      } catch {
         // Use defaults on error
       }
       setConfigLoaded(true);
@@ -130,7 +139,9 @@ function App() {
         onFontFamilyChange={handleFontFamilyChange}
       >
         <I18nProvider language={language} onLanguageChange={handleLanguageChange}>
-          <Welcome onComplete={markInitialized} />
+          <Suspense fallback={<AppLoader />}>
+            <Welcome onComplete={markInitialized} />
+          </Suspense>
         </I18nProvider>
       </ThemeProvider>
     );
@@ -149,15 +160,11 @@ function App() {
             <PageHeaderProvider>
               <SkillTranslationProvider>
                 <GlobalShortcuts onOpenPalette={() => setPaletteOpen(true)} />
-                <Suspense fallback={<div className="min-h-screen bg-background flex items-center justify-center"><div className="animate-pulse text-muted-foreground">Loading...</div></div>}>
+                <Suspense fallback={<AppLoader />}>
                   <Routes>
                     <Route path="/" element={<Layout onOpenPalette={() => setPaletteOpen(true)} />}>
                       <Route index element={<Skills />} />
                       <Route path="tools" element={<Tools />} />
-                      <Route path="presets" element={<Presets />} />
-                      <Route path="skill-sets" element={<SkillSets />} />
-                      <Route path="projects" element={<ProjectProfile />} />
-                      <Route path="review-queue" element={<ReviewQueue />} />
                       <Route path="marketplace" element={<Marketplace />} />
                       <Route path="settings" element={<Settings />} />
                       <Route path="feedback" element={<Feedback />} />
@@ -166,6 +173,7 @@ function App() {
                   </Routes>
                 </Suspense>
                 <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+                <CliPromoModal />
                 <ToastContainer toasts={toasts} onRemove={removeToast} />
               </SkillTranslationProvider>
             </PageHeaderProvider>

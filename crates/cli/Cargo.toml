@@ -1,0 +1,21 @@
+[package]
+name = "skm"
+version = "2.2.0"
+description = "Skills Manager CLI - manage AI assistant skills from the terminal"
+edition = "2021"
+
+[[bin]]
+name = "skm"
+path = "src/main.rs"
+
+[dependencies]
+sm-core = { path = "../core" }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+fs4 = "0.12"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+sm-core = { path = "../core", features = ["test-support"] }
+tempfile = { workspace = true }

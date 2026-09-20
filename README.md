@@ -3,15 +3,23 @@
 > **A unified desktop application for managing AI coding assistant skills.**
 > Seamlessly organize, sync, and share skills for **Claude Code, Codex, Opencode** and other AI tools.
 
-![Version](https://img.shields.io/badge/version-2.1.8-blue) ![Downloads](https://img.shields.io/github/downloads/jiweiyeah/skills-manager/total?color=brightgreen&label=downloads) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey) ![Tech](https://img.shields.io/badge/built%20with-Tauri%202.0%20%2B%20React%2019-orange)
+![Version](https://img.shields.io/badge/version-2.2.0-blue) ![Downloads](https://img.shields.io/github/downloads/jiweiyeah/skills-manager/total?color=brightgreen&label=downloads) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey) ![Tech](https://img.shields.io/badge/built%20with-Tauri%202.0%20%2B%20React%2019-orange)
 
-[**Website**](https://skillsmanager.freeourdays.com) · [中文说明](./README_CN.md)
+[**Website**](https://skillsmanager.freeourdays.com/?ref=gh) · [中文说明](./README_CN.md)
+
+## 🤝 Sponsors
+
+**[Y-API](https://y-api.bestvirtualgoods.com/i/DNTXWYCU)** provides a unified API for models from DeepSeek, Qwen, GLM, Kimi, OpenAI, and more.
+
+- **Easy integration**: OpenAI-compatible, so you can keep using your existing OpenAI SDK and access multiple models with one API key.
+- **Flexible billing**: Pay per token, with no monthly fee or minimum spend.
+- **Easy to try**: Signup credits let you get started without a credit card.
 
 ## 📖 Introduction
 
 **Skills Manager** is a desktop **skill registry and management control plane** for fragmented AI-agent skill configurations. It records canonical skill sources, pinned revisions, contracts, evaluation, project assignments, and activation intent instead of treating each agent's local directory as the source of truth.
 
-Agent `skills/` directories are delivery paths. Skills Manager uses **symbolic-link distribution by default** to expose one reviewed canonical skill revision across supported AI tools including Claude Code, Codex, Cursor, Gemini CLI, Antigravity, Windsurf, Trae, and more. Copy distribution remains an explicit compatibility fallback when links are unavailable.
+It uses a powerful **symlink synchronization mechanism**, allowing you to write a skill once and instantly use it across 32 supported AI tools including Claude Code, Codex, Cursor, Gemini CLI, Windsurf, Trae, and more.
 
 ## ✨ Key Features
 
@@ -26,7 +34,7 @@ Agent `skills/` directories are delivery paths. Skills Manager uses **symbolic-l
 - **🌍 Multilingual UI**: English, Korean, and Chinese interface support.
 - **⚡ High Performance**: Built with **Rust** and **Tauri 2.0** for a lightweight, blazing-fast experience.
 - **🛡️ Cross-Platform**: Native support for macOS, Windows, and Linux.
-- **🔌 Multi-Tool Support**: Out-of-the-box support for 30+ AI tools (Claude Code, Codex, Cursor, Gemini CLI, Antigravity, Windsurf, Trae, Cline, Augment, Goose, and many more), extensible via custom tools.
+- **🔌 Multi-Tool Support**: Out-of-the-box support for 32 AI tools (Claude Code, Codex, Cursor, Gemini CLI, Windsurf, Trae, Cline, Augment, Goose, and many more), extensible via custom tools.
 - **🧩 Custom Tools**: Add your own tools with custom paths and optional icons.
 - **🎨 Modern UI**: Beautiful Raycast-style interface built with React 19, Tailwind CSS v4, and Radix UI.
 
@@ -40,17 +48,38 @@ Agent `skills/` directories are delivery paths. Skills Manager uses **symbolic-l
 
 ## 📥 Download
 
-Get the build for your platform from the **[official website](https://skillsmanager.freeourdays.com/#download)**, which detects your OS and architecture automatically, or pick a file yourself on the **[Releases Page](../../releases)**.
+Get the build for your platform from the **[official website](https://skillsmanager.freeourdays.com/?ref=gh#download)**, which detects your OS and architecture automatically, or pick a file yourself on the **[Releases Page](../../releases)**.
 
 | OS | Installer Type |
 |----|----------------|
-| **macOS** | `.dmg` (Universal) |
+| **macOS** | `.dmg` — separate builds for Apple Silicon (`aarch64`) and Intel (`x64`) |
 | **Windows** | `.msi` / `.exe` |
 | **Linux** | `.deb` / `.AppImage` / `.rpm`|
 
-## ⚠️ Windows Important Note
+### Homebrew (macOS)
 
-If you encounter permission issues when syncing skills (symbolic link creation errors) or detection issues, please try running the application as **Administrator**. This is often required on Windows to create symbolic links unless Developer Mode is enabled.
+```bash
+brew tap jiweiyeah/tap
+brew install --cask jiweiyeah/tap/skills-manager
+```
+
+The cask picks the right build for your CPU automatically, and `brew upgrade` keeps it current.
+
+Use the full `jiweiyeah/tap/skills-manager` path: Homebrew's official cask repository contains an unrelated cask that happens to share the `skills-manager` token, and the official tap wins on a bare name.
+
+The app is ad-hoc signed but **not notarized by Apple**, so the cask strips the quarantine attribute on install — see the [tap README](https://github.com/jiweiyeah/homebrew-tap) for what that means and how to opt out.
+
+## 🪟 Windows Notes
+
+**You do not need Administrator rights.** When a skill is enabled for a tool, Skills Manager tries three strategies in order:
+
+1. **Directory symlink** — used when Developer Mode is enabled (or when the app happens to run elevated).
+2. **Directory junction** (`mklink /J`) — the normal path on a standard account. It needs no special permission.
+3. **Tracked copy** — if junctions are blocked as well, the folder is copied and its source path is recorded in `.skills-manager-source.json`, so the copy stays traceable and can still be disabled from the app.
+
+A standard, non-elevated Windows account is enough for all three.
+
+If a tool is **not detected**, elevation will not help either: the tool's own config directory has to exist on this machine. Check the [tool compatibility matrix](https://skillsmanager.freeourdays.com/?ref=gh#tools) for the exact path each tool reads, or add it manually as a custom tool.
 
 ## 🚀 Getting Started
 
@@ -58,39 +87,27 @@ If you encounter permission issues when syncing skills (symbolic link creation e
 2. **Setup**: On first launch, the app will guide you to select your skills storage directory.
 3. **Sync**: The app automatically detects installed AI tools (like Claude Code) and links your skills.
 
-## 🔎 Control-plane CLI
+## ⌨️ CLI (`skm`)
 
-The Rust CLI exposes the same provider-aware inventory used by the UI. Use its
-read commands to inspect global or project-specific state without opening the app:
+A companion command-line tool ships with every release for terminal-first workflows: SSH/headless machines, dotfiles setup scripts, and quick status checks. It reads and writes the same config and symlinks as the desktop app, so they can be used interchangeably.
+
+Download `skm-<target>.tar.gz` (`.zip` on Windows) from the [Releases Page](../../releases), extract it, and put the binary on your `PATH`.
 
 ```bash
-# Global state (default)
-npm run inspect -- inspect -- --json
-npm run inspect -- providers -- --json
-npm run inspect -- bindings -- --json
-
-# Explicit project state
-npm run inspect -- inspect -- --project <project-id> --json
-npm run inspect -- providers -- --project <project-id> --json
-npm run inspect -- bindings -- --project <project-id> --json
+skm init                          # first-run setup without the GUI (writes config, detects tools)
+skm adopt [--dry-run] [--yes]     # move skills already in tool dirs into the hub and relink them
+skm list [--tool <id>] [--json]   # list skills and their per-tool link status
+skm enable <skill> --for <tool>   # create the symlink (e.g. skm enable ab-testing --for claude)
+skm disable <skill> --for <tool>  # remove the symlink
+skm doctor [--json]               # detect installed tools + report sync issues
+skm fix --yes                     # repair sync issues found by doctor
 ```
 
-Run `npm run inspect -- -- --help` for the complete command list. Mutating commands
-operate on the selected provider and scope; when they affect a shared root, they
-require the explicit `--confirm-shared` flag. Start with `skill preview` before
-using `skill enable` or `skill disable`.
+Both `<skill>` and `<tool>` accept a unique prefix (`claude` matches `claude-code`). Run `skm <command> --help` for details. The GUI is optional: `skm init` + `skm adopt` give a fully terminal-only workflow (e.g. on headless servers).
 
-## 🧭 Repository & Development
+Installing the CLI (Settings → Command Line Tool, or `skm init`) also copies the [`skills-manager-cli`](./skills/skills-manager-cli) companion skill into the hub and enables it for every currently detected tool, so other agents can drive `skm` without guessing flags. It covers `--json` contracts, dry-run vs apply, and which commands `skm` does *not* implement.
 
-This repository tracks the upstream project separately from local patches. The integrated
-application remains at the repository root; `upstream/main`,
-`patches/skills-manager-control-plane`, and `main` are the source-control lanes.
-
-- [Development conventions](./DEVELOPMENT.md)
-- [Contributing guide](./CONTRIBUTING.md)
-- [Upstream and patch guide](./PATCH_GUIDE.md)
-- [Control-plane implementation plan](./IMPLEMENTATION_PLAN.md)
-- [Skill management roadmap](./SKILL_MANAGEMENT_ROADMAP.md)
+The same companion skill is published to [ClawHub](https://clawhub.ai/jiweiyeah/skills/skills-manager-cli) automatically on every version bump, so agents that pull skills from the marketplace instead of the app always get instructions matching the current `skm`. The release job runs `npm run publish:skill`; it queries ClawHub first and only uploads when the local version is strictly newer, so re-runs are no-ops. Use `npm run publish:skill -- --dry-run` to validate the file list and version gate without uploading.
 
 ## ❗ Linux Troubleshooting
 
@@ -141,7 +158,13 @@ Or support via Ko-fi: [ko-fi.com/yeheboo](https://ko-fi.com/yeheboo)
 
 ## 📈 Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=jiweiyeah/skills-manager&type=Date)](https://star-history.com/#jiweiyeah/skills-manager&Date)
+<a href="https://www.star-history.com/?type=date&repos=jiweiyeah%2Fskills-manager">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=jiweiyeah/skills-manager&type=date&theme=dark&legend=top-left&sealed_token=maGhqrEwZ51qujlvNPr_FgACgJxDdicoHbnV6FU6K2IQBOo5Cvf_tcX2fdp8o--YQO0Bc240gFYxixCHLDyKy9lrRqTjFMY2rvm77HbLWLY6Q0ETgY89O8oCzsTKjBrL5N9e6kE6RJKp2OQVeBL-v2GRi_VR0CEI2rRKeN3eDnR1ovPjVgXqFakD6LSd" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=jiweiyeah/skills-manager&type=date&legend=top-left&sealed_token=maGhqrEwZ51qujlvNPr_FgACgJxDdicoHbnV6FU6K2IQBOo5Cvf_tcX2fdp8o--YQO0Bc240gFYxixCHLDyKy9lrRqTjFMY2rvm77HbLWLY6Q0ETgY89O8oCzsTKjBrL5N9e6kE6RJKp2OQVeBL-v2GRi_VR0CEI2rRKeN3eDnR1ovPjVgXqFakD6LSd" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=jiweiyeah/skills-manager&type=date&legend=top-left&sealed_token=maGhqrEwZ51qujlvNPr_FgACgJxDdicoHbnV6FU6K2IQBOo5Cvf_tcX2fdp8o--YQO0Bc240gFYxixCHLDyKy9lrRqTjFMY2rvm77HbLWLY6Q0ETgY89O8oCzsTKjBrL5N9e6kE6RJKp2OQVeBL-v2GRi_VR0CEI2rRKeN3eDnR1ovPjVgXqFakD6LSd" />
+ </picture>
+</a>
 
 ---
 

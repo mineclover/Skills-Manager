@@ -173,7 +173,7 @@ fn is_valid_wechat(value: &str) -> bool {
     };
 
     let len = value.chars().count();
-    if len < 6 || len > 20 || !(first.is_ascii_alphabetic() || first == '_') {
+    if !(6..=20).contains(&len) || !(first.is_ascii_alphabetic() || first == '_') {
         return false;
     }
 

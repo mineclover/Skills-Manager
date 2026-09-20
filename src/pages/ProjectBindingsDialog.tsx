@@ -260,6 +260,23 @@ export function ProjectBindingsDialog({
                 }}
               >
                 <span style={{ fontSize: "11px", fontWeight: 500, color: "var(--muted-foreground)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                  {t("settings.projectRootPath")}
+                </span>
+                <code
+                  style={{
+                    display: "block",
+                    width: "100%",
+                    fontSize: "13px",
+                    color: "var(--foreground)",
+                    fontFamily: "ui-monospace, monospace",
+                    whiteSpace: "normal",
+                    overflowWrap: "anywhere",
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {pendingProjectBinding.root_path ?? pendingProjectBinding.skills_dir}
+                </code>
+                <span style={{ fontSize: "11px", fontWeight: 500, color: "var(--muted-foreground)", textTransform: "uppercase", letterSpacing: "0.05em", marginTop: "8px" }}>
                   {t("settings.projectSkillsPath")}
                 </span>
                 <code
@@ -387,6 +404,7 @@ export function ProjectBindingsDialog({
                       {/* Project Info */}
                       <div style={{ minWidth: 0, flex: 1 }}>
                         <div
+                          title={project.root_path ?? project.skills_dir}
                           style={{
                             display: "flex",
                             alignItems: "center",
@@ -434,6 +452,22 @@ export function ProjectBindingsDialog({
                         >
                           {project.root_path ?? project.skills_dir}
                         </div>
+                        {project.root_path && (
+                          <div
+                            title={project.skills_dir}
+                            style={{
+                              marginTop: "3px",
+                              fontSize: "10px",
+                              color: "var(--muted-foreground)",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                              opacity: 0.78,
+                            }}
+                          >
+                            {t("settings.projectSkillsPath")}: {project.skills_dir}
+                          </div>
+                        )}
                       </div>
                     </div>
 

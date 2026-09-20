@@ -2,8 +2,8 @@ use std::path::Path;
 
 use tauri::State;
 
-use crate::models::InstalledSkillPackage;
-use crate::services::{AppCache, ConfigManager, SkillPackageService};
+use sm_core::models::InstalledSkillPackage;
+use sm_core::services::{AppCache, ConfigManager, SkillPackageService};
 
 #[tauri::command]
 pub fn list_skill_packages() -> Result<Vec<InstalledSkillPackage>, String> {

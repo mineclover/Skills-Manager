@@ -1,0 +1,100 @@
+name: Update Homebrew Cask
+
+# Bump jiweiyeah/homebrew-tap to a freshly published release so
+# `brew upgrade --cask jiweiyeah/tap/skills-manager` picks it up without any
+# manual editing.
+#
+# Fires on `published` (not `created`): build.yml opens releases as drafts, and
+# the DMG assets only exist once the build finishes and the draft is published.
+#
+# Cross-repo pushes need a PAT — the default GITHUB_TOKEN is scoped to this
+# repository only. Create a fine-grained token with Contents: write on
+# jiweiyeah/homebrew-tap and store it as the TAP_GITHUB_TOKEN secret. Without
+# it the job warns and exits 0 rather than failing (forks and the public mirror
+# have no such secret).
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version to pin the cask to (e.g. 2.2.0)"
+        required: true
+        type: string
+
+jobs:
+  update-cask:
+    runs-on: ubuntu-latest
+    steps:
+      - name: check for tap token
+        id: guard
+        env:
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          if [ -z "$TAP_GITHUB_TOKEN" ]; then
+            echo "::warning::TAP_GITHUB_TOKEN is not set for ${{ github.repository }} — skipping cask bump."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: checkout app repo
+        if: steps.guard.outputs.proceed == 'true'
+        uses: actions/checkout@v7
+
+      - name: checkout tap
+        if: steps.guard.outputs.proceed == 'true'
+        uses: actions/checkout@v7
+        with:
+          repository: jiweiyeah/homebrew-tap
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+          path: tap
+
+      - name: setup node
+        if: steps.guard.outputs.proceed == 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: run unit tests
+        if: steps.guard.outputs.proceed == 'true'
+        run: node --test scripts/update-cask.test.mjs
+
+      - name: resolve version
+        if: steps.guard.outputs.proceed == 'true'
+        id: version
+        env:
+          # Interpolate through env rather than inline ${{ }} in the script, so a
+          # crafted tag name can't break out of the shell command.
+          RAW_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.event.release.tag_name }}
+        run: |
+          # Strip a leading "v" from the release tag (v2.2.0 -> 2.2.0).
+          version="${RAW_VERSION#v}"
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+          echo "Bumping cask to v$version"
+
+      - name: bump cask
+        if: steps.guard.outputs.proceed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          node scripts/update-cask.mjs \
+            --cask tap/Casks/skills-manager.rb \
+            --version "$VERSION"
+
+      - name: commit and push
+        if: steps.guard.outputs.proceed == 'true'
+        working-directory: tap
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          if git diff --quiet; then
+            echo "Cask already up to date; nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/skills-manager.rb
+          git commit -m "skills-manager $VERSION"
+          git push

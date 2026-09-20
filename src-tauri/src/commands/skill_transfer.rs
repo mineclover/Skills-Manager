@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
-use crate::services::skill_transfer::{self, ImportPreview, ImportResolution, ImportResult};
-use crate::services::{AppCache, ConfigManager, ScannerService};
+use sm_core::services::skill_transfer::{
+    self, ImportResolution, ImportResult, ImportPreview,
+};
+use sm_core::services::{AppCache, ConfigManager, ScannerService};
 use tauri::State;
 
 /// Export skills to a zip archive at `output_path`.
@@ -34,7 +36,7 @@ pub fn export_skills(
                 .into_iter()
                 .filter(|skill| id_set.contains(&skill.instance_id.as_str()))
                 .filter(|skill| {
-                    use crate::models::{SkillScope, SkillSource};
+                    use sm_core::models::{SkillScope, SkillSource};
                     matches!(skill.scope, SkillScope::Global)
                         && matches!(skill.source, SkillSource::Local | SkillSource::Imported)
                 })

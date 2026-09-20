@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::models::{MarketplaceFavoriteMeta, MarketplaceSkill, SkillMetadata};
-use crate::services::ConfigManager;
+use sm_core::models::{MarketplaceFavoriteMeta, MarketplaceSkill, SkillMetadata};
+use sm_core::services::ConfigManager;
 
 fn now_timestamp() -> i64 {
     SystemTime::now()
@@ -83,7 +83,7 @@ pub fn list_marketplace_favorites() -> Result<HashMap<String, MarketplaceFavorit
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{AppConfig, InstallStatus};
+    use sm_core::models::{AppConfig, InstallStatus};
 
     fn sample_skill(id: &str, name: &str) -> MarketplaceSkill {
         MarketplaceSkill {
@@ -103,6 +103,7 @@ mod tests {
             remote_revision: None,
             tags: vec!["t1".to_string()],
             install_status: InstallStatus::NotInstalled,
+            installations: Vec::new(),
             clawhub_slug: None,
             clawhub_owner: None,
             clawhub_version: None,

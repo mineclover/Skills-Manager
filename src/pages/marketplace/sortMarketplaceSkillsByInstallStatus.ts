@@ -21,5 +21,7 @@ export function sortMarketplaceSkillsByInstallStatus(
 function getMarketplaceInstallStatusRank(
   status: MarketplaceSkill["install_status"],
 ): number {
-  return status === "not_installed" ? 1 : 0;
+  if (status === "update_available") return 0;
+  if (status === "installed") return 1;
+  return 2;
 }

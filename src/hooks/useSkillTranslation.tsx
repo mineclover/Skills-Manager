@@ -411,9 +411,8 @@ export function SkillTranslationProvider({ children }: { children: ReactNode }) 
         }
         lastPreloadedLangRef.current = language;
         lastPreloadedPathRef.current = location.pathname;
-      } catch (err) {
+      } catch {
         // 预热失败静默处理，不影响用户
-        console.debug('Cache preload failed:', err);
       }
     };
 

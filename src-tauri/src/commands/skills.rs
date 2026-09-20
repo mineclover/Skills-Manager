@@ -1,9 +1,10 @@
-use crate::models::config::SkillActivationPreset;
-#[cfg(test)]
-use crate::models::AppConfig;
-use crate::models::{
-    SaveLocalSkillContractRequest, Skill, SkillContractSummary, SkillOperationPreview,
-    SkillOperationReport,
+use std::collections::{HashMap, HashSet};
+
+use sm_core::models::{AppConfig, InstalledSkillPackage, Skill, SkillScope};
+use sm_core::services::{
+    apply_skill_tool_enabled, is_symlink_or_junction, load_skill_by_instance_id,
+    resolve_skill_source_path, skill_is_direct_tool_install, skill_tool_skills_dir, AppCache,
+    ConfigManager, LinkerService, ScannerService, SkillPackageService,
 };
 #[cfg(test)]
 use crate::services::skill_control::{
@@ -19,7 +20,111 @@ use crate::services::ScannerService;
 use crate::services::{AppCache, SkillControlService};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::services::skill_control::{BatchSetSkillToolsRequest, BatchSetSkillToolsResponse};
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BatchSkillToolTargetKind {
+    Skill,
+    Group,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BatchSkillToolAction {
+    Enable,
+    Disable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BatchSkillToolTarget {
+    pub kind: BatchSkillToolTargetKind,
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BatchSetSkillToolsRequest {
+    pub targets: Vec<BatchSkillToolTarget>,
+    pub tool_ids: Vec<String>,
+    pub action: BatchSkillToolAction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BatchSetSkillToolsFailure {
+    pub target_kind: BatchSkillToolTargetKind,
+    pub target_id: String,
+    pub skill_id: Option<String>,
+    pub tool_id: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BatchSetSkillToolsResponse {
+    pub requested_target_count: usize,
+    pub requested_tool_count: usize,
+    pub resolved_skill_count: usize,
+    pub attempted_operation_count: usize,
+    pub applied_count: usize,
+    pub skipped_count: usize,
+    pub failed_count: usize,
+    pub failures: Vec<BatchSetSkillToolsFailure>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedBatchSkillTarget {
+    target_kind: BatchSkillToolTargetKind,
+    target_id: String,
+    skill_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BatchSkillToolOperation {
+    target_kind: BatchSkillToolTargetKind,
+    target_id: String,
+    skill_id: String,
+    tool_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BatchOperationPlan {
+    operations: Vec<BatchSkillToolOperation>,
+    skipped_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BatchFailureContext {
+    target_kind: BatchSkillToolTargetKind,
+    target_id: String,
+    skill_id: Option<String>,
+    tool_id: Option<String>,
+    message: String,
+}
+
+impl BatchFailureContext {
+    fn into_failure(self) -> BatchSetSkillToolsFailure {
+        BatchSetSkillToolsFailure {
+            target_kind: self.target_kind,
+            target_id: self.target_id,
+            skill_id: self.skill_id,
+            tool_id: self.tool_id,
+            message: self.message,
+        }
+    }
+}
+
+fn batch_failure(
+    target_kind: BatchSkillToolTargetKind,
+    target_id: impl Into<String>,
+    skill_id: Option<String>,
+    tool_id: Option<String>,
+    message: impl Into<String>,
+) -> BatchFailureContext {
+    BatchFailureContext {
+        target_kind,
+        target_id: target_id.into(),
+        skill_id,
+        tool_id,
+        message: message.into(),
+    }
+}
 
 #[cfg(test)]
 fn load_skill_by_id(config: &AppConfig, skill_id: &str) -> Result<Skill, String> {
@@ -37,11 +142,198 @@ fn load_skill_by_id(config: &AppConfig, skill_id: &str) -> Result<Skill, String>
         .ok_or_else(|| format!("Skill not found: {}", skill_id))
 }
 
-#[tauri::command]
-pub fn preview_batch_skill_tools(
-    request: BatchSetSkillToolsRequest,
-) -> Result<Vec<SkillOperationPreview>, String> {
-    SkillControlService::preview_batch_skill_tools(&request)
+fn delete_skill_from_disk(config: &AppConfig, instance_id: &str) -> Result<(), String> {
+    let skill = load_skill_by_instance_id(config, instance_id)?;
+    let skill_path = resolve_skill_source_path(config, &skill);
+    if !skill_path.exists() {
+        return Err(format!("Skill not found: {}", instance_id));
+    }
+
+    for (tool_id, _tool_config) in config.collect_tool_configs() {
+        let tool_skills_dir = match skill_tool_skills_dir(config, &skill, &tool_id) {
+            Ok(path) => path,
+            Err(_) => continue,
+        };
+        if skill_is_direct_tool_install(&skill, &tool_skills_dir) {
+            continue;
+        }
+        match LinkerService::check_link_for_scoped_skill(
+            &skill.path,
+            &tool_skills_dir,
+            &skill.id,
+            &tool_id,
+            &skill.scope,
+        ) {
+            sm_core::services::LinkStatus::Valid => {
+                let _ =
+                    LinkerService::disable_skill_for_tool(&tool_skills_dir, &skill.id, &tool_id);
+            }
+            sm_core::services::LinkStatus::Missing => {}
+            _ => {}
+        }
+    }
+    std::fs::remove_dir_all(&skill_path)
+        .map_err(|e| format!("Failed to delete skill folder: {}", e))?;
+
+    Ok(())
+}
+
+fn resolve_batch_targets(
+    targets: &[BatchSkillToolTarget],
+    skills_by_instance_id: &HashMap<String, Skill>,
+    packages_by_id: &HashMap<String, InstalledSkillPackage>,
+) -> (Vec<ResolvedBatchSkillTarget>, Vec<BatchFailureContext>) {
+    let mut resolved = Vec::new();
+    let mut failures = Vec::new();
+
+    for target in targets {
+        match target.kind {
+            BatchSkillToolTargetKind::Skill => {
+                if skills_by_instance_id.contains_key(&target.id) {
+                    resolved.push(ResolvedBatchSkillTarget {
+                        target_kind: BatchSkillToolTargetKind::Skill,
+                        target_id: target.id.clone(),
+                        skill_id: target.id.clone(),
+                    });
+                } else {
+                    failures.push(batch_failure(
+                        BatchSkillToolTargetKind::Skill,
+                        target.id.clone(),
+                        Some(target.id.clone()),
+                        None,
+                        format!("Skill not found: {}", target.id),
+                    ));
+                }
+            }
+            BatchSkillToolTargetKind::Group => {
+                let Some(skill_package) = packages_by_id.get(&target.id) else {
+                    failures.push(batch_failure(
+                        BatchSkillToolTargetKind::Group,
+                        target.id.clone(),
+                        None,
+                        None,
+                        format!("Skill group not found: {}", target.id),
+                    ));
+                    continue;
+                };
+
+                for skill_id in &skill_package.installed_members {
+                    let matching_skills = skills_by_instance_id
+                        .values()
+                        .filter(|skill| &skill.id == skill_id)
+                        .collect::<Vec<_>>();
+
+                    if matching_skills.is_empty() {
+                        failures.push(batch_failure(
+                            BatchSkillToolTargetKind::Group,
+                            target.id.clone(),
+                            Some(skill_id.clone()),
+                            None,
+                            format!("Skill not found: {}", skill_id),
+                        ));
+                        continue;
+                    }
+
+                    let Some(preferred_skill) = matching_skills
+                        .iter()
+                        .find(|skill| skill.scope == SkillScope::Global)
+                    else {
+                        failures.push(batch_failure(
+                            BatchSkillToolTargetKind::Group,
+                            target.id.clone(),
+                            Some(skill_id.clone()),
+                            None,
+                            format!("Global skill not found for group member: {}", skill_id),
+                        ));
+                        continue;
+                    };
+
+                    resolved.push(ResolvedBatchSkillTarget {
+                        target_kind: BatchSkillToolTargetKind::Group,
+                        target_id: target.id.clone(),
+                        skill_id: preferred_skill.instance_id.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    (resolved, failures)
+}
+
+fn build_batch_operations(
+    resolved_targets: &[ResolvedBatchSkillTarget],
+    tool_ids: &[String],
+    skills_by_instance_id: &HashMap<String, Skill>,
+    config: &AppConfig,
+    action: &BatchSkillToolAction,
+) -> (BatchOperationPlan, Vec<BatchFailureContext>) {
+    let mut failures = Vec::new();
+    let mut seen = HashSet::new();
+    let mut operations = Vec::new();
+    let mut skipped_count = 0;
+    let should_enable = matches!(action, BatchSkillToolAction::Enable);
+
+    for resolved_target in resolved_targets {
+        let Some(skill) = skills_by_instance_id.get(&resolved_target.skill_id) else {
+            failures.push(batch_failure(
+                resolved_target.target_kind.clone(),
+                resolved_target.target_id.clone(),
+                Some(resolved_target.skill_id.clone()),
+                None,
+                format!("Skill not found: {}", resolved_target.skill_id),
+            ));
+            continue;
+        };
+
+        for tool_id in tool_ids {
+            if !seen.insert((resolved_target.skill_id.clone(), tool_id.clone())) {
+                continue;
+            }
+
+            let Some(tool_config) = config.get_tool_config(tool_id) else {
+                failures.push(batch_failure(
+                    resolved_target.target_kind.clone(),
+                    resolved_target.target_id.clone(),
+                    Some(resolved_target.skill_id.clone()),
+                    Some(tool_id.clone()),
+                    format!("Tool not found: {}", tool_id),
+                ));
+                continue;
+            };
+
+            if !tool_config.enabled {
+                failures.push(batch_failure(
+                    resolved_target.target_kind.clone(),
+                    resolved_target.target_id.clone(),
+                    Some(resolved_target.skill_id.clone()),
+                    Some(tool_id.clone()),
+                    format!("Tool is disabled: {}", tool_id),
+                ));
+                continue;
+            }
+
+            if skill.is_enabled_for(tool_id) == should_enable {
+                skipped_count += 1;
+                continue;
+            }
+
+            operations.push(BatchSkillToolOperation {
+                target_kind: resolved_target.target_kind.clone(),
+                target_id: resolved_target.target_id.clone(),
+                skill_id: resolved_target.skill_id.clone(),
+                tool_id: tool_id.clone(),
+            });
+        }
+    }
+
+    (
+        BatchOperationPlan {
+            operations,
+            skipped_count,
+        },
+        failures,
+    )
 }
 
 #[tauri::command]
@@ -65,10 +357,10 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
-    use crate::models::config::{PresetActivation, SkillActivationPreset};
-    use crate::models::{InstalledSkillPackage, SkillScope, SkillSource, ToolConfig};
-    use crate::services::ConfigManager;
-    use crate::test_support::with_temp_home;
+    use sm_core::models::{
+        InstalledSkillPackage, ProjectBinding, SkillScope, SkillSource, ToolConfig,
+    };
+    use sm_core::test_support::with_temp_home;
     use std::fs;
 
     use super::*;
@@ -500,6 +792,51 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn project_skill_enable_and_delete_use_the_tools_project_directory() {
+        with_temp_home(|home| {
+            let project_root = home.join("code").join("alpha");
+            let project_skills_dir = project_root.join(".skills-manager").join("skills");
+            let project_skill_dir = project_skills_dir.join("demo");
+            let project_tool_dir = project_root.join(".claude").join("skills");
+            fs::create_dir_all(&project_skill_dir).expect("create project Skill");
+            fs::write(project_skill_dir.join("SKILL.md"), "# Demo\n").expect("write Skill");
+
+            let config = AppConfig {
+                skills_dir: home.join(".skills-manager").join("skills"),
+                tools: HashMap::from([(
+                    "claude-code".to_string(),
+                    ToolConfig {
+                        enabled: true,
+                        detected: true,
+                        skills_path: home.join(".claude").join("skills"),
+                        config_path: home.join(".claude"),
+                    },
+                )]),
+                projects: vec![ProjectBinding {
+                    id: "alpha".to_string(),
+                    name: "Alpha".to_string(),
+                    root_path: Some(project_root),
+                    skills_dir: project_skills_dir,
+                }],
+                active_project_id: Some("alpha".to_string()),
+                ..AppConfig::default()
+            };
+
+            apply_skill_tool_enabled(&config, "project:alpha:demo", "claude-code", true, None)
+                .expect("enable project Skill");
+            assert_eq!(
+                fs::read_link(project_tool_dir.join("demo")).expect("read project link"),
+                project_skill_dir
+            );
+
+            delete_skill_from_disk(&config, "project:alpha:demo").expect("delete project Skill");
+            assert!(!project_skill_dir.exists());
+            assert!(project_tool_dir.join("demo").symlink_metadata().is_err());
+        });
+    }
+
     #[test]
     fn delete_skill_from_disk_removes_nested_group_member_from_real_path() {
         with_temp_home(|home| {
@@ -862,8 +1199,8 @@ pub fn disable_skill(
 }
 
 #[tauri::command]
-pub fn scan_existing_skills() -> Result<Vec<crate::models::Skill>, String> {
-    crate::services::ScannerService::scan_all_tools()
+pub fn scan_existing_skills() -> Result<Vec<sm_core::models::Skill>, String> {
+    sm_core::services::ScannerService::scan_all_tools()
 }
 
 #[tauri::command]
@@ -871,7 +1208,9 @@ pub fn import_skills_to_hub(
     skill_paths: Vec<String>,
     cache: State<AppCache>,
 ) -> Result<(), String> {
-    SkillControlService::import_skills_to_hub(&skill_paths)?;
+    for path in skill_paths {
+        sm_core::services::LinkerService::import_to_hub(&path)?;
+    }
     // Invalidate cache after import
     cache.invalidate_skills();
     Ok(())

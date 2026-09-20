@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use crate::models::{CustomToolConfig, Tool, SUPPORTED_TOOLS};
-use crate::services::{AppCache, ConfigManager, DetectorService, ToolControlService};
+use sm_core::models::{CustomToolConfig, Tool, SUPPORTED_TOOLS};
+use sm_core::services::{AppCache, ConfigManager, DetectorService, LinkerService};
 use tauri::State;
 
 #[tauri::command]
@@ -50,7 +50,45 @@ fn set_tool_enabled_with_cache(
     Ok(())
 }
 
-#[cfg(test)]
+fn should_remove_links_when_disabling_tool(config: &sm_core::models::AppConfig) -> bool {
+    config
+        .preferences
+        .as_ref()
+        .map(|preferences| preferences.remove_links_when_disabling_tool)
+        .unwrap_or(false)
+}
+
+fn remove_skill_links_for_tool(
+    hub_skills_dir: &std::path::Path,
+    tool_skills_dir: &std::path::Path,
+    tool_id: &str,
+) -> Result<(), String> {
+    if !hub_skills_dir.exists() {
+        return Ok(());
+    }
+
+    for entry in std::fs::read_dir(hub_skills_dir)
+        .map_err(|e| format!("Failed to read hub skills directory: {}", e))?
+    {
+        let entry = entry.map_err(|e| format!("Failed to read skill entry: {}", e))?;
+        let skill_path = entry.path();
+        if !skill_path.is_dir() {
+            continue;
+        }
+
+        let Some(skill_id) = skill_path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if skill_id.starts_with('.') {
+            continue;
+        }
+
+        LinkerService::disable_skill_for_tool(tool_skills_dir, skill_id, tool_id)?;
+    }
+
+    Ok(())
+}
+
 fn set_tool_enabled_in_config(tool_id: &str, enabled: bool) -> Result<(), String> {
     ToolControlService::set_enabled_in_config(tool_id, enabled)
 }
@@ -196,8 +234,8 @@ pub fn delete_custom_tool(tool_id: String, cache: State<AppCache>) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::{set_tool_enabled_in_config, update_tool_paths};
-    use crate::services::{AppCache, LinkerService};
-    use crate::test_support::with_temp_home;
+    use sm_core::services::{AppCache, LinkerService};
+    use sm_core::test_support::with_temp_home;
     use serde_json::json;
     use std::fs;
     use std::path::Path;
