@@ -419,7 +419,6 @@ pub struct ProjectBinding {
     pub name: String,
     pub root_path: Option<PathBuf>,
     pub skills_dir: PathBuf,
-    pub root_path: Option<PathBuf>,
 }
 
 impl TryFrom<LegacyProjectBinding> for ProjectBinding {
@@ -441,7 +440,6 @@ impl TryFrom<LegacyProjectBinding> for ProjectBinding {
             name: value.name,
             root_path,
             skills_dir,
-            root_path,
         })
     }
 }
@@ -457,9 +455,6 @@ impl Serialize for ProjectBinding {
         state.serialize_field("name", &self.name)?;
         state.serialize_field("root_path", &self.root_path)?;
         state.serialize_field("skills_dir", &self.skills_dir)?;
-        if let Some(root_path) = &self.root_path {
-            state.serialize_field("root_path", root_path)?;
-        }
         state.end()
     }
 }

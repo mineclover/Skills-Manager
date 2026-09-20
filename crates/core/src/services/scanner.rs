@@ -521,6 +521,7 @@ impl ScannerService {
                     };
                     path
                 }
+                SkillScope::Tool => tool_config.skills_path,
             };
 
             if skill_path == tool_skills_dir.join(skill_id) {

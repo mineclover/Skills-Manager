@@ -57,7 +57,6 @@ import {
   getTagFilterSelectionSummary,
   getSkillMetadataKey,
   getSkillTagsForSkill,
-  getSkillCommentForSkill,
   getUntaggedSkillsCount,
   hasSelectableTagFilters,
   normalizeSkillTags,
@@ -69,13 +68,13 @@ import {
   migrateSkillMetadataToInstanceIds,
 } from "./skills/skillTags";
 import { orderToolIdsForSkill } from "./skills/orderToolIds";
+import { getDetectedToolIds } from "./skills/getEnabledToolIds";
 import {
   getSkillNoteForSkill,
   normalizeSkillNote,
   SKILL_NOTE_MAX_LENGTH,
   updateSkillNoteForSkill,
 } from "./skills/skillNotes";
-import { getEnabledToolIds } from "./skills/getEnabledToolIds";
 import {
   getSkillBulkToggleConfirmKey,
   getSkillBulkToggleMode,
@@ -179,7 +178,6 @@ import {
 } from "./skills/headerActionLayout";
 import {
   buildProjectBindingFromRootPath,
-  hasProjectRootConflict,
   resolveActiveProjectId,
 } from "./projectBindings";
 import { ProjectBindingsDialog } from "./ProjectBindingsDialog";
@@ -3351,7 +3349,6 @@ export function Skills() {
     const isSelected = selectedBatchItemKeys.has(item.key);
     const isExpanded = expandedCardKeys.has(item.key);
     const isHighlighted = highlightKey === item.key;
-    const owningGroup = parentGroup ?? groupedSkillCollection.groupBySkillKey.get(item.key) ?? null;
     const riskReport = riskReports[skill.instance_id];
     const contract = skill.contract;
     const contractStatus = contract?.status ?? "unmanaged";
@@ -5692,6 +5689,8 @@ function SkillManageDialog({
   tagSuggestions,
   onSelectTagSuggestion,
   savingTags,
+  initialComment,
+  onCommentChange,
   note,
   onSaveNote,
   savingNote = false,
@@ -5736,21 +5735,18 @@ function SkillManageDialog({
   tagSuggestions: string[];
   onSelectTagSuggestion: (tag: string) => void;
   savingTags: boolean;
+  initialComment?: string;
+  onCommentChange?: (comment: string) => void;
   note?: string;
   onSaveNote?: (note: string) => void;
   savingNote?: boolean;
   riskReport?: SkillRiskReport | null;
   t: (key: TranslationPath) => string;
 }) {
-  const [localComment, setLocalComment] = useState(initialComment);
+  const [localComment, setLocalComment] = useState(initialComment ?? "");
   useEffect(() => {
-    setLocalComment(initialComment);
+    setLocalComment(initialComment ?? "");
   }, [initialComment]);
-
-  const handleClose = () => {
-    onCommentChange(localComment);
-    onClose();
-  };
 
   const canAddTag = normalizeSkillTags([tagDraft]).length > 0;
   const enabledCount = items.filter((i) => i.enabled).length;
@@ -5760,6 +5756,9 @@ function SkillManageDialog({
   const noteChanged = normalizedNoteDraft !== normalizedNote;
 
   const handleClose = () => {
+    if (onCommentChange && localComment !== (initialComment ?? "")) {
+      onCommentChange(localComment);
+    }
     if (noteChanged && onSaveNote && !savingNote) {
       onSaveNote(noteDraft);
     }
@@ -6413,7 +6412,7 @@ function SkillManageDialog({
                 <textarea
                   value={localComment}
                   onChange={(e) => setLocalComment(e.target.value)}
-                  onBlur={() => onCommentChange(localComment)}
+                  onBlur={() => onCommentChange?.(localComment)}
                   placeholder={t("skills.commentPlaceholder")}
                   rows={4}
                   style={{

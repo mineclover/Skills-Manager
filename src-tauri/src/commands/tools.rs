@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
 use sm_core::models::{CustomToolConfig, Tool, SUPPORTED_TOOLS};
-use sm_core::services::{AppCache, ConfigManager, DetectorService, LinkerService};
+use sm_core::services::{
+    AppCache, ConfigManager, DetectorService, LinkerService, ToolControlService,
+};
 use tauri::State;
 
 #[tauri::command]
@@ -234,9 +236,10 @@ pub fn delete_custom_tool(tool_id: String, cache: State<AppCache>) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::{set_tool_enabled_in_config, update_tool_paths};
+    use serde_json::json;
+    use sm_core::services::ToolControlService;
     use sm_core::services::{AppCache, LinkerService};
     use sm_core::test_support::with_temp_home;
-    use serde_json::json;
     use std::fs;
     use std::path::Path;
 

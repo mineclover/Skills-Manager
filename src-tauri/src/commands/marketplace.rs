@@ -7,9 +7,10 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use sm_core::models::{
-    AppConfig, ClawhubSkillFilesResponse, InstallResult, InstallStatus, MarketplaceInstallation,
-    MarketplaceSkill, MarketplaceSkillsResponse, MarketplaceSource, MarketplaceSyncResult,
-    MarketplaceUpdateCheckResult, Skill, SkillFileNode, SkillScope, SkillSource,
+    home_dir, AppConfig, ClawhubSkillFilesResponse, InstallResult, InstallStatus,
+    MarketplaceInstallation, MarketplaceSkill, MarketplaceSkillsResponse, MarketplaceSource,
+    MarketplaceSyncResult, MarketplaceUpdateCheckResult, Skill, SkillFileNode, SkillScope,
+    SkillSource,
 };
 use sm_core::services::marketplace::{
     derive_github_repo_and_skill_path, CLAWHUB_SOURCE_ID, DIRECT_GITHUB_SOURCE_ID,
@@ -168,6 +169,7 @@ fn resolve_marketplace_install_target(
                 project_tool_cleanup_targets,
             })
         }
+        SkillScope::Tool => Err("marketplace installs do not support tool scope".to_string()),
     }
 }
 
@@ -288,6 +290,7 @@ fn installation_scope_label(installation: &MarketplaceInstallation) -> String {
             .filter(|name| !name.trim().is_empty())
             .map(|name| format!("project: {name}"))
             .unwrap_or_else(|| "project".to_string()),
+        SkillScope::Tool => "tool".to_string(),
     }
 }
 

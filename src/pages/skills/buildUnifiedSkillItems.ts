@@ -267,7 +267,10 @@ export function buildUnifiedSkillItems({
   const skillItems = skills.map((skill): UnifiedSkillListItem => {
     const tags = getSkillTagsForSkill(skill, skillMetadata);
     const note = getSkillNoteForSkill(skill, skillMetadata);
-    const orderedToolIds = orderToolIdsForSkill(enabledToolIds, skill.enabled);
+    const manageableToolIds = skill.scope === "tool" && skill.tool_id
+      ? [skill.tool_id]
+      : detectedToolIds;
+    const orderedToolIds = orderToolIdsForSkill(manageableToolIds, skill.enabled);
     const previewChips = getSkillPreviewChips(skill, tags);
     const previewTotal = tags.length;
 

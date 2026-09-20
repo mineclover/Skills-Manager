@@ -84,7 +84,9 @@ pub fn get_cli_install_status(app: tauri::AppHandle) -> Result<serde_json::Value
     let installed = target.exists();
     // Version match matters: a stale skm from an older app release should be
     // refreshable.
-    let version_matches = installed.then(|| run_version(&target)).flatten()
+    let version_matches = installed
+        .then(|| run_version(&target))
+        .flatten()
         .map(|v| v == app.package_info().version.to_string())
         .unwrap_or(false);
 
@@ -240,7 +242,10 @@ mod tests {
         let path_var = ["/usr/bin", "/opt/homebrew/bin", "/Users/me/.local/bin"].join(sep);
         let path_var = std::ffi::OsString::from(path_var);
 
-        assert!(path_list_contains(&path_var, Path::new("/opt/homebrew/bin")));
+        assert!(path_list_contains(
+            &path_var,
+            Path::new("/opt/homebrew/bin")
+        ));
         assert!(path_list_contains(
             &path_var,
             Path::new("/Users/me/.local/bin")
@@ -248,7 +253,10 @@ mod tests {
         // A prefix or parent of a listed entry is not itself on PATH — this is
         // what keeps `~/.local/bin` from being reported as reachable when only
         // `~/.local` happens to appear.
-        assert!(!path_list_contains(&path_var, Path::new("/Users/me/.local")));
+        assert!(!path_list_contains(
+            &path_var,
+            Path::new("/Users/me/.local")
+        ));
         assert!(!path_list_contains(&path_var, Path::new("/opt/homebrew")));
         assert!(!path_list_contains(&path_var, Path::new("/usr")));
     }

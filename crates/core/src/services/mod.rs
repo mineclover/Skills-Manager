@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod cache;
 pub mod cli_skill;
+pub mod codex_config;
 pub mod config_manager;
 pub mod detector;
 pub mod editor_detector;
@@ -8,17 +9,22 @@ pub mod file_ops;
 pub mod linker;
 pub mod llm;
 pub mod marketplace;
+pub mod orca;
 pub mod project_skills;
+pub mod provider_inventory;
 pub mod publish;
 pub mod risk;
 pub mod scanner;
 pub mod skills_ops;
 pub mod skill_packages;
+pub mod skill_control;
 pub mod skill_sets;
 pub mod skill_transfer;
+pub mod studio_feedback;
 pub mod sync_report;
 pub mod translation;
 pub mod translation_cache;
+pub mod tool_control;
 pub mod updater;
 pub mod workspace;
 
@@ -29,6 +35,8 @@ pub use cli_skill::{
     CLI_SKILL_ID,
 };
 pub use config_manager::ConfigManager;
+pub use codex_config::{plugin_enabled, set_plugin_enabled};
+pub use codex_config::set_plugin_enabled as set_codex_plugin_enabled;
 pub use detector::DetectorService;
 pub use editor_detector::{detect_editors, open_in_external_editor};
 pub use file_ops::{
@@ -37,11 +45,14 @@ pub use file_ops::{
     rename_path as fs_rename_path, write_file_content, FileNode,
 };
 pub use linker::{LinkReport, LinkStatus, LinkerService};
+pub use linker::{is_symlink_or_junction, normalize_path};
 pub use marketplace::{MarketplaceCache, MarketplaceService};
 pub use project_skills::{
     managed_project_skills_dir, project_tool_skills_dir, skill_is_direct_tool_install,
     skill_tool_skills_dir,
 };
+pub use orca::OrcaService;
+pub use provider_inventory::ProviderInventoryService;
 pub use risk::{scan_all_skills, scan_skill, scanner_version, clear_cache as clear_risk_cache, invalidate_skill as invalidate_risk_cache};
 pub use scanner::ScannerService;
 pub use skill_control::{
@@ -49,8 +60,12 @@ pub use skill_control::{
     BatchSkillToolAction, BatchSkillToolTarget, BatchSkillToolTargetKind, SkillControlService,
 };
 pub use skill_packages::SkillPackageService;
+pub use studio_feedback::StudioFeedbackService;
+pub use skill_sets::SkillSetService;
 pub use skills_ops::{apply_skill_tool_enabled, load_skill_by_instance_id, resolve_skill_source_path};
 pub use sync_report::{
     check_sync_status, collect_active_tool_configs, fix_sync_issues, resolve_sync_status,
     should_report_sync_issue, SyncReport,
 };
+pub use tool_control::ToolControlService;
+pub use workspace::WorkspaceService;

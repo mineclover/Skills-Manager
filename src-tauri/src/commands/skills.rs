@@ -1,11 +1,6 @@
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
-use sm_core::models::{AppConfig, InstalledSkillPackage, Skill, SkillScope};
-use sm_core::services::{
-    apply_skill_tool_enabled, is_symlink_or_junction, load_skill_by_instance_id,
-    resolve_skill_source_path, skill_is_direct_tool_install, skill_tool_skills_dir, AppCache,
-    ConfigManager, LinkerService, ScannerService, SkillPackageService,
-};
 #[cfg(test)]
 use crate::services::skill_control::{
     apply_preset_to_target_with_skills, apply_skill_tool_enabled, build_batch_operations,
@@ -17,8 +12,19 @@ use crate::services::skill_control::{
 use crate::services::LinkerService;
 #[cfg(test)]
 use crate::services::ScannerService;
-use crate::services::{AppCache, SkillControlService};
+use crate::services::SkillControlService;
+use sm_core::models::{
+    AppConfig, InstalledSkillPackage, SaveLocalSkillContractRequest, Skill, SkillActivationPreset,
+    SkillContractSummary, SkillOperationPreview, SkillOperationReport, SkillScope,
+};
+use sm_core::services::{
+    apply_skill_tool_enabled, is_symlink_or_junction, load_skill_by_instance_id,
+    resolve_skill_source_path, skill_is_direct_tool_install, skill_tool_skills_dir, AppCache,
+    ConfigManager, LinkerService, ScannerService, SkillPackageService,
+};
 use tauri::{AppHandle, Emitter, State};
+
+use crate::services::skill_control::SkillSystemPrompt;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -342,14 +348,75 @@ pub fn batch_set_skill_tools(
     confirm_shared: Option<bool>,
     cache: State<AppCache>,
 ) -> Result<BatchSetSkillToolsResponse, String> {
+    let core_request = sm_core::services::skill_control::BatchSetSkillToolsRequest {
+        targets: request
+            .targets
+            .into_iter()
+            .map(
+                |target| sm_core::services::skill_control::BatchSkillToolTarget {
+                    kind: match target.kind {
+                        BatchSkillToolTargetKind::Skill => {
+                            sm_core::services::skill_control::BatchSkillToolTargetKind::Skill
+                        }
+                        BatchSkillToolTargetKind::Group => {
+                            sm_core::services::skill_control::BatchSkillToolTargetKind::Group
+                        }
+                    },
+                    id: target.id,
+                },
+            )
+            .collect(),
+        tool_ids: request.tool_ids,
+        action: match request.action {
+            BatchSkillToolAction::Enable => {
+                sm_core::services::skill_control::BatchSkillToolAction::Enable
+            }
+            BatchSkillToolAction::Disable => {
+                sm_core::services::skill_control::BatchSkillToolAction::Disable
+            }
+        },
+    };
     let response = SkillControlService::batch_set_skill_tools_with_confirmation(
-        request,
+        core_request,
         confirm_shared.unwrap_or(false),
     )?;
     if response.applied_count > 0 {
         cache.invalidate_skills();
     }
-    Ok(response)
+    Ok(BatchSetSkillToolsResponse {
+        requested_target_count: response.requested_target_count,
+        requested_tool_count: response.requested_tool_count,
+        resolved_skill_count: response.resolved_skill_count,
+        attempted_operation_count: response.attempted_operation_count,
+        applied_count: response.applied_count,
+        skipped_count: response.skipped_count,
+        failed_count: response.failed_count,
+        failures: response
+            .failures
+            .into_iter()
+            .map(|failure| BatchSetSkillToolsFailure {
+                target_kind: match failure.target_kind {
+                    sm_core::services::skill_control::BatchSkillToolTargetKind::Skill => {
+                        BatchSkillToolTargetKind::Skill
+                    }
+                    sm_core::services::skill_control::BatchSkillToolTargetKind::Group => {
+                        BatchSkillToolTargetKind::Group
+                    }
+                },
+                target_id: failure.target_id,
+                skill_id: failure.skill_id,
+                tool_id: failure.tool_id,
+                message: failure.message,
+            })
+            .collect(),
+    })
+}
+
+#[tauri::command]
+pub fn preview_batch_skill_tools(
+    request: sm_core::services::skill_control::BatchSetSkillToolsRequest,
+) -> Result<Vec<SkillOperationPreview>, String> {
+    sm_core::services::SkillControlService::preview_batch_skill_tools(&request)
 }
 
 #[cfg(test)]

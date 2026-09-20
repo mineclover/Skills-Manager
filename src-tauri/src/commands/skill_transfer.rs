@@ -1,8 +1,6 @@
 use std::path::PathBuf;
 
-use sm_core::services::skill_transfer::{
-    self, ImportResolution, ImportResult, ImportPreview,
-};
+use sm_core::services::skill_transfer::{self, ImportPreview, ImportResolution, ImportResult};
 use sm_core::services::{AppCache, ConfigManager, ScannerService};
 use tauri::State;
 

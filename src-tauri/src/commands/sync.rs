@@ -17,9 +17,9 @@ pub fn fix_sync_issues() -> Result<LinkReport, String> {
 
 #[cfg(test)]
 mod tests {
-    use sm_core::services::{collect_active_tool_configs, should_report_sync_issue};
     use sm_core::models::{AppConfig, CustomToolConfig, ToolConfig};
     use sm_core::services::LinkStatus;
+    use sm_core::services::{collect_active_tool_configs, should_report_sync_issue};
     use std::collections::HashMap;
     use std::path::PathBuf;
 

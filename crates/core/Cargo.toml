@@ -24,6 +24,8 @@ regex = { workspace = true }
 once_cell = { workspace = true }
 uuid = { workspace = true }
 sha2 = { workspace = true }
+serde_yaml = { workspace = true }
+rusqlite = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

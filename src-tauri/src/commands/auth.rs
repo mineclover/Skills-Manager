@@ -287,7 +287,8 @@ pub async fn get_auth_profile() -> Result<Option<AuthMeResponse>, String> {
     match fetch_auth_me(&client, &base_url, &access_token).await {
         Ok(profile) => Ok(Some(profile)),
         Err(AuthApiError::Unauthorized) => {
-            let Some(renewed_token) = renew_access_token(&client, &base_url, &session).await? else {
+            let Some(renewed_token) = renew_access_token(&client, &base_url, &session).await?
+            else {
                 return Ok(None);
             };
             match fetch_auth_me(&client, &base_url, &renewed_token).await {
@@ -480,7 +481,10 @@ mod tests {
     fn exchange_github_auth_saves_session_and_returns_profile() {
         sm_core::test_support::with_temp_home(|_| {
             let mut server = mockito::Server::new();
-            std::env::set_var("SKILLS_MANAGER_AUTH_API_BASE", format!("{}/api/v1", server.url()));
+            std::env::set_var(
+                "SKILLS_MANAGER_AUTH_API_BASE",
+                format!("{}/api/v1", server.url()),
+            );
 
             let _exchange_mock = server
                 .mock("POST", "/api/v1/auth/exchange")
@@ -551,7 +555,10 @@ mod tests {
     fn exchange_google_auth_saves_session_and_returns_profile() {
         sm_core::test_support::with_temp_home(|_| {
             let mut server = mockito::Server::new();
-            std::env::set_var("SKILLS_MANAGER_AUTH_API_BASE", format!("{}/api/v1", server.url()));
+            std::env::set_var(
+                "SKILLS_MANAGER_AUTH_API_BASE",
+                format!("{}/api/v1", server.url()),
+            );
 
             let _exchange_mock = server
                 .mock("POST", "/api/v1/auth/exchange")
@@ -622,7 +629,10 @@ mod tests {
     fn logout_auth_clears_session() {
         sm_core::test_support::with_temp_home(|_| {
             let mut server = mockito::Server::new();
-            std::env::set_var("SKILLS_MANAGER_AUTH_API_BASE", format!("{}/api/v1", server.url()));
+            std::env::set_var(
+                "SKILLS_MANAGER_AUTH_API_BASE",
+                format!("{}/api/v1", server.url()),
+            );
             let _mock = server
                 .mock("POST", "/api/v1/auth/logout")
                 .match_header("content-type", "application/json")

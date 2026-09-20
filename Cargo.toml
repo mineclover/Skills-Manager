@@ -18,5 +18,7 @@ regex = "1.10"
 once_cell = "1.19"
 uuid = { version = "1", features = ["v4", "serde"] }
 sha2 = "0.10"
+serde_yaml = "0.9"
+rusqlite = { version = "0.32", features = ["bundled"] }
 mockito = "1.4.0"
 tempfile = "3.10"

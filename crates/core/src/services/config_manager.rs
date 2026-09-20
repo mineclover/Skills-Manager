@@ -3,9 +3,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::models::config::infer_project_root_from_skills_dir;
 use crate::models::{
-    AppConfig, ProjectBinding, SkillMetadata, SourceType, ToolConfig, SUPPORTED_TOOLS,
+    builtin_skill_activation_presets, home_dir, AppConfig, ProjectBinding, SkillMetadata,
+    SourceType, ToolConfig, SUPPORTED_TOOLS,
 };
 #[cfg(windows)]
 use crate::services::linker::LinkerService;
@@ -100,17 +100,27 @@ impl ConfigManager {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string);
+            let comment = item
+                .comment
+                .as_ref()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
             // 所有用户元数据都为空时才丢弃 entry。
             if tags.is_empty()
                 && note.is_none()
+                && comment.is_none()
                 && item.favorited_at.is_none()
                 && item.publish.is_none()
+                && item.local_contract.is_none()
             {
                 changed = true;
                 continue;
             }
 
             if note != item.note {
+                changed = true;
+            }
+            if comment != item.comment {
                 changed = true;
             }
 
@@ -125,17 +135,13 @@ impl ConfigManager {
                 format!("global:{}", trimmed_id)
             };
 
-            let comment = item
-                .comment
-                .as_ref()
-                .map(|c| c.trim().to_string())
-                .filter(|c| !c.is_empty());
             if normalized
                 .insert(
                     normalized_id,
                     SkillMetadata {
                         tags,
                         note,
+                        comment,
                         favorited_at: item.favorited_at,
                         publish: item.publish.clone(),
                         local_contract: item.local_contract.clone(),
@@ -333,7 +339,6 @@ impl ConfigManager {
                 name: normalized_name,
                 root_path: normalized_root_path,
                 skills_dir: normalized_skills_dir,
-                root_path,
             });
         }
 
@@ -521,7 +526,7 @@ impl ConfigManager {
 
         // Version Check & Migration
         let current_version = AppConfig::default().version;
-        let mut updated = Self::legacy_project_roots_need_migration(&content);
+        let mut updated = false;
 
         // Seed the built-in Matt Pocock presets for existing installations as
         // well as new ones. Only missing IDs are added, so user edits to a
@@ -1466,8 +1471,10 @@ mod tests {
                 SkillMetadata {
                     tags: vec![],
                     note: Some("  发布前检查链接\n并确认中英文文案  ".to_string()),
+                    comment: None,
                     favorited_at: None,
                     publish: None,
+                    local_contract: None,
                 },
             );
 

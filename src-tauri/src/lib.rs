@@ -1,5 +1,7 @@
 mod commands;
+pub use sm_core::{models, services};
 
+use commands::*;
 use commands::{
     apply_preset, apply_preset_for_scope, apply_preset_for_target, apply_skill_set_activation,
     assign_skill_set_release, batch_set_skill_tools, build_skill_system_prompt, capture_preset,
@@ -9,17 +11,18 @@ use commands::{
     create_skill_set_blueprint, create_skill_set_release, delete_custom_tool, delete_path,
     delete_preset, delete_skill, delete_skill_set_assignment, delete_skill_set_blueprint,
     detect_available_editors, detect_tools, disable_skill, enable_skill, exchange_github_auth,
-    exchange_google_auth, export_skills, fetch_clawhub_skill_files, fetch_marketplace_skill_descriptions,
-    fetch_marketplace_skills, fetch_skill_file_content, fetch_skill_files, fix_sync_issues,
-    get_auth_profile, get_available_editors, get_cli_install_status, get_cached_marketplace_translations,
-    get_cached_skill_translations, get_cached_text_translation, get_clawhub_categories, get_config,
+    exchange_google_auth, export_skills, fetch_clawhub_skill_files,
+    fetch_marketplace_skill_descriptions, fetch_marketplace_skills, fetch_skill_file_content,
+    fetch_skill_files, fix_sync_issues, get_auth_profile, get_available_editors,
+    get_cached_marketplace_translations, get_cached_skill_translations,
+    get_cached_text_translation, get_clawhub_categories, get_cli_install_status, get_config,
     get_llm_provider, get_marketplace_sources, get_risk_report, get_risk_reports_batch,
     get_risk_scanner_version, get_skill_usage_stats, get_tool_status, get_usage_hook_status,
-    import_skills, import_skills_to_hub, install_marketplace_skill, install_marketplace_skill_by_ref,
-    install_cli_binary, install_skill_package_from_path, install_usage_hook, is_initialized, list_marketplace_favorites,
-    list_skill_packages, list_skills, logout_auth, mark_initialized, open_in_editor,
-    preview_clawhub_publish, preview_import_skills, publish_skill_to_clawhub, read_directory_tree,
-    read_file, refresh_editors, refresh_skills,
+    import_skills, import_skills_to_hub, install_cli_binary, install_marketplace_skill,
+    install_marketplace_skill_by_ref, install_skill_package_from_path, install_usage_hook,
+    is_initialized, list_marketplace_favorites, list_skill_packages, list_skills, logout_auth,
+    mark_initialized, open_in_editor, preview_clawhub_publish, preview_import_skills,
+    publish_skill_to_clawhub, read_directory_tree, read_file, refresh_editors, refresh_skills,
     refresh_tools, remove_skill_package, rename_path, rescan_skill, save_config, save_llm_provider,
     scan_all_risks, scan_existing_skills, set_tool_enabled, start_github_auth, start_google_auth,
     submit_feedback, sync_marketplace_installed_skills, test_llm_provider,

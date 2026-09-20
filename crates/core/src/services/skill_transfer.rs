@@ -594,8 +594,10 @@ mod tests {
                 SkillMetadata {
                     tags: vec!["qa".to_string()],
                     note: Some("发布前检查链接".to_string()),
+                    comment: None,
                     favorited_at: None,
                     publish: None,
+                    local_contract: None,
                 },
             );
             let skills = ScannerService::scan_scoped_skills(&config).expect("scan");
