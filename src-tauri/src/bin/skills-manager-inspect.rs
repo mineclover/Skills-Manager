@@ -97,12 +97,14 @@ enum Command {
     },
     BatchSet {
         request: BatchSetSkillToolsRequest,
+        confirm_shared: bool,
         json: bool,
     },
     ApplyPreset {
         preset_id: String,
         project_id: Option<String>,
         tool_id: Option<String>,
+        confirm_shared: bool,
         json: bool,
     },
     CreatePreset {
@@ -211,9 +213,9 @@ fn usage() {
          skills-manager-inspect skill contract set --id <instance-id> --file <contract.yaml> [--json]\n\
          skills-manager-inspect tool enable --id <tool-id> [--json]\n\
          skills-manager-inspect tool disable --id <tool-id> [--json]\n\
-         skills-manager-inspect batch enable --skill <instance-id> --tool <tool-id> [--json]\n\
-         skills-manager-inspect batch disable --group <group-id> --tool <tool-id> [--json]\n\
-         skills-manager-inspect preset apply --id <preset-id> [--project <id>] [--tool <id>] [--json]\n\
+         skills-manager-inspect batch enable --skill <instance-id> --tool <tool-id> [--confirm-shared] [--json]\n\
+         skills-manager-inspect batch disable --group <group-id> --tool <tool-id> [--confirm-shared] [--json]\n\
+         skills-manager-inspect preset apply --id <preset-id> [--project <id>] [--tool <id>] [--confirm-shared] [--json]\n\
          skills-manager-inspect preset create --name <name> [--description <text>] [--copy-current] [--project <id>] [--tool <id>] [--json]\n\
          skills-manager-inspect preset delete --id <preset-id> [--json]\n\
          skills-manager-inspect preset capture --id <preset-id> --tool <tool-id> [--project <id>] [--json]\n\
@@ -623,6 +625,7 @@ fn parse_command() -> Result<Command, String> {
                     let mut project_id = None;
                     let mut tool_id = None;
                     let mut json = false;
+                    let mut confirm_shared = false;
                     let mut index = 2;
                     while index < args.len() {
                         match args[index].as_str() {
@@ -634,6 +637,7 @@ fn parse_command() -> Result<Command, String> {
                                 tool_id = Some(required_option(&args, &mut index, "--tool")?)
                             }
                             "--json" => json = true,
+                            "--confirm-shared" => confirm_shared = true,
                             value => return Err(format!("unknown preset option: {value}")),
                         }
                         index += 1;
@@ -643,6 +647,7 @@ fn parse_command() -> Result<Command, String> {
                             .ok_or_else(|| "preset apply requires --id".to_string())?,
                         project_id,
                         tool_id,
+                        confirm_shared,
                         json,
                     })
                 }
@@ -804,6 +809,7 @@ fn parse_command() -> Result<Command, String> {
             let mut targets = Vec::new();
             let mut tool_ids = Vec::new();
             let mut json = false;
+            let mut confirm_shared = false;
             let mut index = 2;
             while index < args.len() {
                 match args[index].as_str() {
@@ -817,6 +823,7 @@ fn parse_command() -> Result<Command, String> {
                     }),
                     "--tool" => tool_ids.push(required_option(&args, &mut index, "--tool")?),
                     "--json" => json = true,
+                    "--confirm-shared" => confirm_shared = true,
                     value => return Err(format!("unknown batch option: {value}")),
                 }
                 index += 1;
@@ -833,6 +840,7 @@ fn parse_command() -> Result<Command, String> {
                     tool_ids,
                     action,
                 },
+                confirm_shared,
                 json,
             })
         }
@@ -1533,11 +1541,12 @@ fn main() {
                         })
                     ))
                 } else {
-                    SkillControlService::set_skill_enabled_for_scope(
+                    SkillControlService::set_skill_enabled_for_scope_with_confirmation(
                         project_id.as_deref(),
                         &instance_id,
                         &tool_id,
                         enabled,
+                        confirm_shared,
                     )
                     .and_then(|report| print_operation_report(&report, json))
                 }
@@ -1598,24 +1607,34 @@ fn main() {
                 json,
             )
         }),
-        Command::BatchSet { request, json } => SkillControlService::batch_set_skill_tools(request)
+        Command::BatchSet {
+            request,
+            confirm_shared,
+            json,
+        } => SkillControlService::batch_set_skill_tools_with_confirmation(request, confirm_shared)
             .and_then(|response| print_batch_result(&response, json)),
         Command::ApplyPreset {
             preset_id,
             project_id,
             tool_id,
+            confirm_shared,
             json,
         } => {
             let operation = if let Some(tool_id) = tool_id {
-                SkillControlService::apply_preset_for_target(
+                SkillControlService::apply_preset_for_target_with_confirmation(
                     &preset_id,
                     project_id.as_deref(),
                     &tool_id,
+                    confirm_shared,
                 )
                 .and_then(|report| print_operation_report(&report, json))
             } else {
-                SkillControlService::apply_preset_for_scope(&preset_id, project_id.as_deref())
-                    .and_then(|report| print_operation_report(&report, json))
+                SkillControlService::apply_preset_for_scope_with_confirmation(
+                    &preset_id,
+                    project_id.as_deref(),
+                    confirm_shared,
+                )
+                .and_then(|report| print_operation_report(&report, json))
             };
             operation
         }

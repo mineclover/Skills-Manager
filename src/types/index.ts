@@ -137,7 +137,9 @@ export interface SkillSetAssignment {
   release_id: string;
   project_id?: string | null;
   work_scope: string;
-  role: "default" | "recommended";
+  /** All tags must match; omitted on legacy records. */
+  work_scope_tags?: string[];
+  role: "default" | "recommended" | "work_scope_overlay";
   provider_ids: string[];
   priority: number;
   active: boolean;
@@ -168,6 +170,8 @@ export interface SkillSetActivationPlan {
   release_id: string;
   project_id?: string | null;
   work_scope: string;
+  /** All tags must match; omitted on legacy records. */
+  work_scope_tags?: string[];
   operations: SkillSetActivationOperation[];
   missing_skill_ids: string[];
   requires_shared_root_confirmation: boolean;
@@ -197,6 +201,8 @@ export interface SkillSetDriftReport {
   release_id: string;
   project_id?: string | null;
   work_scope: string;
+  /** All tags must match; omitted on legacy records. */
+  work_scope_tags?: string[];
   disabled_operations: SkillSetActivationOperation[];
   missing_skill_ids: string[];
   compliant: boolean;
@@ -226,6 +232,8 @@ export interface EffectiveSkillSetMember {
 export interface EffectiveSkillSet {
   project_id?: string | null;
   work_scope: string;
+  /** All tags must match; omitted on legacy records. */
+  work_scope_tags?: string[];
   assignment_ids: string[];
   release_ids: string[];
   members: EffectiveSkillSetMember[];
@@ -462,6 +470,7 @@ export interface SkillOperationPreview {
   provider_id: string;
   scope: SkillScope;
   action: SkillOperationAction;
+  target_root?: string | null;
   impacts: SkillBindingImpact[];
   requires_confirmation: boolean;
   warning?: string | null;

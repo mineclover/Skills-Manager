@@ -2,7 +2,8 @@ use crate::models::config::SkillActivationPreset;
 #[cfg(test)]
 use crate::models::AppConfig;
 use crate::models::{
-    SaveLocalSkillContractRequest, Skill, SkillContractSummary, SkillOperationReport,
+    SaveLocalSkillContractRequest, Skill, SkillContractSummary, SkillOperationPreview,
+    SkillOperationReport,
 };
 #[cfg(test)]
 use crate::services::skill_control::{
@@ -37,11 +38,22 @@ fn load_skill_by_id(config: &AppConfig, skill_id: &str) -> Result<Skill, String>
 }
 
 #[tauri::command]
+pub fn preview_batch_skill_tools(
+    request: BatchSetSkillToolsRequest,
+) -> Result<Vec<SkillOperationPreview>, String> {
+    SkillControlService::preview_batch_skill_tools(&request)
+}
+
+#[tauri::command]
 pub fn batch_set_skill_tools(
     request: BatchSetSkillToolsRequest,
+    confirm_shared: Option<bool>,
     cache: State<AppCache>,
 ) -> Result<BatchSetSkillToolsResponse, String> {
-    let response = SkillControlService::batch_set_skill_tools(request)?;
+    let response = SkillControlService::batch_set_skill_tools_with_confirmation(
+        request,
+        confirm_shared.unwrap_or(false),
+    )?;
     if response.applied_count > 0 {
         cache.invalidate_skills();
     }
@@ -815,9 +827,15 @@ pub fn list_skills(cache: State<AppCache>) -> Result<Vec<Skill>, String> {
 pub fn enable_skill(
     instance_id: String,
     tool_id: String,
+    confirm_shared: Option<bool>,
     cache: State<AppCache>,
 ) -> Result<SkillOperationReport, String> {
-    let report = SkillControlService::set_skill_enabled(&instance_id, &tool_id, true)?;
+    let report = SkillControlService::set_skill_enabled_with_confirmation(
+        &instance_id,
+        &tool_id,
+        true,
+        confirm_shared.unwrap_or(false),
+    )?;
 
     // Invalidate cache after modification
     cache.invalidate_skills();
@@ -828,9 +846,15 @@ pub fn enable_skill(
 pub fn disable_skill(
     instance_id: String,
     tool_id: String,
+    confirm_shared: Option<bool>,
     cache: State<AppCache>,
 ) -> Result<SkillOperationReport, String> {
-    let report = SkillControlService::set_skill_enabled(&instance_id, &tool_id, false)?;
+    let report = SkillControlService::set_skill_enabled_with_confirmation(
+        &instance_id,
+        &tool_id,
+        false,
+        confirm_shared.unwrap_or(false),
+    )?;
 
     // Invalidate cache after modification
     cache.invalidate_skills();
@@ -903,9 +927,13 @@ pub fn scan_skills_for_scope(project_id: Option<String>) -> Result<Vec<Skill>, S
 #[tauri::command]
 pub fn apply_preset(
     preset_id: String,
+    confirm_shared: Option<bool>,
     cache: State<AppCache>,
 ) -> Result<SkillOperationReport, String> {
-    let report = SkillControlService::apply_preset(&preset_id)?;
+    let report = SkillControlService::apply_preset_with_confirmation(
+        &preset_id,
+        confirm_shared.unwrap_or(false),
+    )?;
     cache.invalidate_skills();
     Ok(report)
 }
@@ -914,11 +942,25 @@ pub fn apply_preset(
 pub fn apply_preset_for_scope(
     preset_id: String,
     project_id: Option<String>,
+    confirm_shared: Option<bool>,
     cache: State<AppCache>,
 ) -> Result<SkillOperationReport, String> {
-    let report = SkillControlService::apply_preset_for_scope(&preset_id, project_id.as_deref())?;
+    let report = SkillControlService::apply_preset_for_scope_with_confirmation(
+        &preset_id,
+        project_id.as_deref(),
+        confirm_shared.unwrap_or(false),
+    )?;
     cache.invalidate_skills();
     Ok(report)
+}
+
+#[tauri::command]
+pub fn preview_preset_for_target(
+    preset_id: String,
+    project_id: Option<String>,
+    tool_id: String,
+) -> Result<Vec<SkillOperationPreview>, String> {
+    SkillControlService::preview_preset_for_target(&preset_id, project_id.as_deref(), &tool_id)
 }
 
 #[tauri::command]
@@ -927,12 +969,14 @@ pub fn apply_preset_for_target(
     preset_id: String,
     project_id: Option<String>,
     tool_id: String,
+    confirm_shared: Option<bool>,
     cache: State<AppCache>,
 ) -> Result<SkillOperationReport, String> {
-    let report = SkillControlService::apply_preset_for_target_with_progress(
+    let report = SkillControlService::apply_preset_for_target_with_progress_and_confirmation(
         &preset_id,
         project_id.as_deref(),
         &tool_id,
+        confirm_shared.unwrap_or(false),
         |progress| {
             let _ = app.emit("preset-apply-progress", progress);
         },

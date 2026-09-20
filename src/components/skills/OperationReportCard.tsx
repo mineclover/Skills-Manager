@@ -2,6 +2,7 @@ import { AlertTriangle, CheckCircle2, RadioTower } from "lucide-react";
 
 import { SkillOperationReport } from "@/types";
 import { useTranslation } from "@/i18n";
+import { formatSkillBindingImpacts } from "@/lib/skillOperationConfirmation";
 
 interface OperationReportCardProps {
   report: SkillOperationReport;
@@ -49,10 +50,10 @@ export function OperationReportCard({ report, scopeLabel, providerLabel }: Opera
       {hasImpacts && (
         <div className="mt-2 flex items-start gap-2 border-t border-border/70 pt-2 text-[10px] text-muted-foreground">
           <RadioTower size={13} className="mt-0.5 shrink-0" />
-          <span>
+          <span className="whitespace-pre-line break-all">
             {t("presets.reportImpacts").replace(
               "{providers}",
-              report.impacts.map((impact) => impact.display_name).join(", "),
+              formatSkillBindingImpacts(report.impacts),
             )}
           </span>
         </div>

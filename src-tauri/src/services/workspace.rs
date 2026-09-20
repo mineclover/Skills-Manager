@@ -130,6 +130,15 @@ impl WorkspaceService {
     }
 
     pub fn project_tool_skills_dir(project: &ProjectBinding, tool_id: &str) -> Option<PathBuf> {
+        // Codex keeps settings in .codex, but discovers project skills from
+        // the shared .agents/skills root used by Vercel Skills delivery.
+        // Legacy bindings without a repository retain their configured paths.
+        if tool_id == "codex" {
+            return project
+                .root_path
+                .as_ref()
+                .map(|root| root.join(".agents").join("skills"));
+        }
         Self::project_tool_config_dir(project, tool_id).map(|path| path.join("skills"))
     }
 
@@ -270,6 +279,7 @@ mod tests {
         with_temp_home(|home| {
             let repository = home.join("skills-manager");
             fs::create_dir_all(repository.join("skills").join("alpha")).unwrap();
+            let repository = fs::canonicalize(repository).unwrap();
 
             let binding = WorkspaceService::build_project_binding(&repository, None).unwrap();
 
@@ -284,6 +294,7 @@ mod tests {
         with_temp_home(|home| {
             let repository = home.join("empty-repo");
             fs::create_dir_all(repository.join(".git")).unwrap();
+            let repository = fs::canonicalize(repository).unwrap();
 
             let binding = WorkspaceService::build_project_binding(&repository, None).unwrap();
 
@@ -297,6 +308,7 @@ mod tests {
         with_temp_home(|home| {
             let repository = home.join("targeted-repo");
             fs::create_dir_all(repository.join("skills")).unwrap();
+            let repository = fs::canonicalize(repository).unwrap();
             let binding = WorkspaceService::build_project_binding(&repository, None).unwrap();
 
             assert_eq!(
@@ -306,6 +318,23 @@ mod tests {
             assert_eq!(
                 WorkspaceService::project_tool_skills_dir(&binding, "vercel-skills"),
                 Some(repository.join(".agents").join("skills"))
+            );
+            fs::create_dir_all(repository.join(".codex").join("skills")).unwrap();
+            assert_eq!(
+                WorkspaceService::project_tool_skills_dir(&binding, "codex"),
+                Some(repository.join(".agents").join("skills"))
+            );
+            assert_eq!(
+                WorkspaceService::project_tool_config_dir(&binding, "codex"),
+                Some(repository.join(".codex"))
+            );
+            let legacy_binding = crate::models::ProjectBinding {
+                root_path: None,
+                ..binding
+            };
+            assert_eq!(
+                WorkspaceService::project_tool_skills_dir(&legacy_binding, "codex"),
+                None
             );
         });
     }

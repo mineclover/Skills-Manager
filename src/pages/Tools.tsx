@@ -37,6 +37,7 @@ import {
   getToolBulkToggleTargets,
 } from "./tools/bulkToggleToolSkills";
 import { mergeSkillOperationReports } from "./tools/mergeSkillOperationReports";
+import { confirmSharedOperationPreviews } from "@/lib/skillOperationConfirmation";
 import { getSkillTagsForSkill } from "./skills/skillTags";
 
 function getSkillDisplayName(skillIdentity: string, skills: Skill[]): string {
@@ -206,21 +207,13 @@ export function Tools() {
     setToolEditorEnabledOnly(false);
   }, []);
 
-  const confirmSharedPreviews = useCallback(async (previews: SkillOperationPreview[]) => {
-    const sharedPreviews = previews.filter((preview) => preview.requires_confirmation);
-    if (sharedPreviews.length === 0) {
-      return true;
-    }
-
-    const impactNames = Array.from(
-      new Set(sharedPreviews.flatMap((preview) => preview.impacts.map((impact) => impact.display_name))),
-    ).join(", ");
-    const warning = sharedPreviews.find((preview) => preview.warning)?.warning;
-    return confirm(
-      `${warning ?? t("skills.sharedImpactConfirm")}${impactNames ? `\n\n${impactNames}` : ""}`,
-      { title: t("skills.sharedImpactConfirmTitle"), kind: "warning" },
-    );
-  }, [t]);
+  const confirmSharedPreviews = useCallback((previews: SkillOperationPreview[]) => (
+    confirmSharedOperationPreviews(
+      previews,
+      (message) => confirm(message, { title: t("skills.sharedImpactConfirmTitle"), kind: "warning" }),
+      t("skills.sharedImpactConfirm"),
+    )
+  ), [t]);
 
   const handleToggleSkillForTool = useCallback(async (tool: Tool, instanceId: string, enabled: boolean) => {
     const toggleKey = `${tool.id}:${instanceId}`;
@@ -234,12 +227,13 @@ export function Tools() {
         providerId: tool.id,
         enabled,
       });
-      if (!(await confirmSharedPreviews([preview]))) {
+      const confirmShared = await confirmSharedPreviews([preview]);
+      if (confirmShared === null) {
         return;
       }
 
       const command = enabled ? "enable_skill" : "disable_skill";
-      const report = await invoke<SkillOperationReport>(command, { instanceId, toolId: tool.id });
+      const report = await invoke<SkillOperationReport>(command, { instanceId, toolId: tool.id, confirmShared });
       setLastOperationReport(report);
       if (report.failed_count > 0) {
         throw new Error(report.failures[0]?.message || t("skills.toggleFailed"));
@@ -296,7 +290,7 @@ export function Tools() {
           });
         }),
       );
-      if (!(await confirmSharedPreviews(previews))) {
+      if (await confirmSharedPreviews(previews) === null) {
         return;
       }
     } catch (err) {
@@ -328,7 +322,11 @@ export function Tools() {
     try {
       const command = enabled ? "enable_skill" : "disable_skill";
       const results = await Promise.allSettled(
-        targetSkillIds.map((instanceId) => invoke<SkillOperationReport>(command, { instanceId, toolId: tool.id })),
+        targetSkillIds.map((instanceId, index) => invoke<SkillOperationReport>(command, {
+          instanceId,
+          toolId: tool.id,
+          confirmShared: previews[index].requires_confirmation,
+        })),
       );
       const reports = results
         .filter((result): result is PromiseFulfilledResult<SkillOperationReport> => result.status === "fulfilled")

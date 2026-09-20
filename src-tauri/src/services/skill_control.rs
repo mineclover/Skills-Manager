@@ -155,9 +155,26 @@ impl SkillControlService {
         tool_id: &str,
         enabled: bool,
     ) -> Result<SkillOperationReport, String> {
+        Self::set_skill_enabled_with_confirmation(instance_id, tool_id, enabled, false)
+    }
+
+    pub fn set_skill_enabled_with_confirmation(
+        instance_id: &str,
+        tool_id: &str,
+        enabled: bool,
+        confirm_shared: bool,
+    ) -> Result<SkillOperationReport, String> {
         let config = ConfigManager::new().load()?;
         let skills = ScannerService::scan_scoped_skills(&config)?;
-        set_skill_enabled_from_skills(&config, &skills, None, instance_id, tool_id, enabled)
+        set_skill_enabled_from_skills(
+            &config,
+            &skills,
+            None,
+            instance_id,
+            tool_id,
+            enabled,
+            confirm_shared,
+        )
     }
 
     pub fn set_skill_enabled_for_scope(
@@ -166,9 +183,33 @@ impl SkillControlService {
         tool_id: &str,
         enabled: bool,
     ) -> Result<SkillOperationReport, String> {
+        Self::set_skill_enabled_for_scope_with_confirmation(
+            project_id,
+            instance_id,
+            tool_id,
+            enabled,
+            false,
+        )
+    }
+
+    pub fn set_skill_enabled_for_scope_with_confirmation(
+        project_id: Option<&str>,
+        instance_id: &str,
+        tool_id: &str,
+        enabled: bool,
+        confirm_shared: bool,
+    ) -> Result<SkillOperationReport, String> {
         let config = ConfigManager::new().load()?;
         let skills = ScannerService::scan_skills_for_scope(&config, project_id)?;
-        set_skill_enabled_from_skills(&config, &skills, project_id, instance_id, tool_id, enabled)
+        set_skill_enabled_from_skills(
+            &config,
+            &skills,
+            project_id,
+            instance_id,
+            tool_id,
+            enabled,
+            confirm_shared,
+        )
     }
 }
 
@@ -179,6 +220,7 @@ fn set_skill_enabled_from_skills(
     instance_id: &str,
     tool_id: &str,
     enabled: bool,
+    confirm_shared: bool,
 ) -> Result<SkillOperationReport, String> {
     let skill = skills
         .iter()
@@ -193,6 +235,7 @@ fn set_skill_enabled_from_skills(
         tool_id,
         enabled,
     )?;
+    require_shared_confirmation(std::slice::from_ref(&preview), confirm_shared)?;
     let mut report = operation_report_from_preview(&preview, project_id);
     if skill.is_enabled_for(tool_id) == enabled {
         report.skipped_count = 1;
@@ -306,10 +349,21 @@ impl SkillControlService {
     }
 
     pub fn apply_preset(preset_id: &str) -> Result<SkillOperationReport, String> {
+        Self::apply_preset_with_confirmation(preset_id, false)
+    }
+
+    pub fn apply_preset_with_confirmation(
+        preset_id: &str,
+        confirm_shared: bool,
+    ) -> Result<SkillOperationReport, String> {
         let manager = ConfigManager::new();
         let config = manager.load()?;
         let project_id = config.active_project_id.clone();
         let skills = ScannerService::scan_scoped_skills(&config)?;
+        require_shared_confirmation(
+            &preview_preset_with_skills(&config, &skills, preset_id, None)?,
+            confirm_shared,
+        )?;
         apply_preset_with_skills(preset_id, config, skills, project_id.as_deref())
     }
 
@@ -317,9 +371,20 @@ impl SkillControlService {
         preset_id: &str,
         project_id: Option<&str>,
     ) -> Result<SkillOperationReport, String> {
-        let manager = ConfigManager::new();
-        let config = manager.load()?;
+        Self::apply_preset_for_scope_with_confirmation(preset_id, project_id, false)
+    }
+
+    pub fn apply_preset_for_scope_with_confirmation(
+        preset_id: &str,
+        project_id: Option<&str>,
+        confirm_shared: bool,
+    ) -> Result<SkillOperationReport, String> {
+        let config = ConfigManager::new().load()?;
         let skills = ScannerService::scan_skills_for_scope(&config, project_id)?;
+        require_shared_confirmation(
+            &preview_preset_with_skills(&config, &skills, preset_id, None)?,
+            confirm_shared,
+        )?;
         apply_preset_with_skills(preset_id, config, skills, project_id)
     }
 
@@ -328,10 +393,32 @@ impl SkillControlService {
         project_id: Option<&str>,
         tool_id: &str,
     ) -> Result<SkillOperationReport, String> {
-        let manager = ConfigManager::new();
-        let config = manager.load()?;
+        Self::apply_preset_for_target_with_confirmation(preset_id, project_id, tool_id, false)
+    }
+
+    pub fn apply_preset_for_target_with_confirmation(
+        preset_id: &str,
+        project_id: Option<&str>,
+        tool_id: &str,
+        confirm_shared: bool,
+    ) -> Result<SkillOperationReport, String> {
+        Self::apply_preset_for_target_with_progress_and_confirmation(
+            preset_id,
+            project_id,
+            tool_id,
+            confirm_shared,
+            |_| {},
+        )
+    }
+
+    pub fn preview_preset_for_target(
+        preset_id: &str,
+        project_id: Option<&str>,
+        tool_id: &str,
+    ) -> Result<Vec<SkillOperationPreview>, String> {
+        let config = ConfigManager::new().load()?;
         let skills = ScannerService::scan_skills_for_scope(&config, project_id)?;
-        apply_preset_to_target_with_skills(preset_id, tool_id, config, skills, project_id)
+        preview_preset_with_skills(&config, &skills, preset_id, Some(tool_id))
     }
 
     pub fn apply_preset_for_target_with_progress<F>(
@@ -343,9 +430,31 @@ impl SkillControlService {
     where
         F: FnMut(PresetApplyProgress),
     {
-        let manager = ConfigManager::new();
-        let config = manager.load()?;
+        Self::apply_preset_for_target_with_progress_and_confirmation(
+            preset_id,
+            project_id,
+            tool_id,
+            false,
+            on_progress,
+        )
+    }
+
+    pub fn apply_preset_for_target_with_progress_and_confirmation<F>(
+        preset_id: &str,
+        project_id: Option<&str>,
+        tool_id: &str,
+        confirm_shared: bool,
+        on_progress: F,
+    ) -> Result<SkillOperationReport, String>
+    where
+        F: FnMut(PresetApplyProgress),
+    {
+        let config = ConfigManager::new().load()?;
         let skills = ScannerService::scan_skills_for_scope(&config, project_id)?;
+        require_shared_confirmation(
+            &preview_preset_with_skills(&config, &skills, preset_id, Some(tool_id))?,
+            confirm_shared,
+        )?;
         apply_preset_to_target_with_skills_and_progress(
             preset_id,
             tool_id,
@@ -573,6 +682,43 @@ impl SkillControlService {
     pub fn batch_set_skill_tools(
         request: BatchSetSkillToolsRequest,
     ) -> Result<BatchSetSkillToolsResponse, String> {
+        Self::batch_set_skill_tools_with_confirmation(request, false)
+    }
+
+    pub fn preview_batch_skill_tools(
+        request: &BatchSetSkillToolsRequest,
+    ) -> Result<Vec<SkillOperationPreview>, String> {
+        let config = ConfigManager::new().load()?;
+        let skills = ScannerService::scan_scoped_skills(&config)?;
+        let by_id = skills
+            .iter()
+            .cloned()
+            .map(|skill| (skill.instance_id.clone(), skill))
+            .collect();
+        let packages = SkillPackageService::list_discovered_packages(&config.skills_dir)?
+            .into_iter()
+            .map(|package| (package.package_id.clone(), package))
+            .collect();
+        let (targets, _) = resolve_batch_targets(&request.targets, &by_id, &packages);
+        let (plan, _) = build_batch_operations(
+            &targets,
+            &request.tool_ids,
+            &by_id,
+            &config,
+            &request.action,
+        );
+        preview_batch_plan(
+            &config,
+            &skills,
+            &plan,
+            matches!(request.action, BatchSkillToolAction::Enable),
+        )
+    }
+
+    pub fn batch_set_skill_tools_with_confirmation(
+        request: BatchSetSkillToolsRequest,
+        confirm_shared: bool,
+    ) -> Result<BatchSetSkillToolsResponse, String> {
         let config = ConfigManager::new().load()?;
         let skills = ScannerService::scan_scoped_skills(&config)?;
         let all_skills = skills.clone();
@@ -603,9 +749,11 @@ impl SkillControlService {
         );
         failures.extend(operation_failures);
 
+        let should_enable = matches!(request.action, BatchSkillToolAction::Enable);
+        let previews = preview_batch_plan(&config, &all_skills, &operation_plan, should_enable)?;
+        require_shared_confirmation(&previews, confirm_shared)?;
         let mut applied_count = 0;
         let mut impacts = Vec::new();
-        let should_enable = matches!(request.action, BatchSkillToolAction::Enable);
         for operation in &operation_plan.operations {
             if let Ok(preview) = ProviderInventoryService::preview_binding_operation_with_skills(
                 &config,
@@ -1148,6 +1296,111 @@ pub fn delete_skill_from_disk(config: &AppConfig, instance_id: &str) -> Result<(
         .map_err(|error| format!("Failed to delete skill folder: {error}"))
 }
 
+fn require_shared_confirmation(
+    previews: &[SkillOperationPreview],
+    confirmed: bool,
+) -> Result<(), String> {
+    if !confirmed {
+        if let Some(preview) = previews
+            .iter()
+            .find(|preview| preview.requires_confirmation)
+        {
+            return Err(format!(
+                "{}; explicit shared-root confirmation is required",
+                preview
+                    .warning
+                    .as_deref()
+                    .unwrap_or("Shared provider impact")
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn preview_batch_plan(
+    config: &AppConfig,
+    skills: &[Skill],
+    plan: &BatchOperationPlan,
+    enabled: bool,
+) -> Result<Vec<SkillOperationPreview>, String> {
+    plan.operations
+        .iter()
+        .map(|operation| {
+            ProviderInventoryService::preview_binding_operation_with_skills(
+                config,
+                skills,
+                None,
+                &operation.skill_id,
+                &operation.tool_id,
+                enabled,
+            )
+        })
+        .collect()
+}
+
+fn preview_preset_with_skills(
+    config: &AppConfig,
+    skills: &[Skill],
+    preset_id: &str,
+    target_tool_id: Option<&str>,
+) -> Result<Vec<SkillOperationPreview>, String> {
+    let preset = config
+        .presets
+        .iter()
+        .find(|preset| preset.id == preset_id)
+        .ok_or_else(|| format!("Preset not found: {preset_id}"))?;
+    if let Some(id) = target_tool_id {
+        if config.get_tool_config(id).is_none() {
+            return Err(format!("Tool not found: {id}"));
+        }
+    }
+    let mut previews = Vec::new();
+    for (tool_id, tool) in config.collect_tool_configs() {
+        if target_tool_id.is_some_and(|target| target != tool_id) {
+            continue;
+        }
+        if !(tool.detected || tool.config_path.exists() || tool.skills_path.exists()) {
+            if target_tool_id.is_some() {
+                return Err(format!("Tool is not available: {tool_id}"));
+            }
+            continue;
+        }
+        let active = preset
+            .activations
+            .iter()
+            .find(|activation| activation.tool_id == tool_id);
+        if preset.id != PRISTINE_PRESET_ID && active.is_none() {
+            if target_tool_id.is_some() {
+                return Err(format!("Preset is not configured for tool: {tool_id}. Configure this agent in the preset before applying it."));
+            }
+            continue;
+        }
+        for skill in skills {
+            if skill.scope == SkillScope::Tool && skill.tool_id.as_deref() != Some(&tool_id) {
+                continue;
+            }
+            let enabled = preset.id != PRISTINE_PRESET_ID
+                && active.is_some_and(|activation| {
+                    activation
+                        .skill_ids
+                        .iter()
+                        .any(|id| id == &skill.instance_id || id == &skill.id)
+                });
+            previews.push(
+                ProviderInventoryService::preview_binding_operation_with_skills(
+                    config,
+                    skills,
+                    skill.project_id.as_deref(),
+                    &skill.instance_id,
+                    &tool_id,
+                    enabled,
+                )?,
+            );
+        }
+    }
+    Ok(previews)
+}
+
 fn apply_preset_with_skills(
     preset_id: &str,
     mut config: AppConfig,
@@ -1409,16 +1662,277 @@ where
 mod tests {
     use super::{
         apply_preset_to_target_with_skills, apply_preset_to_target_with_skills_and_progress,
-        apply_skill_tool_enabled_from_skills, PresetApplyProgress, SkillControlService,
+        apply_skill_tool_enabled_from_skills, BatchSetSkillToolsRequest, BatchSkillToolAction,
+        BatchSkillToolTarget, BatchSkillToolTargetKind, PresetApplyProgress, SkillControlService,
         PRISTINE_PRESET_ID,
     };
     use crate::models::{
         AppConfig, PresetActivation, ProjectBinding, SaveLocalSkillContractRequest, Skill,
         SkillActivationPreset, SkillContract, SkillContractSource, SkillScope, ToolConfig,
     };
+    use crate::services::ProviderInventoryService;
     use crate::services::{ConfigManager, ScannerService};
     use crate::test_support::with_temp_home;
     use std::fs;
+
+    fn shared_confirmation_fixture(
+        home: &std::path::Path,
+    ) -> (AppConfig, String, std::path::PathBuf) {
+        let repository = home.join("confirmation-repo");
+        let source = repository.join("skills").join("shared-confirmation");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(
+            source.join("SKILL.md"),
+            "---\nname: shared-confirmation\n---\n",
+        )
+        .unwrap();
+        let mut config = AppConfig::default();
+        config.initialized = true;
+        for (tool_id, directory) in [
+            ("codex", ".codex"),
+            ("vercel-skills", ".agents"),
+            ("claude-code", ".claude"),
+        ] {
+            config.tools.insert(
+                tool_id.to_string(),
+                ToolConfig {
+                    enabled: true,
+                    detected: true,
+                    skills_path: home.join(directory).join("skills"),
+                    config_path: home.join(directory),
+                },
+            );
+        }
+        config.projects.push(ProjectBinding {
+            id: "confirmation-repo".to_string(),
+            name: "Confirmation repo".to_string(),
+            skills_dir: repository.join("skills"),
+            root_path: Some(repository.clone()),
+        });
+        config.active_project_id = Some("confirmation-repo".to_string());
+        ConfigManager::new().save(&config).unwrap();
+        let instance = ScannerService::scan_skills_for_scope(&config, Some("confirmation-repo"))
+            .unwrap()
+            .into_iter()
+            .find(|skill| skill.id == "shared-confirmation")
+            .unwrap()
+            .instance_id;
+        (config, instance, repository)
+    }
+
+    #[test]
+    fn shared_single_mutation_requires_confirmation_but_unchanged_repeat_does_not() {
+        with_temp_home(|home| {
+            let (_, instance, repository) = shared_confirmation_fixture(home);
+            let target = repository
+                .join(".agents")
+                .join("skills")
+                .join("shared-confirmation");
+            assert!(SkillControlService::set_skill_enabled_for_scope(
+                Some("confirmation-repo"),
+                &instance,
+                "codex",
+                true
+            )
+            .unwrap_err()
+            .contains("confirmation is required"));
+            assert!(!target.exists());
+            let applied = SkillControlService::set_skill_enabled_for_scope_with_confirmation(
+                Some("confirmation-repo"),
+                &instance,
+                "codex",
+                true,
+                true,
+            )
+            .unwrap();
+            assert_eq!(applied.applied_count, 1);
+            assert!(target.exists());
+            let unchanged = SkillControlService::set_skill_enabled_for_scope(
+                Some("confirmation-repo"),
+                &instance,
+                "codex",
+                true,
+            )
+            .unwrap();
+            assert_eq!(unchanged.skipped_count, 1);
+            assert_eq!(unchanged.applied_count, 0);
+            assert!(!home
+                .join(".agents")
+                .join("skills")
+                .join("shared-confirmation")
+                .exists());
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn direct_source_rename_requires_confirmation_for_indirect_bindings_and_restores_them() {
+        with_temp_home(|home| {
+            let (_, instance, repository) = shared_confirmation_fixture(home);
+            let source = repository
+                .join(".agents")
+                .join("skills")
+                .join("shared-confirmation");
+            fs::create_dir_all(source.parent().unwrap()).unwrap();
+            fs::rename(
+                repository.join("skills").join("shared-confirmation"),
+                &source,
+            )
+            .unwrap();
+            let consumer = repository
+                .join(".claude")
+                .join("skills")
+                .join("shared-confirmation");
+            fs::create_dir_all(consumer.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(&source, &consumer).unwrap();
+            assert!(SkillControlService::set_skill_enabled_for_scope(
+                Some("confirmation-repo"),
+                &instance,
+                "codex",
+                false
+            )
+            .is_err());
+            assert!(source.exists() && consumer.exists());
+            let disabled = SkillControlService::set_skill_enabled_for_scope_with_confirmation(
+                Some("confirmation-repo"),
+                &instance,
+                "codex",
+                false,
+                true,
+            )
+            .unwrap();
+            assert_eq!(disabled.applied_count, 1);
+            assert!(disabled
+                .impacts
+                .iter()
+                .any(|impact| impact.provider_id == "claude-code"
+                    && impact
+                        .reason
+                        .as_ref()
+                        .unwrap()
+                        .contains("Indirect source dependency")));
+            assert!(!source.exists() && !consumer.exists());
+            assert!(consumer.symlink_metadata().is_ok());
+            assert!(SkillControlService::set_skill_enabled_for_scope(
+                Some("confirmation-repo"),
+                &instance,
+                "codex",
+                true
+            )
+            .is_err());
+            let restored = SkillControlService::set_skill_enabled_for_scope_with_confirmation(
+                Some("confirmation-repo"),
+                &instance,
+                "codex",
+                true,
+                true,
+            )
+            .unwrap();
+            assert_eq!(restored.applied_count, 1);
+            assert!(source.exists() && consumer.exists());
+            let unchanged = SkillControlService::set_skill_enabled_for_scope(
+                Some("confirmation-repo"),
+                &instance,
+                "codex",
+                true,
+            )
+            .unwrap();
+            assert_eq!(unchanged.skipped_count, 1);
+        });
+    }
+
+    #[test]
+    fn shared_batch_preflight_blocks_before_any_target_is_changed() {
+        with_temp_home(|home| {
+            let (_, instance, repository) = shared_confirmation_fixture(home);
+            let request = BatchSetSkillToolsRequest {
+                targets: vec![BatchSkillToolTarget {
+                    kind: BatchSkillToolTargetKind::Skill,
+                    id: instance,
+                }],
+                tool_ids: vec!["claude-code".to_string(), "codex".to_string()],
+                action: BatchSkillToolAction::Enable,
+            };
+            let previews = SkillControlService::preview_batch_skill_tools(&request).unwrap();
+            assert_eq!(previews.len(), 2);
+            assert_eq!(
+                previews
+                    .iter()
+                    .filter(|preview| preview.requires_confirmation)
+                    .count(),
+                1
+            );
+            assert!(SkillControlService::batch_set_skill_tools(request.clone())
+                .unwrap_err()
+                .contains("confirmation is required"));
+            assert!(!repository
+                .join(".claude")
+                .join("skills")
+                .join("shared-confirmation")
+                .exists());
+            assert!(!repository
+                .join(".agents")
+                .join("skills")
+                .join("shared-confirmation")
+                .exists());
+            let applied =
+                SkillControlService::batch_set_skill_tools_with_confirmation(request, true)
+                    .unwrap();
+            assert_eq!(applied.applied_count, 2);
+        });
+    }
+
+    #[test]
+    fn shared_preset_preflight_blocks_mutation_and_active_preset_update() {
+        with_temp_home(|home| {
+            let (mut config, instance, repository) = shared_confirmation_fixture(home);
+            config.presets.push(SkillActivationPreset {
+                id: "confirmation-preset".to_string(),
+                name: "Confirmation preset".to_string(),
+                description: None,
+                activations: vec![PresetActivation {
+                    tool_id: "codex".to_string(),
+                    skill_ids: vec![instance],
+                }],
+            });
+            ConfigManager::new().save(&config).unwrap();
+            let previews = SkillControlService::preview_preset_for_target(
+                "confirmation-preset",
+                Some("confirmation-repo"),
+                "codex",
+            )
+            .unwrap();
+            assert!(previews.iter().any(|preview| preview.requires_confirmation));
+            assert!(SkillControlService::apply_preset_for_target(
+                "confirmation-preset",
+                Some("confirmation-repo"),
+                "codex"
+            )
+            .unwrap_err()
+            .contains("confirmation is required"));
+            assert!(!repository
+                .join(".agents")
+                .join("skills")
+                .join("shared-confirmation")
+                .exists());
+            assert_ne!(
+                ConfigManager::new()
+                    .load()
+                    .unwrap()
+                    .active_preset_id
+                    .as_deref(),
+                Some("confirmation-preset")
+            );
+            let applied = SkillControlService::apply_preset_for_target_with_confirmation(
+                "confirmation-preset",
+                Some("confirmation-repo"),
+                "codex",
+                true,
+            )
+            .unwrap();
+            assert_eq!(applied.applied_count, 1);
+        });
+    }
 
     #[test]
     fn local_contract_is_saved_for_the_exact_skill_instance_and_rejects_sidecars() {
@@ -1712,6 +2226,128 @@ mod tests {
             .expect("disable repository skill");
             assert!(source.exists());
             assert!(!project_target.exists());
+        });
+    }
+
+    #[test]
+    fn codex_project_preview_and_activation_share_agents_root_without_moving_config() {
+        with_temp_home(|home| {
+            let repository = home.join("codex-repo");
+            let source = repository.join("skills").join("repo-skill");
+            let project_skills = repository.join(".agents").join("skills");
+            let project_config = repository.join(".codex");
+            let global_config = home.join(".codex");
+            fs::create_dir_all(&source).unwrap();
+            fs::write(source.join("SKILL.md"), "---\nname: repo-skill\n---\n").unwrap();
+            fs::create_dir_all(project_config.join("skills")).unwrap();
+            fs::write(
+                project_config.join("config.toml"),
+                "model = \"project-model\"\n",
+            )
+            .unwrap();
+            fs::create_dir_all(&global_config).unwrap();
+            fs::write(
+                global_config.join("config.toml"),
+                "model = \"global-model\"\n",
+            )
+            .unwrap();
+
+            let mut config = AppConfig::default();
+            config.tools.insert(
+                "codex".to_string(),
+                ToolConfig {
+                    enabled: true,
+                    detected: true,
+                    skills_path: global_config.join("skills"),
+                    config_path: global_config.clone(),
+                },
+            );
+            config.projects.push(ProjectBinding {
+                id: "codex-repo".to_string(),
+                name: "Codex repo".to_string(),
+                skills_dir: repository.join("skills"),
+                root_path: Some(repository.clone()),
+            });
+            let skill = Skill::new(
+                "repo-skill".to_string(),
+                "repo-skill".to_string(),
+                source.clone(),
+            )
+            .with_scope(
+                SkillScope::Project,
+                Some("codex-repo".to_string()),
+                Some("Codex repo".to_string()),
+            );
+            let preview = ProviderInventoryService::preview_binding_operation_with_skills(
+                &config,
+                std::slice::from_ref(&skill),
+                Some("codex-repo"),
+                &skill.instance_id,
+                "codex",
+                true,
+            )
+            .unwrap();
+            assert_eq!(
+                preview
+                    .impacts
+                    .iter()
+                    .find(|impact| impact.provider_id == "codex")
+                    .unwrap()
+                    .root_path,
+                Some(project_skills.clone())
+            );
+
+            apply_skill_tool_enabled_from_skills(
+                &config,
+                std::slice::from_ref(&skill),
+                &skill.instance_id,
+                "codex",
+                true,
+                Some(source.as_path()),
+            )
+            .unwrap();
+            assert!(project_skills.join("repo-skill").exists());
+            assert!(!project_config.join("skills").join("repo-skill").exists());
+            assert!(!global_config.join("skills").join("repo-skill").exists());
+            assert!(!repository.join(".agents").join("config.toml").exists());
+            assert!(fs::read_to_string(project_config.join("config.toml"))
+                .unwrap()
+                .contains("project-model"));
+            assert_eq!(
+                fs::read_to_string(global_config.join("config.toml")).unwrap(),
+                "model = \"global-model\"\n"
+            );
+            let scanned =
+                ScannerService::scan_skills_for_scope(&config, Some("codex-repo")).unwrap();
+            let observed = scanned
+                .iter()
+                .find(|item| item.instance_id == skill.instance_id)
+                .unwrap();
+            assert!(observed.is_enabled_for("codex"));
+            let bindings = ProviderInventoryService::list_bindings_with_skills(
+                &config,
+                &scanned,
+                Some("codex"),
+                Some(&skill.instance_id),
+            );
+            assert_eq!(bindings.len(), 1);
+            assert_eq!(bindings[0].state, crate::models::SkillBindingState::Enabled);
+
+            apply_skill_tool_enabled_from_skills(
+                &config,
+                std::slice::from_ref(&skill),
+                &skill.instance_id,
+                "codex",
+                false,
+                Some(source.as_path()),
+            )
+            .unwrap();
+            assert!(!project_skills.join("repo-skill").exists());
+            assert!(source.join("SKILL.md").exists());
+            assert_eq!(
+                fs::read_to_string(global_config.join("config.toml")).unwrap(),
+                "model = \"global-model\"\n"
+            );
         });
     }
 

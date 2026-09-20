@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { confirm } from "@tauri-apps/plugin-dialog";
+import { confirmSharedOperationPreviews } from "@/lib/skillOperationConfirmation";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useTranslation } from "@/i18n";
 import { useToast } from "@/components/ui/toast";
@@ -11,7 +13,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { ScopeSelector } from "@/components/ScopeSelector";
 import { OperationReportCard } from "@/components/skills/OperationReportCard";
-import { AppConfig, Tool, Skill, SkillActivationPreset, SkillOperationReport, PresetApplyProgress, SkillSystemPrompt } from "@/types";
+import { AppConfig, Tool, Skill, SkillActivationPreset, SkillOperationPreview, SkillOperationReport, PresetApplyProgress, SkillSystemPrompt } from "@/types";
 import { Sliders, Plus, Trash2, Play, Check, AlertTriangle, Layers, Download, Copy } from "lucide-react";
 
 const PRISTINE_PRESET_ID = "builtin-pristine";
@@ -288,22 +290,37 @@ export function Presets() {
     }
 
     setApplyingPresetId(presetId);
-    setApplyProgress({
-      preset_id: presetId,
-      project_id: selectedProjectId,
-      tool_id: targetToolId,
-      total_count: targetSkills.length,
-      processed_count: 0,
-      applied_count: 0,
-      skipped_count: 0,
-      failed_count: 0,
-      completed: false,
-    });
+    setApplyProgress(null);
     try {
+      const previews = await invoke<SkillOperationPreview[]>("preview_preset_for_target", {
+        presetId,
+        projectId: selectedProjectId,
+        toolId: targetToolId,
+      });
+      const confirmShared = await confirmSharedOperationPreviews(
+        previews,
+        (message) => confirm(message, { title: t("skills.sharedImpactConfirmTitle"), kind: "warning" }),
+        t("skills.sharedImpactConfirm"),
+      );
+      if (confirmShared === null) {
+        return;
+      }
+      setApplyProgress({
+        preset_id: presetId,
+        project_id: selectedProjectId,
+        tool_id: targetToolId,
+        total_count: targetSkills.length,
+        processed_count: 0,
+        applied_count: 0,
+        skipped_count: 0,
+        failed_count: 0,
+        completed: false,
+      });
       const report = await invoke<SkillOperationReport>("apply_preset_for_target", {
         presetId,
         projectId: selectedProjectId,
         toolId: targetToolId,
+        confirmShared,
       });
       setLastReport(report);
       if (report.failed_count > 0) {

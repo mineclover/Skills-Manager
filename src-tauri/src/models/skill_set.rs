@@ -81,6 +81,7 @@ pub struct SkillSetRelease {
 pub enum SkillSetAssignmentRole {
     Default,
     Recommended,
+    WorkScopeOverlay,
 }
 
 impl Default for SkillSetAssignmentRole {
@@ -95,9 +96,13 @@ pub struct SkillSetAssignment {
     pub release_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
-    /// Human-readable intended work scope, such as `upstream-integration`.
+    /// Legacy single scope; retained as a display label when explicit tags exist.
+    #[serde(default)]
     pub work_scope: String,
-    /// Defaults apply to every work scope; recommended assignments require a matching scope.
+    /// All tags must match. None retains the legacy singleton scope; Some([]) matches all scopes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_scope_tags: Option<Vec<String>>,
+    /// Defaults always apply; overlays require a matching scope; recommendations are candidates only.
     #[serde(default)]
     pub role: SkillSetAssignmentRole,
     #[serde(default)]
@@ -162,7 +167,11 @@ pub struct AssignSkillSetReleaseRequest {
     pub release_id: String,
     #[serde(default)]
     pub project_id: Option<String>,
+    #[serde(default)]
     pub work_scope: String,
+    /// Explicit tags take precedence over the legacy scalar; an empty list means all scopes.
+    #[serde(default)]
+    pub work_scope_tags: Option<Vec<String>>,
     #[serde(default)]
     pub role: SkillSetAssignmentRole,
     #[serde(default)]
@@ -187,7 +196,10 @@ pub struct SetSkillSetAssignmentPriorityRequest {
 pub struct ResolveEffectiveSkillSetRequest {
     #[serde(default)]
     pub project_id: Option<String>,
+    #[serde(default)]
     pub work_scope: String,
+    #[serde(default)]
+    pub work_scope_tags: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -202,6 +214,8 @@ pub struct EffectiveSkillSetMember {
 pub struct EffectiveSkillSet {
     pub project_id: Option<String>,
     pub work_scope: String,
+    #[serde(default)]
+    pub work_scope_tags: Vec<String>,
     pub assignment_ids: Vec<String>,
     pub release_ids: Vec<String>,
     pub members: Vec<EffectiveSkillSetMember>,
@@ -232,6 +246,8 @@ pub struct SkillSetActivationPlan {
     pub release_id: String,
     pub project_id: Option<String>,
     pub work_scope: String,
+    #[serde(default)]
+    pub work_scope_tags: Vec<String>,
     pub operations: Vec<SkillSetActivationOperation>,
     pub missing_skill_ids: Vec<String>,
     #[serde(default)]
@@ -248,6 +264,8 @@ pub struct SkillSetDriftReport {
     pub release_id: String,
     pub project_id: Option<String>,
     pub work_scope: String,
+    #[serde(default)]
+    pub work_scope_tags: Vec<String>,
     pub disabled_operations: Vec<SkillSetActivationOperation>,
     pub missing_skill_ids: Vec<String>,
     pub compliant: bool,

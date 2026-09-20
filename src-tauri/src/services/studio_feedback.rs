@@ -680,15 +680,15 @@ impl StudioFeedbackService {
                 });
             }
         }
-        for assignment in catalog
-            .assignments
-            .iter()
-            .filter(|assignment| assignment.active)
-        {
+        for assignment in catalog.assignments.iter().filter(|assignment| {
+            assignment.active
+                && assignment.role != crate::models::SkillSetAssignmentRole::Recommended
+        }) {
             let effective = SkillSetService::resolve_effective_set(
                 crate::models::ResolveEffectiveSkillSetRequest {
                     project_id: assignment.project_id.clone(),
                     work_scope: assignment.work_scope.clone(),
+                    work_scope_tags: assignment.work_scope_tags.clone(),
                 },
             )?;
             if !effective.unresolved_skill_ids.is_empty() {
@@ -1043,7 +1043,8 @@ evaluation: { cases: [evaluations/ok.md], review_cycle_days: 30 }
                 release_id: release.id.clone(),
                 project_id: None,
                 work_scope: "audit".to_string(),
-                role: SkillSetAssignmentRole::Recommended,
+                work_scope_tags: None,
+                role: SkillSetAssignmentRole::WorkScopeOverlay,
                 provider_ids: Vec::new(),
                 priority: 0,
             })

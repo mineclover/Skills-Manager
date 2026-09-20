@@ -180,6 +180,8 @@ import { getToolIconUrl } from "@/assets/tools";
 import { ProviderInventoryCard } from "@/components/skills/ProviderInventoryCard";
 import { ScopeSelector } from "@/components/ScopeSelector";
 import { OperationReportCard } from "@/components/skills/OperationReportCard";
+import { confirmSharedOperationPreviews } from "@/lib/skillOperationConfirmation";
+import { mergeSkillOperationReports } from "./tools/mergeSkillOperationReports";
 
 type SkillsListViewMode = "grouped" | "flat";
 
@@ -1371,6 +1373,19 @@ export function Skills() {
     await persistSkillTags(skill, nextTags);
   }, [persistSkillTags, skillMetadata]);
 
+  const confirmSharedPreviews = useCallback((previews: SkillOperationPreview[]) => (
+    confirmSharedOperationPreviews(
+      previews,
+      (message) => confirm(message, { title: t("skills.sharedImpactConfirmTitle"), kind: "warning" }),
+      t("skills.sharedImpactConfirm"),
+    )
+  ), [t]);
+
+  const previewBatchToolAction = useCallback(async (request: BatchSetSkillToolsRequest) => {
+    const previews = await invoke<SkillOperationPreview[]>("preview_batch_skill_tools", { request });
+    return confirmSharedPreviews(previews);
+  }, [confirmSharedPreviews]);
+
   const handleToggle = async (instanceId: string, skillName: string, toolId: string, enabled: boolean) => {
     const toggleKey = `${instanceId}:${toolId}`;
     setTogglingSkill(toggleKey);
@@ -1382,23 +1397,16 @@ export function Skills() {
         providerId: toolId,
         enabled,
       });
-      if (preview.requires_confirmation) {
-        const impactNames = preview.impacts.map((impact) => impact.display_name).join(", ");
-        const confirmed = await confirm(
-          `${preview.warning ?? t("skills.sharedImpactConfirm")}${impactNames ? `\n\n${impactNames}` : ""}`,
-          { title: t("skills.sharedImpactConfirmTitle"), kind: "warning" },
-        );
-        if (!confirmed) {
-          return;
-        }
+      const confirmShared = await confirmSharedPreviews([preview]);
+      if (confirmShared === null) {
+        return;
       }
 
-      let report: SkillOperationReport;
-      if (enabled) {
-        report = await invoke<SkillOperationReport>("enable_skill", { instanceId, toolId });
-      } else {
-        report = await invoke<SkillOperationReport>("disable_skill", { instanceId, toolId });
-      }
+      const report = await invoke<SkillOperationReport>(enabled ? "enable_skill" : "disable_skill", {
+        instanceId,
+        toolId,
+        confirmShared,
+      });
       setLastOperationReport(report);
       if (report.failed_count > 0) {
         throw new Error(report.failures[0]?.message || t("skills.toggleFailed"));
@@ -1477,6 +1485,24 @@ export function Skills() {
       return;
     }
 
+    let previews: SkillOperationPreview[];
+    try {
+      previews = await Promise.all(targetToolIds.map((toolId) => (
+        invoke<SkillOperationPreview>("preview_skill_operation", {
+          projectId: skill.project_id ?? null,
+          skillInstanceId: skill.instance_id,
+          providerId: toolId,
+          enabled,
+        })
+      )));
+      if (await confirmSharedPreviews(previews) === null) {
+        return;
+      }
+    } catch (err) {
+      addToast(err instanceof Error ? err.message : String(err), "error");
+      return;
+    }
+
     setBulkTogglingSkillId(skill.instance_id);
 
     setSkills((prevSkills) =>
@@ -1497,11 +1523,23 @@ export function Skills() {
     try {
       const command = enabled ? "enable_skill" : "disable_skill";
       const results = await Promise.allSettled(
-        targetToolIds.map((toolId) => invoke(command, { instanceId: skill.instance_id, toolId })),
+        targetToolIds.map((toolId, index) => invoke<SkillOperationReport>(command, {
+          instanceId: skill.instance_id,
+          toolId,
+          confirmShared: previews[index].requires_confirmation,
+        })),
       );
 
-      const failedCount = results.filter((result) => result.status === "rejected").length;
-      const changedCount = targetToolIds.length - failedCount;
+      const reports = results
+        .filter((result): result is PromiseFulfilledResult<SkillOperationReport> => result.status === "fulfilled")
+        .map((result) => result.value);
+      const mergedReport = mergeSkillOperationReports(reports);
+      if (mergedReport) {
+        setLastOperationReport(mergedReport);
+      }
+      const failedCount = results.filter((result) => result.status === "rejected").length
+        + (mergedReport?.failed_count ?? 0);
+      const changedCount = mergedReport?.applied_count ?? 0;
 
       if (changedCount > 0) {
         const successMessage = enabled ? t("skills.bulkEnableSuccess") : t("skills.bulkDisableSuccess");
@@ -1520,7 +1558,7 @@ export function Skills() {
     } finally {
       setBulkTogglingSkillId(null);
     }
-  }, [addToast, reloadData, t, tools]);
+  }, [addToast, confirmSharedPreviews, reloadData, t, tools]);
 
   const formatTranslationError = useCallback(
     (err: unknown): string => {
@@ -1722,16 +1760,44 @@ export function Skills() {
         description: skillDescription || null,
       });
 
-      // 创建后按选择启用到目标工具
-      for (const toolId of targetToolIds) {
-        try {
-          await invoke("enable_skill", { instanceId: newSkill.instance_id, toolId });
-        } catch (err) {
-          addToast(
-            t("skills.enableFailed").replace("{tool}", getToolDisplayName(toolId, tools)),
-            "error",
-          );
+      try {
+        // Preview every destination before enabling the newly created skill.
+        const previews = await Promise.all(targetToolIds.map((toolId) => (
+          invoke<SkillOperationPreview>("preview_skill_operation", {
+            projectId: newSkill.project_id ?? null,
+            skillInstanceId: newSkill.instance_id,
+            providerId: toolId,
+            enabled: true,
+          })
+        )));
+        if (await confirmSharedPreviews(previews) !== null) {
+          const reports: SkillOperationReport[] = [];
+          for (const [index, toolId] of targetToolIds.entries()) {
+            try {
+              const report = await invoke<SkillOperationReport>("enable_skill", {
+                instanceId: newSkill.instance_id,
+                toolId,
+                confirmShared: previews[index].requires_confirmation,
+              });
+              reports.push(report);
+              if (report.failed_count > 0) {
+                throw new Error(report.failures[0]?.message || t("skills.toggleFailed"));
+              }
+            } catch (err) {
+              addToast(
+                t("skills.enableFailed").replace("{tool}", getToolDisplayName(toolId, tools)),
+                "error",
+              );
+            }
+          }
+          const mergedReport = mergeSkillOperationReports(reports);
+          if (mergedReport) {
+            setLastOperationReport(mergedReport);
+          }
         }
+      } catch (err) {
+        // Creation succeeded even if activation preview is unavailable.
+        addToast(err instanceof Error ? err.message : String(err), "error");
       }
 
       // 创建后按输入设置标签
@@ -2568,7 +2634,11 @@ export function Skills() {
         tool_ids: toolIdsForAction,
         action,
       };
-      const response = await invoke<BatchSetSkillToolsResponse>("batch_set_skill_tools", { request });
+      const confirmShared = await previewBatchToolAction(request);
+      if (confirmShared === null) {
+        return;
+      }
+      const response = await invoke<BatchSetSkillToolsResponse>("batch_set_skill_tools", { request, confirmShared });
       setLastOperationReport(response.report);
 
       if (response.applied_count > 0) {
@@ -2590,7 +2660,7 @@ export function Skills() {
     } finally {
       setBatchSubmitting(false);
     }
-  }, [addToast, exitBatchManageMode, reloadData, selectedBatchItems, t]);
+  }, [addToast, exitBatchManageMode, previewBatchToolAction, reloadData, selectedBatchItems, t]);
 
   const handleBatchToolToggle = useCallback(async (toolId: string, enabled: boolean) => {
     const confirmKey = enabled ? "skills.batchConfirmEnableSelectedTools" : "skills.batchConfirmDisableSelectedTools";
@@ -2971,7 +3041,11 @@ export function Skills() {
     const toggleKey = `${groupItem.id}:${toolId}`;
     setTogglingGroupToolKey(toggleKey);
     try {
-      const response = await invoke<BatchSetSkillToolsResponse>("batch_set_skill_tools", { request });
+      const confirmShared = await previewBatchToolAction(request);
+      if (confirmShared === null) {
+        return;
+      }
+      const response = await invoke<BatchSetSkillToolsResponse>("batch_set_skill_tools", { request, confirmShared });
       setLastOperationReport(response.report);
 
       if (response.applied_count > 0) {
@@ -2993,7 +3067,7 @@ export function Skills() {
     } finally {
       setTogglingGroupToolKey(null);
     }
-  }, [addToast, reloadData, t, tools]);
+  }, [addToast, previewBatchToolAction, reloadData, t, tools]);
 
   const handleGroupBulkToggle = useCallback(async (groupItem: UnifiedSkillListItem, visibleToolIds: string[]) => {
     const skillPackage = groupItem.skillPackage;
@@ -3021,7 +3095,14 @@ export function Skills() {
 
     setBulkTogglingGroupId(groupItem.id);
     try {
-      const response = await invoke<BatchSetSkillToolsResponse>("batch_set_skill_tools", { request: plan.request });
+      const confirmShared = await previewBatchToolAction(plan.request);
+      if (confirmShared === null) {
+        return;
+      }
+      const response = await invoke<BatchSetSkillToolsResponse>("batch_set_skill_tools", {
+        request: plan.request,
+        confirmShared,
+      });
       setLastOperationReport(response.report);
 
       if (response.applied_count > 0) {
@@ -3040,7 +3121,7 @@ export function Skills() {
     } finally {
       setBulkTogglingGroupId(null);
     }
-  }, [addToast, reloadData, t, tools]);
+  }, [addToast, previewBatchToolAction, reloadData, t, tools]);
 
   const handleDeleteGroup = useCallback(async (groupItem: UnifiedSkillListItem) => {
     const skillPackage = groupItem.skillPackage;

@@ -112,6 +112,10 @@ pub struct SkillOperationPreview {
     pub provider_id: String,
     pub scope: SkillScope,
     pub action: SkillOperationAction,
+    /// The requested provider's direct skill binding root. Impacts may also
+    /// include the same provider at other roots through indirect dependencies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_root: Option<PathBuf>,
     pub impacts: Vec<SkillBindingImpact>,
     pub requires_confirmation: bool,
     pub warning: Option<String>,

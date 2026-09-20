@@ -22,7 +22,9 @@ use crate::services::{
 };
 
 const STORE_FILE_NAME: &str = "skill-sets.json";
-const STORE_SCHEMA_VERSION: u32 = 1;
+// v3 adds AND-matched tag arrays. Older managers must reject this store rather
+// than reinterpret its display label as a single work scope.
+const STORE_SCHEMA_VERSION: u32 = 3;
 
 pub struct SkillSetService;
 
@@ -39,6 +41,38 @@ impl SkillSetService {
             .duration_since(UNIX_EPOCH)
             .map(|value| value.as_secs() as i64)
             .unwrap_or(0)
+    }
+
+    fn normalize_scope_tags(tags: &[String]) -> Vec<String> {
+        let mut normalized = Vec::new();
+        for tag in tags {
+            let tag = tag.trim();
+            if !tag.is_empty() && !normalized.iter().any(|existing| existing == tag) {
+                normalized.push(tag.to_string());
+            }
+        }
+        normalized
+    }
+
+    fn scope_tags(work_scope: &str, explicit_tags: Option<&[String]>) -> Vec<String> {
+        match explicit_tags {
+            Some(tags) => Self::normalize_scope_tags(tags),
+            None => Self::normalize_scope_tags(&[work_scope.to_string()]),
+        }
+    }
+
+    fn overlay_matches(assignment: &SkillSetAssignment, requested_tags: &[String]) -> bool {
+        // A historical empty scalar was invalid, so it must never become a
+        // catch-all assignment just because empty explicit arrays now are valid.
+        if assignment.work_scope_tags.is_none() && assignment.work_scope.trim().is_empty() {
+            return false;
+        }
+        Self::scope_tags(
+            &assignment.work_scope,
+            assignment.work_scope_tags.as_deref(),
+        )
+        .iter()
+        .all(|tag| requested_tags.contains(tag))
     }
 
     fn normalize_members(
@@ -158,15 +192,23 @@ impl SkillSetService {
             .map_err(|error| format!("Failed to read skill set store: {error}"))?;
         let mut store: SkillSetStore = serde_json::from_str(&contents)
             .map_err(|error| format!("Failed to parse skill set store: {error}"))?;
-        if store.schema_version == 0 {
-            store.schema_version = STORE_SCHEMA_VERSION;
+        if store.schema_version <= 1 {
+            // In v0/v1, `recommended` meant an active scope overlay. Preserve
+            // that behavior under its explicit v2 name. Read-only loads never
+            // rewrite the file; the next ordinary mutation persists the migration.
+            for assignment in &mut store.assignments {
+                if assignment.role == SkillSetAssignmentRole::Recommended {
+                    assignment.role = SkillSetAssignmentRole::WorkScopeOverlay;
+                }
+            }
         }
-        if store.schema_version != STORE_SCHEMA_VERSION {
+        if store.schema_version > STORE_SCHEMA_VERSION {
             return Err(format!(
                 "Unsupported skill set store schema: {}",
                 store.schema_version
             ));
         }
+        store.schema_version = STORE_SCHEMA_VERSION;
         Ok(store)
     }
 
@@ -326,14 +368,18 @@ impl SkillSetService {
     }
 
     pub fn assign_release(request: AssignSkillSetReleaseRequest) -> Result<SkillSetStore, String> {
-        let work_scope = request.work_scope.trim().to_string();
-        if work_scope.is_empty() && request.role == SkillSetAssignmentRole::Recommended {
+        if request.work_scope_tags.is_none()
+            && request.work_scope.trim().is_empty()
+            && request.role == SkillSetAssignmentRole::WorkScopeOverlay
+        {
             return Err("Work scope is required".to_string());
         }
-        let work_scope = if work_scope.is_empty() {
+        let work_scope_tags =
+            Self::scope_tags(&request.work_scope, request.work_scope_tags.as_deref());
+        let work_scope = if work_scope_tags.is_empty() {
             "default".to_string()
         } else {
-            work_scope
+            work_scope_tags.join(", ")
         };
         let mut store = Self::load()?;
         if !store
@@ -362,6 +408,7 @@ impl SkillSetService {
                 .project_id
                 .filter(|project_id| !project_id.trim().is_empty()),
             work_scope,
+            work_scope_tags: Some(work_scope_tags),
             role: request.role,
             provider_ids,
             priority: request.priority,
@@ -419,10 +466,12 @@ impl SkillSetService {
     pub fn resolve_effective_set(
         request: ResolveEffectiveSkillSetRequest,
     ) -> Result<EffectiveSkillSet, String> {
-        let work_scope = request.work_scope.trim().to_string();
-        if work_scope.is_empty() {
+        if request.work_scope_tags.is_none() && request.work_scope.trim().is_empty() {
             return Err("Work scope is required to resolve an effective skill set".to_string());
         }
+        let work_scope_tags =
+            Self::scope_tags(&request.work_scope, request.work_scope_tags.as_deref());
+        let work_scope = work_scope_tags.join(", ");
         let project_id = request.project_id.filter(|value| !value.trim().is_empty());
         let store = Self::load()?;
         let mut assignments = store
@@ -431,7 +480,8 @@ impl SkillSetService {
             .filter(|assignment| {
                 assignment.active
                     && (assignment.role == SkillSetAssignmentRole::Default
-                        || assignment.work_scope == work_scope)
+                        || (assignment.role == SkillSetAssignmentRole::WorkScopeOverlay
+                            && Self::overlay_matches(assignment, &work_scope_tags)))
                     && (assignment.project_id.is_none() || assignment.project_id == project_id)
             })
             .collect::<Vec<_>>();
@@ -485,6 +535,7 @@ impl SkillSetService {
         Ok(EffectiveSkillSet {
             project_id,
             work_scope,
+            work_scope_tags,
             assignment_ids: assignments
                 .into_iter()
                 .map(|assignment| assignment.id.clone())
@@ -505,6 +556,15 @@ impl SkillSetService {
             .ok_or_else(|| format!("Skill set assignment not found: {assignment_id}"))?;
         if !assignment.active {
             return Err("Activate the assignment before generating an activation plan".to_string());
+        }
+        if assignment.role == SkillSetAssignmentRole::Recommended {
+            return Err("Recommended releases are candidates only; assign this release as a default or work-scope overlay before activation".to_string());
+        }
+        if assignment.role == SkillSetAssignmentRole::WorkScopeOverlay
+            && assignment.work_scope_tags.is_none()
+            && assignment.work_scope.trim().is_empty()
+        {
+            return Err("Work scope is required for this legacy overlay; assign the release with explicit work_scope_tags to choose its scope".to_string());
         }
         if assignment.provider_ids.is_empty() {
             return Err(
@@ -582,6 +642,10 @@ impl SkillSetService {
             release_id: release.id.clone(),
             project_id: assignment.project_id.clone(),
             work_scope: assignment.work_scope.clone(),
+            work_scope_tags: Self::scope_tags(
+                &assignment.work_scope,
+                assignment.work_scope_tags.as_deref(),
+            ),
             operations,
             missing_skill_ids,
             requires_shared_root_confirmation,
@@ -603,6 +667,7 @@ impl SkillSetService {
             release_id: plan.release_id,
             project_id: plan.project_id,
             work_scope: plan.work_scope,
+            work_scope_tags: plan.work_scope_tags,
             compliant: disabled_operations.is_empty() && plan.missing_skill_ids.is_empty(),
             disabled_operations,
             missing_skill_ids: plan.missing_skill_ids,
@@ -648,11 +713,12 @@ impl SkillSetService {
                 outcome.skipped_count += 1;
                 continue;
             }
-            match SkillControlService::set_skill_enabled_for_scope(
+            match SkillControlService::set_skill_enabled_for_scope_with_confirmation(
                 plan.project_id.as_deref(),
                 &operation.skill_instance_id,
                 &operation.tool_id,
                 true,
+                confirm_shared_root,
             ) {
                 Ok(report) if report.failed_count == 0 => {
                     result.applied_count += report.applied_count;
@@ -695,6 +761,319 @@ mod tests {
     use crate::models::{AppConfig, ProjectBinding};
     use crate::test_support::with_temp_home;
     use std::collections::HashMap;
+
+    fn write_assignment_fixture(schema_version: u32, role: Option<&str>, active: bool) -> String {
+        let mut assignment = serde_json::json!({
+            "id": "fixture-assignment", "release_id": "fixture-release", "work_scope": "integration",
+            "provider_ids": ["codex"], "priority": 10, "active": active,
+            "created_at": 1, "updated_at": 1
+        });
+        if let Some(role) = role {
+            assignment["role"] = serde_json::json!(role);
+        }
+        let contents = serde_json::to_string(&serde_json::json!({
+            "schema_version": schema_version,
+            "releases": [{
+                "id": "fixture-release", "blueprint_id": "fixture-blueprint", "blueprint_name": "Fixture",
+                "content_digest": "fixture-digest", "members": [{"skill_id": "fixture-skill"}], "created_at": 1
+            }],
+            "assignments": [assignment]
+        })).unwrap();
+        let path = SkillSetService::store_path();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, &contents).unwrap();
+        contents
+    }
+
+    #[test]
+    fn legacy_recommendations_migrate_to_overlays_without_a_read_side_effect() {
+        with_temp_home(|_| {
+            for version in [0, 1] {
+                for role in [None, Some("recommended")] {
+                    for active in [false, true] {
+                        let original = write_assignment_fixture(version, role, active);
+                        let catalog = SkillSetService::catalog().unwrap();
+                        assert_eq!(catalog.schema_version, 3);
+                        assert_eq!(
+                            catalog.assignments[0].role,
+                            SkillSetAssignmentRole::WorkScopeOverlay
+                        );
+                        assert_eq!(catalog.assignments[0].active, active);
+                        let effective = SkillSetService::resolve_effective_set(
+                            ResolveEffectiveSkillSetRequest {
+                                project_id: None,
+                                work_scope: "integration".to_string(),
+                                work_scope_tags: None,
+                            },
+                        )
+                        .unwrap();
+                        assert_eq!(effective.assignment_ids.len(), usize::from(active));
+                        assert_eq!(
+                            fs::read_to_string(SkillSetService::store_path()).unwrap(),
+                            original
+                        );
+
+                        SkillSetService::set_assignment_priority(
+                            SetSkillSetAssignmentPriorityRequest {
+                                assignment_id: "fixture-assignment".to_string(),
+                                priority: 11,
+                            },
+                        )
+                        .unwrap();
+                        let persisted: SkillSetStore = serde_json::from_str(
+                            &fs::read_to_string(SkillSetService::store_path()).unwrap(),
+                        )
+                        .unwrap();
+                        assert_eq!(persisted.schema_version, 3);
+                        assert_eq!(
+                            persisted.assignments[0].role,
+                            SkillSetAssignmentRole::WorkScopeOverlay
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn recommendations_remain_candidates_even_with_matching_scope_and_active_flag() {
+        with_temp_home(|_| {
+            write_assignment_fixture(2, Some("recommended"), true);
+            let effective =
+                SkillSetService::resolve_effective_set(ResolveEffectiveSkillSetRequest {
+                    project_id: None,
+                    work_scope: "integration".to_string(),
+                    work_scope_tags: None,
+                })
+                .unwrap();
+            assert!(effective.assignment_ids.is_empty());
+            assert!(effective.members.is_empty());
+            assert!(SkillSetService::preview_activation("fixture-assignment")
+                .unwrap_err()
+                .contains("candidates only"));
+            assert!(
+                SkillSetService::apply_activation("fixture-assignment", true)
+                    .unwrap_err()
+                    .contains("candidates only")
+            );
+
+            let candidate = SkillSetService::assign_release(AssignSkillSetReleaseRequest {
+                release_id: "fixture-release".to_string(),
+                project_id: None,
+                work_scope: String::new(),
+                work_scope_tags: None,
+                role: SkillSetAssignmentRole::Recommended,
+                provider_ids: vec![],
+                priority: 100,
+            })
+            .unwrap();
+            assert_eq!(
+                candidate.assignments.last().unwrap().role,
+                SkillSetAssignmentRole::Recommended
+            );
+            assert!(
+                SkillSetService::assign_release(AssignSkillSetReleaseRequest {
+                    release_id: "fixture-release".to_string(),
+                    project_id: None,
+                    work_scope: String::new(),
+                    work_scope_tags: None,
+                    role: SkillSetAssignmentRole::WorkScopeOverlay,
+                    provider_ids: vec![],
+                    priority: 100,
+                })
+                .unwrap_err()
+                .contains("Work scope is required")
+            );
+        });
+    }
+
+    #[test]
+    fn shared_release_activation_forwards_confirmation_and_allows_unchanged_reapply() {
+        with_temp_home(|home| {
+            let repository = home.join("release-project");
+            let source = repository.join("skills").join("fixture-skill");
+            fs::create_dir_all(&source).unwrap();
+            fs::write(source.join("SKILL.md"), "---\nname: fixture-skill\n---\n").unwrap();
+            let mut config = AppConfig::default();
+            config.initialized = true;
+            for (id, directory) in [("codex", ".codex"), ("vercel-skills", ".agents")] {
+                config.tools.insert(
+                    id.to_string(),
+                    crate::models::ToolConfig {
+                        enabled: true,
+                        detected: true,
+                        skills_path: home.join(directory).join("skills"),
+                        config_path: home.join(directory),
+                    },
+                );
+            }
+            config.projects.push(ProjectBinding {
+                id: "release-project".to_string(),
+                name: "Release project".to_string(),
+                skills_dir: repository.join("skills"),
+                root_path: Some(repository.clone()),
+            });
+            ConfigManager::new().save(&config).unwrap();
+            let contents = write_assignment_fixture(2, Some("work_scope_overlay"), true);
+            let mut fixture: serde_json::Value = serde_json::from_str(&contents).unwrap();
+            fixture["assignments"][0]["project_id"] = serde_json::json!("release-project");
+            fs::write(
+                SkillSetService::store_path(),
+                serde_json::to_vec(&fixture).unwrap(),
+            )
+            .unwrap();
+
+            let preview = SkillSetService::preview_activation("fixture-assignment").unwrap();
+            assert!(preview.requires_shared_root_confirmation);
+            assert!(preview
+                .shared_impacts
+                .iter()
+                .any(|impact| impact.provider_id == "vercel-skills"));
+            let target = repository
+                .join(".agents")
+                .join("skills")
+                .join("fixture-skill");
+            assert!(SkillSetService::apply_activation("fixture-assignment", false).is_err());
+            assert!(!target.exists());
+            let applied = SkillSetService::apply_activation("fixture-assignment", true).unwrap();
+            assert_eq!(applied.applied_count, 1);
+            assert_eq!(applied.failed_count, 0);
+            assert!(target.exists());
+            let unchanged = SkillSetService::apply_activation("fixture-assignment", false).unwrap();
+            assert_eq!(unchanged.skipped_count, 1);
+            assert_eq!(unchanged.failed_count, 0);
+            assert!(!unchanged.plan.requires_shared_root_confirmation);
+        });
+    }
+
+    #[test]
+    fn scope_tags_match_all_conditions_and_legacy_scalars_remain_singletons() {
+        with_temp_home(|_| {
+            let original = write_assignment_fixture(2, Some("work_scope_overlay"), true);
+            let legacy_catalog = SkillSetService::catalog().unwrap();
+            assert_eq!(legacy_catalog.schema_version, 3);
+            assert_eq!(legacy_catalog.assignments[0].work_scope_tags, None);
+            assert_eq!(
+                fs::read_to_string(SkillSetService::store_path()).unwrap(),
+                original
+            );
+
+            // Array-only requests are accepted. An explicit array wins over an
+            // accompanying scalar and is normalized without changing tag case.
+            let request: AssignSkillSetReleaseRequest = serde_json::from_value(serde_json::json!({
+                "release_id": "fixture-release", "role": "work_scope_overlay",
+                "work_scope": "ignored", "work_scope_tags": [" integration ", "audit", "audit", ""]
+            }))
+            .unwrap();
+            let catalog = SkillSetService::assign_release(request).unwrap();
+            let tagged = catalog.assignments.last().unwrap();
+            assert_eq!(
+                tagged.work_scope_tags,
+                Some(vec!["integration".into(), "audit".into()])
+            );
+            assert_eq!(tagged.work_scope, "integration, audit");
+            let tagged_id = tagged.id.clone();
+
+            for (tags, expected_count) in [
+                (vec!["audit"], 0),
+                (vec!["integration"], 1),
+                (vec!["integration", "audit", "extra"], 2),
+                (vec!["Integration", "audit"], 0),
+            ] {
+                let request: ResolveEffectiveSkillSetRequest =
+                    serde_json::from_value(serde_json::json!({"work_scope_tags": tags})).unwrap();
+                let effective = SkillSetService::resolve_effective_set(request).unwrap();
+                assert_eq!(effective.assignment_ids.len(), expected_count);
+                assert_eq!(
+                    effective.assignment_ids.contains(&tagged_id),
+                    expected_count == 2
+                );
+            }
+
+            let scalar: ResolveEffectiveSkillSetRequest =
+                serde_json::from_value(serde_json::json!({"work_scope": "integration"})).unwrap();
+            assert_eq!(
+                SkillSetService::resolve_effective_set(scalar)
+                    .unwrap()
+                    .assignment_ids,
+                vec!["fixture-assignment"]
+            );
+
+            // Existing scalar callers with punctuation keep one exact tag; the
+            // API never silently converts their scope into CSV conditions.
+            let scalar: AssignSkillSetReleaseRequest = serde_json::from_value(serde_json::json!({
+                "release_id": "fixture-release", "role": "work_scope_overlay", "work_scope": "integration,audit"
+            })).unwrap();
+            let stored = SkillSetService::assign_release(scalar).unwrap();
+            let scalar_id = stored.assignments.last().unwrap().id.clone();
+            let request: ResolveEffectiveSkillSetRequest =
+                serde_json::from_value(serde_json::json!({"work_scope": "integration,audit"}))
+                    .unwrap();
+            let effective = SkillSetService::resolve_effective_set(request).unwrap();
+            assert_eq!(effective.assignment_ids, vec![scalar_id]);
+            assert_eq!(effective.work_scope_tags, vec!["integration,audit"]);
+        });
+    }
+
+    #[test]
+    fn explicit_empty_scope_overlay_matches_all_but_legacy_empty_scope_does_not() {
+        with_temp_home(|_| {
+            write_assignment_fixture(2, Some("work_scope_overlay"), true);
+            let path = SkillSetService::store_path();
+            let mut fixture: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            fixture["assignments"][0]["work_scope"] = serde_json::json!("");
+            fs::write(&path, serde_json::to_string(&fixture).unwrap()).unwrap();
+            assert!(SkillSetService::preview_activation("fixture-assignment")
+                .unwrap_err()
+                .contains("Work scope is required for this legacy overlay"));
+            let mut expected = Vec::new();
+            for (role, tags) in [
+                ("work_scope_overlay", vec![]),
+                ("default", vec!["another-context"]),
+                ("recommended", vec![]),
+            ] {
+                let request: AssignSkillSetReleaseRequest =
+                    serde_json::from_value(serde_json::json!({
+                        "release_id": "fixture-release", "role": role, "work_scope_tags": tags
+                    }))
+                    .unwrap();
+                let catalog = SkillSetService::assign_release(request).unwrap();
+                if role != "recommended" {
+                    expected.push(catalog.assignments.last().unwrap().id.clone());
+                }
+            }
+            expected.sort();
+            for tags in [vec![], vec!["unrelated"]] {
+                let request: ResolveEffectiveSkillSetRequest =
+                    serde_json::from_value(serde_json::json!({"work_scope_tags": tags})).unwrap();
+                let mut actual = SkillSetService::resolve_effective_set(request)
+                    .unwrap()
+                    .assignment_ids;
+                actual.sort();
+                assert_eq!(actual, expected);
+            }
+            let legacy_blank: ResolveEffectiveSkillSetRequest =
+                serde_json::from_value(serde_json::json!({"work_scope": ""})).unwrap();
+            assert!(SkillSetService::resolve_effective_set(legacy_blank)
+                .unwrap_err()
+                .contains("Work scope is required"));
+        });
+    }
+
+    #[test]
+    fn future_store_schema_is_rejected_without_rewriting_it() {
+        with_temp_home(|_| {
+            let original = write_assignment_fixture(4, Some("recommended"), true);
+            assert!(SkillSetService::catalog()
+                .unwrap_err()
+                .contains("Unsupported skill set store schema: 4"));
+            assert_eq!(
+                fs::read_to_string(SkillSetService::store_path()).unwrap(),
+                original
+            );
+        });
+    }
 
     #[test]
     fn release_is_immutable_snapshot_of_blueprint_members() {
@@ -845,6 +1224,7 @@ evaluation:
                 release_id: store.releases[0].id.clone(),
                 project_id: Some("project-a".to_string()),
                 work_scope: "code-review".to_string(),
+                work_scope_tags: None,
                 role: SkillSetAssignmentRole::Recommended,
                 provider_ids: vec!["codex".to_string(), "codex".to_string()],
                 priority: 0,
@@ -941,6 +1321,7 @@ evaluation:
                 release_id: global_release_id.clone(),
                 project_id: None,
                 work_scope: "integration".to_string(),
+                work_scope_tags: None,
                 role: SkillSetAssignmentRole::Default,
                 provider_ids: vec![],
                 priority: 0,
@@ -950,7 +1331,8 @@ evaluation:
                 release_id: project_release_id.clone(),
                 project_id: Some("project-a".to_string()),
                 work_scope: "integration".to_string(),
-                role: SkillSetAssignmentRole::Recommended,
+                work_scope_tags: None,
+                role: SkillSetAssignmentRole::WorkScopeOverlay,
                 provider_ids: vec![],
                 priority: 10,
             })
@@ -960,6 +1342,7 @@ evaluation:
                 SkillSetService::resolve_effective_set(ResolveEffectiveSkillSetRequest {
                     project_id: Some("project-a".to_string()),
                     work_scope: "integration".to_string(),
+                    work_scope_tags: None,
                 })
                 .unwrap();
             assert_eq!(effective.assignment_ids.len(), 2);
@@ -984,6 +1367,7 @@ evaluation:
                 SkillSetService::resolve_effective_set(ResolveEffectiveSkillSetRequest {
                     project_id: Some("project-a".to_string()),
                     work_scope: "deployment".to_string(),
+                    work_scope_tags: None,
                 })
                 .unwrap();
             assert_eq!(baseline.release_ids, vec![global_release_id]);
