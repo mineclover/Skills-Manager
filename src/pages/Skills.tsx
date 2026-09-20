@@ -2637,27 +2637,14 @@ export function Skills() {
       return;
     }
 
-    try {
-      const nextProject = buildProjectBindingFromRootPath(
-        pendingProjectBinding.root_path ?? pendingProjectBinding.skills_dir,
-        pendingProjectBinding.name,
-      );
-      const existingProjects = config.projects ?? [];
-      if (hasProjectRootConflict(existingProjects, nextProject)) {
-        addToast(t("settings.projectAlreadyAdded").replace("{name}", nextProject.name), "error");
-        return;
-      }
-
-      const nextConfig: AppConfig = {
-        ...config,
-        projects: [...existingProjects, nextProject],
-        active_project_id: resolveNextActiveProjectIdAfterAddition(
-          config.active_project_id,
-          existingProjects,
-          nextProject,
-        ),
-      };
-      await saveProjectBindingsConfig(nextConfig);
+    const nextConfig = await runProjectBindingCommand(() => invoke<AppConfig>(
+      "register_project_binding",
+      {
+        path: pendingProjectBinding.root_path ?? pendingProjectBinding.skills_dir,
+        name: pendingProjectBinding.name,
+      },
+    ));
+    if (nextConfig) {
       setPendingProjectBinding(null);
       addToast(t("settings.projectAdded").replace("{name}", pendingProjectBinding.name), "success");
     }
