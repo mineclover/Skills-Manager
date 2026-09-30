@@ -75,7 +75,9 @@ impl DetectorService {
                 }
             }
 
-            (config_dir.clone(), config_dir.join("skills"))
+            let skills_path =
+                ConfigManager::default_tool_skills_path(definition, &home_dir, &config_dir);
+            (config_dir, skills_path)
         };
 
         let dir_exists = config_path.exists();

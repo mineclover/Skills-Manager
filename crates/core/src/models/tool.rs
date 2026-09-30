@@ -55,11 +55,29 @@ impl ToolDefinition {
     pub fn project_skills_dir(&self) -> Option<&'static str> {
         match self.id {
             "claude-code" => Some(".claude/skills"),
-            "codex" | "vercel-skills" => Some(".agents/skills"),
+            // Codex and Antigravity keep settings outside `.agents`, but both hosts
+            // discover workspace Skills from the shared `.agents/skills` root.
+            "codex" | "antigravity" | "vercel-skills" => Some(".agents/skills"),
             "opencode" => Some(".opencode/skills"),
             "cursor" => Some(".cursor/skills"),
             "gemini" => Some(".gemini/skills"),
             "deepseek-harness" => Some(".dsh/skills"),
+            _ => None,
+        }
+    }
+
+    /// Home-relative user-scope Skills root for hosts that document one which is not
+    /// `<config_dir>/skills`. `None` keeps the `<config_dir>/skills` convention.
+    ///
+    /// Codex is intentionally absent. It discovers `~/.agents/skills` (documented) and
+    /// still loads the deprecated `$CODEX_HOME/skills`; moving the default would strand
+    /// direct installs, managed links and `config.toml` plugin state in `~/.codex/skills`.
+    pub fn global_skills_dir(&self) -> Option<&'static str> {
+        match self.id {
+            // https://antigravity.google/docs/skills documents `~/.gemini/config/skills`.
+            // `~/.antigravity` is the IDE user-data directory (extensions, argv.json);
+            // it is kept as `config_dir` so detection does not change.
+            "antigravity" => Some(".gemini/config/skills"),
             _ => None,
         }
     }
@@ -419,6 +437,49 @@ mod tests {
         assert_eq!(roo_code.config_dir, ".roo");
         assert_eq!(zencoder.config_dir, ".zencoder");
         assert_eq!(pi.config_dir, ".pi/agent");
+    }
+
+    #[test]
+    fn antigravity_uses_documented_skill_roots_and_keeps_ide_config_dir() {
+        let antigravity = SUPPORTED_TOOLS
+            .iter()
+            .find(|tool| tool.id == "antigravity")
+            .expect("antigravity should exist in supported tools");
+
+        assert_eq!(antigravity.config_dir, ".antigravity");
+        assert_eq!(
+            antigravity.global_skills_dir(),
+            Some(".gemini/config/skills")
+        );
+        assert_eq!(antigravity.project_skills_dir(), Some(".agents/skills"));
+    }
+
+    #[test]
+    fn codex_global_root_stays_on_its_config_dir_by_design() {
+        let codex = SUPPORTED_TOOLS
+            .iter()
+            .find(|tool| tool.id == "codex")
+            .expect("codex should exist in supported tools");
+
+        // Project Skills use the documented shared root; the global default keeps
+        // the legacy `~/.codex/skills` until a migration covers existing installs.
+        assert_eq!(codex.config_dir, ".codex");
+        assert_eq!(codex.global_skills_dir(), None);
+        assert_eq!(codex.project_skills_dir(), Some(".agents/skills"));
+    }
+
+    #[test]
+    fn global_skills_dir_overrides_are_home_relative_skills_directories() {
+        for tool in SUPPORTED_TOOLS {
+            if let Some(relative) = tool.global_skills_dir() {
+                assert!(!relative.starts_with('/'), "{} must be relative", tool.id);
+                assert!(
+                    relative.ends_with("/skills"),
+                    "{} must end in skills",
+                    tool.id
+                );
+            }
+        }
     }
 
     #[test]

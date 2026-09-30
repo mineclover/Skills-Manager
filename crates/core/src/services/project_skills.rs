@@ -96,6 +96,10 @@ mod tests {
             PathBuf::from("/work/alpha/.agents/skills")
         );
         assert_eq!(
+            project_tool_skills_dir(&project(), "antigravity").unwrap(),
+            PathBuf::from("/work/alpha/.agents/skills")
+        );
+        assert_eq!(
             project_tool_skills_dir(&project(), "opencode").unwrap(),
             PathBuf::from("/work/alpha/.opencode/skills")
         );

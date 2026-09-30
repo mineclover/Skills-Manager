@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::models::{
     builtin_skill_activation_presets, home_dir, AppConfig, ProjectBinding, SkillMetadata,
-    SourceType, ToolConfig, SUPPORTED_TOOLS,
+    SourceType, ToolConfig, ToolDefinition, SUPPORTED_TOOLS,
 };
 #[cfg(windows)]
 use crate::services::linker::LinkerService;
@@ -16,6 +16,19 @@ pub struct ConfigManager {
 }
 
 impl ConfigManager {
+    /// Default user-scope Skills directory for a built-in tool: the host-documented
+    /// override when the definition has one, otherwise `<config_path>/skills`.
+    pub(crate) fn default_tool_skills_path(
+        definition: &ToolDefinition,
+        home_dir: &Path,
+        config_path: &Path,
+    ) -> PathBuf {
+        match definition.global_skills_dir() {
+            Some(relative) => normalize_path(&home_dir.join(relative)),
+            None => config_path.join("skills"),
+        }
+    }
+
     fn atomic_write(path: &PathBuf, content: &str) -> Result<(), String> {
         let parent = path
             .parent()
@@ -656,6 +669,25 @@ impl ConfigManager {
             }
         }
 
+        // Migrate legacy default Skills roots that the host never discovered. Only the
+        // Skills path moves: `config_path` keeps driving detection. Files already placed
+        // under the old root are left in place; they were never visible to the host.
+        for (tool_id, old_config_dir, old_skills_dir, new_skills_dir) in [(
+            "antigravity",
+            ".antigravity",
+            ".antigravity/skills",
+            ".gemini/config/skills",
+        )] {
+            if let Some(tool_config) = config.tools.get_mut(tool_id) {
+                if tool_config.config_path == normalize_path(&home_dir.join(old_config_dir))
+                    && tool_config.skills_path == normalize_path(&home_dir.join(old_skills_dir))
+                {
+                    tool_config.skills_path = normalize_path(&home_dir.join(new_skills_dir));
+                    updated = true;
+                }
+            }
+        }
+
         // Auto-add newly supported tools that aren't in the config yet
         for tool_def in SUPPORTED_TOOLS {
             if !config.tools.contains_key(tool_def.id) {
@@ -664,7 +696,7 @@ impl ConfigManager {
                 let tool_config = ToolConfig {
                     enabled: detected,
                     detected,
-                    skills_path: tool_dir.join("skills"),
+                    skills_path: Self::default_tool_skills_path(tool_def, &home_dir, &tool_dir),
                     config_path: tool_dir,
                 };
                 config.tools.insert(tool_def.id.to_string(), tool_config);
@@ -709,7 +741,7 @@ impl ConfigManager {
             let tool_config = ToolConfig {
                 enabled: detected, // Enable by default if detected
                 detected,
-                skills_path: tool_dir.join("skills"),
+                skills_path: Self::default_tool_skills_path(tool_def, &home_dir, &tool_dir),
                 config_path: tool_dir,
             };
             config.tools.insert(tool_def.id.to_string(), tool_config);
@@ -787,6 +819,132 @@ mod tests {
                 vercel_skills.skills_path,
                 home_dir.join(".agents").join("skills")
             );
+        });
+    }
+
+    fn write_tools_config(home_dir: &std::path::Path, tools: serde_json::Value) {
+        let config_dir = home_dir.join(".skills-manager");
+        fs::create_dir_all(&config_dir).expect("create config dir");
+        let config_json = json!({
+            "version": "2.1.8",
+            "skills_dir": config_dir.join("skills").to_string_lossy(),
+            "tools": tools,
+            "custom_tools": {},
+            "initialized": true
+        });
+        fs::write(
+            config_dir.join("config.json"),
+            serde_json::to_string_pretty(&config_json).expect("serialize config"),
+        )
+        .expect("write config");
+    }
+
+    #[test]
+    fn load_migrates_legacy_antigravity_default_skills_root() {
+        with_temp_home(|home_dir| {
+            let legacy_config = home_dir.join(".antigravity");
+            write_tools_config(
+                home_dir,
+                json!({
+                    "antigravity": {
+                        "enabled": true,
+                        "detected": true,
+                        "skills_path": legacy_config.join("skills").to_string_lossy(),
+                        "config_path": legacy_config.to_string_lossy()
+                    }
+                }),
+            );
+
+            let loaded = ConfigManager::new().load().expect("load config");
+            let antigravity = loaded.tools.get("antigravity").expect("antigravity config");
+
+            // Detection keeps following the IDE data directory; only the Skills root moves.
+            assert_eq!(antigravity.config_path, legacy_config);
+            assert_eq!(
+                antigravity.skills_path,
+                home_dir.join(".gemini").join("config").join("skills")
+            );
+            assert!(antigravity.enabled);
+
+            // The migrated path is persisted, so the next load does not repeat it.
+            let saved: serde_json::Value = serde_json::from_str(
+                &fs::read_to_string(home_dir.join(".skills-manager").join("config.json"))
+                    .expect("read saved config"),
+            )
+            .expect("parse saved config");
+            let saved_skills_path = saved["tools"]["antigravity"]["skills_path"]
+                .as_str()
+                .expect("saved skills_path");
+            assert_eq!(
+                std::path::PathBuf::from(saved_skills_path),
+                home_dir.join(".gemini").join("config").join("skills")
+            );
+        });
+    }
+
+    #[test]
+    fn load_keeps_customized_antigravity_skills_root() {
+        with_temp_home(|home_dir| {
+            let custom_skills = home_dir.join("my-skills");
+            write_tools_config(
+                home_dir,
+                json!({
+                    "antigravity": {
+                        "enabled": true,
+                        "detected": true,
+                        "skills_path": custom_skills.to_string_lossy(),
+                        "config_path": home_dir.join(".antigravity").to_string_lossy()
+                    }
+                }),
+            );
+
+            let loaded = ConfigManager::new().load().expect("load config");
+            let antigravity = loaded.tools.get("antigravity").expect("antigravity config");
+            assert_eq!(antigravity.skills_path, custom_skills);
+        });
+    }
+
+    #[test]
+    fn load_keeps_legacy_codex_global_skills_root() {
+        with_temp_home(|home_dir| {
+            let codex_config = home_dir.join(".codex");
+            write_tools_config(
+                home_dir,
+                json!({
+                    "codex": {
+                        "enabled": true,
+                        "detected": true,
+                        "skills_path": codex_config.join("skills").to_string_lossy(),
+                        "config_path": codex_config.to_string_lossy()
+                    }
+                }),
+            );
+
+            let loaded = ConfigManager::new().load().expect("load config");
+            let codex = loaded.tools.get("codex").expect("codex config");
+            assert_eq!(codex.config_path, codex_config);
+            assert_eq!(codex.skills_path, codex_config.join("skills"));
+        });
+    }
+
+    #[test]
+    fn init_default_uses_documented_global_skills_roots() {
+        with_temp_home(|home_dir| {
+            let config = ConfigManager::new().init_default().expect("init default");
+
+            let antigravity = config.tools.get("antigravity").expect("antigravity config");
+            assert_eq!(antigravity.config_path, home_dir.join(".antigravity"));
+            assert_eq!(
+                antigravity.skills_path,
+                home_dir.join(".gemini").join("config").join("skills")
+            );
+
+            // Codex keeps the legacy global root by design; see ToolDefinition::global_skills_dir.
+            let codex = config.tools.get("codex").expect("codex config");
+            assert_eq!(codex.skills_path, home_dir.join(".codex").join("skills"));
+
+            let claude = config.tools.get("claude-code").expect("claude config");
+            assert_eq!(claude.skills_path, home_dir.join(".claude").join("skills"));
         });
     }
 

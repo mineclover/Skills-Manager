@@ -20,7 +20,7 @@ that have a `project_skills_dir` below. Other tools are global-hub only.
 | `opencode` | OpenCode | `.config/opencode` (alt `.opencode`) | `opencode` | `.opencode/skills` |
 | `cursor` | Cursor | `.cursor` | `cursor` | `.cursor/skills` |
 | `gemini` | Gemini CLI | `.gemini` | `gemini` | `.gemini/skills` |
-| `antigravity` | Antigravity | `.antigravity` | `antigravity` | — |
+| `antigravity` | Antigravity | `.antigravity` | `antigravity` | `.agents/skills` |
 | `windsurf` | Windsurf | `.windsurf` | `windsurf` | — |
 | `trae` | Trae | `.trae` | `trae` | — |
 | `droid` | Droid | `.factory` (alt `.droid`) | `droid` | — |
@@ -48,6 +48,13 @@ that have a `project_skills_dir` below. Other tools are global-hub only.
 
 Custom tools from the GUI also appear in `skm doctor --json` / `skm list`
 under whatever id the user gave them. Prefix-match those the same way.
+
+The global Skills directory is `<home config dir>/skills` except for tools whose
+host documents another user-scope root. `antigravity` keeps `.antigravity` (the
+IDE data directory) for detection, but its global Skills directory is
+`~/.gemini/config/skills`. `codex` keeps `~/.codex/skills` (the legacy root that
+Codex still loads) for global Skills, while its project Skills directory is the
+shared `.agents/skills`.
 
 ## Prefix collisions to avoid
 
