@@ -1062,6 +1062,74 @@ mod tests {
     }
 
     #[test]
+    fn antigravity_previews_target_the_catalog_delivery_roots() {
+        with_temp_home(|home| {
+            let mut config = crate::services::ConfigManager::new()
+                .init_default()
+                .expect("init default config");
+            config
+                .tools
+                .get_mut("antigravity")
+                .expect("antigravity tool")
+                .enabled = true;
+
+            // Global scope: the documented user-scope root, not ~/.antigravity/skills.
+            let source = config.skills_dir.join("agy-skill");
+            fs::create_dir_all(&source).unwrap();
+            let global_skill = Skill::new("agy-skill".to_string(), "agy-skill".to_string(), source);
+            let preview = ProviderInventoryService::preview_binding_operation_with_skills(
+                &config,
+                std::slice::from_ref(&global_skill),
+                None,
+                &global_skill.instance_id,
+                "antigravity",
+                true,
+            )
+            .unwrap();
+            assert_eq!(
+                preview.target_root,
+                Some(home.join(".gemini").join("config").join("skills"))
+            );
+
+            // Project scope: the shared .agents/skills root, not <repo>/.antigravity/skills.
+            let repository = home.join("agy-repo");
+            let project_source = repository.join("skills").join("agy-skill");
+            fs::create_dir_all(&project_source).unwrap();
+            config.projects.push(ProjectBinding {
+                id: "agy-repo".to_string(),
+                name: "agy-repo".to_string(),
+                skills_dir: repository.join("skills"),
+                root_path: Some(repository.clone()),
+            });
+            let project_skill = Skill::new(
+                "agy-skill".to_string(),
+                "agy-skill".to_string(),
+                project_source,
+            )
+            .with_scope(
+                SkillScope::Project,
+                Some("agy-repo".to_string()),
+                Some("agy-repo".to_string()),
+            );
+            let preview = ProviderInventoryService::preview_binding_operation_with_skills(
+                &config,
+                std::slice::from_ref(&project_skill),
+                Some("agy-repo"),
+                &project_skill.instance_id,
+                "antigravity",
+                true,
+            )
+            .unwrap();
+            assert_eq!(
+                preview.target_root,
+                Some(repository.join(".agents").join("skills"))
+            );
+            // .agents/skills is shared with Codex and Vercel Skills consumers.
+            assert!(preview.requires_confirmation);
+        });
+    }
+
+    #[test]
     fn project_shared_preview_uses_effective_consumer_roots_and_isolates_other_projects() {
         with_temp_home(|home| {
             let (config, skill, root) = project_fixture(home, false);

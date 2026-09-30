@@ -130,10 +130,10 @@ impl WorkspaceService {
     }
 
     pub fn project_tool_skills_dir(project: &ProjectBinding, tool_id: &str) -> Option<PathBuf> {
-        // Codex keeps settings in .codex, but discovers project skills from
-        // the shared .agents/skills root used by Vercel Skills delivery.
+        // Codex and Antigravity keep settings outside .agents, but discover project
+        // skills from the shared .agents/skills root used by Vercel Skills delivery.
         // Legacy bindings without a repository retain their configured paths.
-        if tool_id == "codex" {
+        if matches!(tool_id, "codex" | "antigravity") {
             return project
                 .root_path
                 .as_ref()
@@ -334,6 +334,37 @@ mod tests {
             };
             assert_eq!(
                 WorkspaceService::project_tool_skills_dir(&legacy_binding, "codex"),
+                None
+            );
+        });
+    }
+
+    #[test]
+    fn antigravity_project_skills_use_shared_agents_root_and_keep_ide_config_dir() {
+        with_temp_home(|home| {
+            let repository = home.join("agy-repo");
+            fs::create_dir_all(&repository).unwrap();
+            let binding = crate::models::ProjectBinding {
+                id: "agy-repo".to_string(),
+                name: "agy-repo".to_string(),
+                skills_dir: repository.join("skills"),
+                root_path: Some(repository.clone()),
+            };
+
+            assert_eq!(
+                WorkspaceService::project_tool_skills_dir(&binding, "antigravity"),
+                Some(repository.join(".agents").join("skills"))
+            );
+            assert_eq!(
+                WorkspaceService::project_tool_config_dir(&binding, "antigravity"),
+                Some(repository.join(".antigravity"))
+            );
+            let legacy_binding = crate::models::ProjectBinding {
+                root_path: None,
+                ..binding
+            };
+            assert_eq!(
+                WorkspaceService::project_tool_skills_dir(&legacy_binding, "antigravity"),
                 None
             );
         });

@@ -123,6 +123,15 @@ Codex의 repository binding은 skill 전달 루트 `.agents/skills`와 설정 �
 `.agents/skills`를 사용합니다. 저장소 root가 없는 legacy binding과 전역 `ToolConfig` 경로는
 기존 설정을 계속 사용합니다.
 
+Antigravity도 같은 방식으로 프로젝트 skill 루트는 `.agents/skills`, 설정(감지) 루트는
+IDE 데이터 디렉토리 `~/.antigravity`로 분리합니다. 전역 skill 루트는 호스트 문서의
+`~/.gemini/config/skills`이며(`ToolDefinition::global_skills_dir`), 기존 설정이 옛 기본값
+`~/.antigravity/skills`를 그대로 가지고 있으면 로드 시 `skills_path`만 이전합니다. 옛 경로에
+남은 파일은 이동하거나 삭제하지 않습니다. Codex 전역 skill 루트는 의도적으로 `~/.codex/skills`를
+유지합니다. Codex는 문서화된 `~/.agents/skills`와 deprecated이지만 계속 로드되는
+`$CODEX_HOME/skills`를 모두 읽으며, 이 루트에는 직접 설치한 skill, 관리 링크와
+`config.toml` plugin 상태가 있어 별도의 이전 설계 없이 기본값을 바꾸지 않습니다.
+
 공유 영향 preview는 해당 skill의 scope와 project에서 계산한 실제 전달 루트를 기준으로
 동일 디렉토리를 사용하는 consumer를 찾습니다. 프로젝트 `.agents/skills`는 해당 프로젝트의
 경로로 표시합니다. 다른 root는 실제 공유 디렉토리 또는 source 의존성이 확인된 경우에만
