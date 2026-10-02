@@ -256,7 +256,7 @@ fn project_id(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::WorkspaceService;
+    use super::{normalize_existing_directory, WorkspaceService};
     use crate::test_support::with_temp_home;
     use std::fs;
 
@@ -279,7 +279,7 @@ mod tests {
         with_temp_home(|home| {
             let repository = home.join("skills-manager");
             fs::create_dir_all(repository.join("skills").join("alpha")).unwrap();
-            let repository = fs::canonicalize(repository).unwrap();
+            let repository = normalize_existing_directory(&repository).unwrap();
 
             let binding = WorkspaceService::build_project_binding(&repository, None).unwrap();
 
@@ -294,7 +294,7 @@ mod tests {
         with_temp_home(|home| {
             let repository = home.join("empty-repo");
             fs::create_dir_all(repository.join(".git")).unwrap();
-            let repository = fs::canonicalize(repository).unwrap();
+            let repository = normalize_existing_directory(&repository).unwrap();
 
             let binding = WorkspaceService::build_project_binding(&repository, None).unwrap();
 
@@ -308,7 +308,7 @@ mod tests {
         with_temp_home(|home| {
             let repository = home.join("targeted-repo");
             fs::create_dir_all(repository.join("skills")).unwrap();
-            let repository = fs::canonicalize(repository).unwrap();
+            let repository = normalize_existing_directory(&repository).unwrap();
             let binding = WorkspaceService::build_project_binding(&repository, None).unwrap();
 
             assert_eq!(

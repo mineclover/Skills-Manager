@@ -456,7 +456,7 @@ impl ConfigManager {
 
     /// 修复各工具目录中指向旧路径的软链接
     fn fix_symlinks_after_migration(old_dir: &Path, new_dir: &Path) {
-        let home_dir = dirs::home_dir().unwrap_or_default();
+        let home_dir = home_dir().unwrap_or_default();
 
         // 已知的工具 skills 目录
         let tool_skills_dirs = [

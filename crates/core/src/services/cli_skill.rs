@@ -61,7 +61,7 @@ pub fn install_cli_companion_skill() -> Result<CliSkillInstallReport, String> {
     // Do not call ConfigManager::load() when config.json is missing: load()
     // would init_default() and persist an uninitialized config, racing the
     // GUI welcome wizard. Enable links only once a real init has happened.
-    let config_path = dirs::home_dir()
+    let config_path = crate::models::home_dir()
         .unwrap_or_default()
         .join(".skills-manager")
         .join("config.json");

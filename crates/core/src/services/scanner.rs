@@ -1306,9 +1306,16 @@ description: "Description from SKILL.md"
             let global_tool_skills_dir = home.join(".claude").join("skills");
             let project_tool_skills_dir = project_root.join(".claude").join("skills");
             fs::create_dir_all(&project_tool_skills_dir).expect("create project tool skills dir");
+            #[cfg(unix)]
             std::os::unix::fs::symlink(
                 &project_skill_dir,
                 project_tool_skills_dir.join("shared-skill"),
+            )
+            .expect("link project skill");
+            #[cfg(windows)]
+            crate::services::LinkerService::create_windows_symlink(
+                &project_skill_dir,
+                &project_tool_skills_dir.join("shared-skill"),
             )
             .expect("link project skill");
 
